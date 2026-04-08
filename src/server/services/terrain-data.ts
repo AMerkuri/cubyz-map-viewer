@@ -4,7 +4,7 @@
  */
 
 import { MAP_SIZE, type SurfaceData } from "../parsers/surface.js";
-import type { ColorMapService } from "./color-map.js";
+import { WATER_COLOR, type ColorMapService } from "./color-map.js";
 
 export interface TerrainMeshData {
   width: number;
@@ -49,14 +49,15 @@ export function buildTerrainData(
 
       const h = surface.heights[surfIdx];
       const biomeIdx = surface.biomes[surfIdx];
-      const color = colorMap.getBiomeColor(biomeIdx);
+      const isWater = h < 0 || colorMap.isOceanBiome(biomeIdx);
+      const color = isWater ? WATER_COLOR : colorMap.getBiomeColor(biomeIdx);
 
       const outIdx = gx * height + gy;
       heights[outIdx] = h;
 
-      // Apply subtle height-based shading
-      const shade = 1.0 + (h - 30) * 0.003;
-      const factor = Math.max(0.5, Math.min(1.3, shade));
+      const factor = isWater
+        ? 1.0
+        : Math.max(0.5, Math.min(1.3, 1.0 + (h - 30) * 0.003));
 
       colors[outIdx * 3] = Math.round(
         Math.max(0, Math.min(255, color.r * factor))

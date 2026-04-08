@@ -14,6 +14,8 @@ export interface BiomeDefinition {
   topBlock: string | null;
   /** Full ground structure array */
   groundStructure: string[];
+  /** Whether this biome has the ocean generation property */
+  isOcean: boolean;
 }
 
 /**
@@ -47,7 +49,12 @@ export async function parseBiomeFile(
       ? parseGroundEntry(groundStructure[0])
       : null;
 
-  return { id: biomeId, topBlock, groundStructure };
+  const properties = parsed.properties;
+  const isOcean = Array.isArray(properties)
+    ? properties.some((value) => String(value) === "ocean")
+    : false;
+
+  return { id: biomeId, topBlock, groundStructure, isOcean };
 }
 
 /**

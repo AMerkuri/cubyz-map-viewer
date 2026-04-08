@@ -55,6 +55,8 @@ export class ColorMapService {
   private paletteColors: RGB[] = [];
   /** biome palette index -> RGB */
   private biomePaletteColors: RGB[] = [];
+  /** biome palette index -> ocean flag */
+  private biomePaletteIsOcean: boolean[] = [];
 
   async initialize(
     cubyzAssetsPath: string,
@@ -75,7 +77,7 @@ export class ColorMapService {
 
     // Step 4: Build palette-indexed color arrays for fast lookup
     this.buildPaletteColors(blockPalette);
-    this.buildBiomePaletteColors(biomePalette);
+    this.buildBiomePaletteColors(biomePalette, biomeDefinitions);
 
     console.log(
       `ColorMap: ${this.blockColors.size} block colors, ${this.biomeColors.size} biome colors`
@@ -240,12 +242,19 @@ export class ColorMapService {
     }
   }
 
-  private buildBiomePaletteColors(palette: Palette): void {
+  private buildBiomePaletteColors(
+    palette: Palette,
+    biomeDefinitions: Map<string, BiomeDefinition>
+  ): void {
     this.biomePaletteColors = new Array(palette.entries.length);
+    this.biomePaletteIsOcean = new Array(palette.entries.length);
     for (let i = 0; i < palette.entries.length; i++) {
       const biomeId = palette.entries[i];
+      const biomeDef = biomeDefinitions.get(biomeId);
       this.biomePaletteColors[i] =
         this.biomeColors.get(biomeId) ?? { r: 100, g: 140, b: 80 };
+      this.biomePaletteIsOcean[i] =
+        biomeDef?.isOcean === true || biomeId.includes(":ocean/");
     }
   }
 
@@ -261,6 +270,11 @@ export class ColorMapService {
     return (
       this.biomePaletteColors[biomeIndex] ?? { r: 100, g: 140, b: 80 }
     );
+  }
+
+  /** Check if a biome palette index is an ocean biome */
+  isOceanBiome(biomeIndex: number): boolean {
+    return this.biomePaletteIsOcean[biomeIndex] === true;
   }
 
   /** Get color for a named block */
