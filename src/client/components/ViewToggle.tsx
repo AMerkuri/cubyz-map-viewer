@@ -1,16 +1,12 @@
 interface ViewToggleProps {
-  view: "2d" | "3d";
-  onViewChange: (view: "2d" | "3d") => void;
+  view: "terrain" | "voxel";
+  onViewChange: (view: "terrain" | "voxel") => void;
 }
 
 export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
   return (
     <div
       style={{
-        position: "absolute",
-        top: 12,
-        right: 12,
-        zIndex: 1000,
         display: "flex",
         gap: 0,
         borderRadius: 6,
@@ -19,34 +15,34 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
       }}
     >
       <button
-        onClick={() => onViewChange("2d")}
+        onClick={() => onViewChange("terrain")}
         style={{
           padding: "8px 16px",
           border: "none",
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 600,
-          background: view === "2d" ? "#4a90d9" : "#2a2a3e",
-          color: view === "2d" ? "#fff" : "#aaa",
+          background: view === "terrain" ? "#4a90d9" : "#2a2a3e",
+          color: view === "terrain" ? "#fff" : "#aaa",
           transition: "all 0.2s",
         }}
       >
-        2D Map
+        Terrain
       </button>
       <button
-        onClick={() => onViewChange("3d")}
+        onClick={() => onViewChange("voxel")}
         style={{
           padding: "8px 16px",
           border: "none",
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 600,
-          background: view === "3d" ? "#4a90d9" : "#2a2a3e",
-          color: view === "3d" ? "#fff" : "#aaa",
+          background: view === "voxel" ? "#4a90d9" : "#2a2a3e",
+          color: view === "voxel" ? "#fff" : "#aaa",
           transition: "all 0.2s",
         }}
       >
-        3D Terrain
+        Voxels
       </button>
     </div>
   );

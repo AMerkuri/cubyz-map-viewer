@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 export interface PlayerData {
   name: string;
@@ -8,28 +9,29 @@ export interface PlayerData {
   health: number;
   energy: number;
   spawnPos: [number, number, number];
+  lastSeen: number;
+  isActive: boolean;
+}
+
+async function fetchPlayers(): Promise<PlayerData[]> {
+  const res = await fetch("/api/players");
+  if (!res.ok) return [];
+  return res.json();
 }
 
 export function usePlayers() {
-  const [data, setData] = useState<PlayerData[]>([]);
+  const queryClient = useQueryClient();
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/players");
-      if (res.ok) {
-        setData(await res.json());
-      }
-    } catch {
-      // Players are non-critical, ignore errors
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
+  const query = useQuery({
+    queryKey: ["players"],
+    queryFn: fetchPlayers,
     // Poll every 30 seconds as a fallback (WebSocket handles fast updates)
-    const interval = setInterval(refresh, 30000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+    refetchInterval: 30000,
+  });
 
-  return { data, refresh };
+  const refresh = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["players"] });
+  }, [queryClient]);
+
+  return { data: query.data ?? [], refresh };
 }

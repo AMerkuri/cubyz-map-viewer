@@ -4,14 +4,38 @@ export type WatchEventType =
   | "tile-updated"
   | "players-updated"
   | "world-updated"
-  | "surface-index-changed";
+  | "surface-index-changed"
+  | "region-updated"
+  | "terrain-updates-batch";
+
+interface TerrainTileUpdate {
+  lod: number;
+  tileX: number;
+  tileY: number;
+}
+
+interface TerrainRegionUpdate {
+  lod: number;
+  regionX: number;
+  regionY: number;
+}
 
 export interface WatchEvent {
   type: WatchEventType;
   data?: Record<string, unknown>;
+  sentAt?: number;
 }
 
-type EventHandler = (event: WatchEvent) => void;
+export interface TerrainUpdatesBatchEvent {
+  type: "terrain-updates-batch";
+  data: {
+    tiles: TerrainTileUpdate[];
+    regions: TerrainRegionUpdate[];
+  };
+  sentAt?: number;
+}
+
+type EventHandler = (event: WatchEvent | TerrainUpdatesBatchEvent) => void;
 
 /**
  * Hook that maintains a WebSocket connection to the server for real-time
@@ -23,6 +47,7 @@ type EventHandler = (event: WatchEvent) => void;
  */
 export function useWebSocket() {
   const [connected, setConnected] = useState(false);
+  const [lastUpdateAt, setLastUpdateAt] = useState<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<Map<WatchEventType, Set<EventHandler>>>(new Map());
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -66,7 +91,8 @@ export function useWebSocket() {
 
       ws.onmessage = (msg) => {
         try {
-          const event: WatchEvent = JSON.parse(msg.data);
+          const event = JSON.parse(msg.data) as WatchEvent | TerrainUpdatesBatchEvent;
+          setLastUpdateAt(event.sentAt ?? Date.now());
           const handlers = handlersRef.current.get(event.type);
           if (handlers) {
             for (const handler of handlers) {
@@ -106,5 +132,5 @@ export function useWebSocket() {
     };
   }, []);
 
-  return { connected, subscribe };
+  return { connected, lastUpdateAt, subscribe };
 }

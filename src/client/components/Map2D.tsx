@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useMemo } from "react";
 import L from "leaflet";
 import type { useWorldData } from "../hooks/useWorldData.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
-import type { WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
+import type { TerrainUpdatesBatchEvent, WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
 
 /**
  * Leaflet 2D map for Cubyz world.
@@ -10,38 +10,58 @@ import type { WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
  * Coordinate mapping:
  *   - Cubyz: X,Y horizontal, Z vertical (up)
  *   - Leaflet CRS: lng = worldX, lat = worldY (no y-flip)
- *   - Zoom levels:
- *       z=0  -> LOD 1  (256 blocks/tile, full detail)
- *       z=-1 -> LOD 2  (512 blocks/tile)
- *       z=-2 -> LOD 4  (1024 blocks/tile)
- *       z=-3 -> LOD 8  (2048 blocks/tile)
- *       z=-4 -> LOD 16 (4096 blocks/tile)
- *       z=-5 -> LOD 32 (8192 blocks/tile)
- *   - Each surface file maps 1:1 to one Leaflet tile at its native zoom.
+ *   - Zoom levels (Leaflet uses non-negative integers to avoid tile-layer bugs):
+ *       z=5  -> LOD 1  (256 blocks/tile, full detail)   [native]
+ *       z=4  -> LOD 2  (512 blocks/tile)                [native]
+ *       z=3  -> LOD 4  (1024 blocks/tile)               [native]
+ *       z=2  -> LOD 8  (2048 blocks/tile)               [native]
+ *       z=1  -> LOD 16 (4096 blocks/tile)               [native]
+ *       z=0  -> LOD 32 (8192 blocks/tile)               [native]
+ *       z=6  -> LOD 1 upscaled 2×
+ *       z=7  -> LOD 1 upscaled 4×
+ *   - CRS transform scale 1/32 compensates for the zoom shift so that
+ *     world coordinates map to the same pixel positions as before.
  */
+
+/** Leaflet zoom level that corresponds to LOD 1 (1 pixel per block). */
+const ZOOM_LOD1 = 5;
+
+/** Maximum number of biome labels to display at once. Prioritizes labels near screen center. */
+const MAX_BIOME_LABELS = 50;
 
 interface Map2DProps {
   worldData: ReturnType<typeof useWorldData>;
   players: PlayerData[];
-  onCursorMove: (pos: [number, number] | null) => void;
+  onCursorMove: (pos: [number, number, number] | null) => void;
   subscribe: (type: WatchEventType, handler: (event: WatchEvent) => void) => () => void;
+  showBiomeLabels: boolean;
+  showPlayers: boolean;
+  showSpawn: boolean;
+  initialViewState: { center: [number, number]; zoom: number } | null;
+  onShareStateChange: (state: { mode: "2d"; center: [number, number]; zoom: number }) => void;
+  flyToRequest: { pos: [number, number, number]; key: number } | null;
 }
 
 // Custom CRS: like CRS.Simple but no y-axis flip.
 // transformation(a, b, c, d): pixel_x = a*lng + b, pixel_y = c*lat + d
 // Standard CRS.Simple uses (1, 0, -1, 0) which flips Y.
-// We use (1, 0, 1, 0) so worldY maps directly to pixel-Y (down on screen).
+// Scale factor 1/32 (= 1/2^ZOOM_LOD1) compensates for shifting zoom levels
+// up by ZOOM_LOD1 so that all Leaflet zoom values stay non-negative, avoiding
+// Leaflet's broken tile-rendering path for negative zoom integers.
 const CubyzCRS = L.Util.extend({}, L.CRS.Simple, {
-  transformation: new L.Transformation(1, 0, 1, 0),
+  transformation: new L.Transformation(1 / 32, 0, 1 / 32, 0),
 });
 
-export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProps) {
+export function Map2D({ worldData, players, onCursorMove, subscribe, showBiomeLabels, showPlayers, showSpawn, initialViewState, onShareStateChange, flyToRequest }: Map2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
-  const markersRef = useRef<L.LayerGroup | null>(null);
+  const spawnLayerRef = useRef<L.LayerGroup | null>(null);
+  const playersLayerRef = useRef<L.LayerGroup | null>(null);
   const biomeLayerRef = useRef<L.LayerGroup | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const initializedRef = useRef(false);
+  const onShareStateChangeRef = useRef(onShareStateChange);
+  onShareStateChangeRef.current = onShareStateChange;
 
   const spawnCenter = useMemo(() => {
     if (!worldData.worldData) return null;
@@ -57,21 +77,21 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
     const map = L.map(containerRef.current, {
       crs: CubyzCRS,
       center: L.latLng(0, 0), // Will be updated when world data loads
-      zoom: 0,
-      minZoom: -5,
-      maxZoom: 2,
+      zoom: ZOOM_LOD1,
+      minZoom: 0,
+      maxZoom: ZOOM_LOD1 + 2, // allow 4× upscale beyond LOD 1
       zoomControl: true,
       attributionControl: false,
       zoomSnap: 1,
     });
 
-    // Custom tile layer that maps zoom levels to LOD surface files
+    // Custom tile layer that maps Leaflet zoom levels to LOD surface files.
+    // coords.z is always a non-negative integer here (Leaflet is broken for
+    // negative zoom values with tile layers).
     const CubyzTileLayer = L.TileLayer.extend({
       getTileUrl: function (coords: L.Coords) {
-        // Clamp to native zoom range
-        const z = Math.max(-5, Math.min(0, coords.z));
-        const lod = Math.pow(2, -z);
-        // Tile coords map directly to API tile indices at native zoom
+        // ZOOM_LOD1 = LOD 1; each step down doubles the LOD.
+        const lod = Math.pow(2, Math.max(0, ZOOM_LOD1 - coords.z));
         return `/api/tiles/${lod}/${coords.x}/${coords.y}.png`;
       },
     });
@@ -79,8 +99,8 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
     const tileLayer = new (CubyzTileLayer as any)("", {
       tileSize: 256,
       noWrap: true,
-      maxNativeZoom: 0, // LOD 1 is finest; zoom > 0 upscales
-      minNativeZoom: -5, // LOD 32 is coarsest; zoom < -5 downscales
+      maxNativeZoom: ZOOM_LOD1,  // LOD 1 is finest; zoom above upscales
+      minNativeZoom: 0,           // LOD 32 is coarsest; zoom below downscales
       keepBuffer: 4,
     });
     tileLayer.addTo(map);
@@ -94,13 +114,27 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
     // Coordinate display on mouse move
     map.on("mousemove", (e: L.LeafletMouseEvent) => {
       // lng = worldX, lat = worldY
-      onCursorMove([Math.round(e.latlng.lng), Math.round(e.latlng.lat)]);
+      onCursorMove([Math.round(e.latlng.lng), Math.round(e.latlng.lat), 0]);
     });
     map.on("mouseout", () => onCursorMove(null));
 
-    // Marker layer
-    const markers = L.layerGroup().addTo(map);
-    markersRef.current = markers;
+    function reportShareState() {
+      onShareStateChangeRef.current({
+        mode: "2d",
+        center: [map.getCenter().lng, map.getCenter().lat],
+        zoom: map.getZoom(),
+      });
+    }
+
+    map.on("moveend", reportShareState);
+    map.on("zoomend", reportShareState);
+
+    // Marker layers (spawn and players kept separate for independent toggling)
+    const spawnLayer = L.layerGroup().addTo(map);
+    spawnLayerRef.current = spawnLayer;
+
+    const playersLayer = L.layerGroup().addTo(map);
+    playersLayerRef.current = playersLayer;
 
     // Biome label layer
     const biomeLayer = L.layerGroup().addTo(map);
@@ -110,9 +144,12 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
 
     return () => {
       clearInterval(refreshInterval);
+      map.off("moveend", reportShareState);
+      map.off("zoomend", reportShareState);
       map.remove();
       mapRef.current = null;
-      markersRef.current = null;
+      spawnLayerRef.current = null;
+      playersLayerRef.current = null;
       biomeLayerRef.current = null;
       tileLayerRef.current = null;
       initializedRef.current = false;
@@ -128,13 +165,22 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
     return unsub;
   }, [subscribe]);
 
+  useEffect(() => {
+    const unsub = subscribe("terrain-updates-batch", (event) => {
+      if (event.type !== "terrain-updates-batch") return;
+      const batch = event as TerrainUpdatesBatchEvent;
+      if (batch.data.tiles.length > 0) {
+        tileLayerRef.current?.redraw();
+      }
+    });
+    return unsub;
+  }, [subscribe]);
+
   // Subscribe to surface-index-changed for biome label refresh
   useEffect(() => {
     const unsub = subscribe("surface-index-changed", () => {
-      // Refresh biome labels when new surface files appear
-      if (mapRef.current) {
-        loadBiomeLabels(mapRef.current, biomeLayerRef.current);
-      }
+      // Trigger biome labels update when surface index changes
+      // This will be handled by the main biome labels effect
     });
     return unsub;
   }, [subscribe]);
@@ -142,16 +188,26 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
   // Center on spawn when world data loads
   useEffect(() => {
     if (!mapRef.current || !spawnCenter || initializedRef.current) return;
-    mapRef.current.setView(spawnCenter, 0);
+    const map = mapRef.current;
+    if (initialViewState) {
+      map.setView(L.latLng(initialViewState.center[1], initialViewState.center[0]), initialViewState.zoom);
+    } else {
+      map.setView(spawnCenter, ZOOM_LOD1);
+    }
     initializedRef.current = true;
+    onShareStateChangeRef.current({
+      mode: "2d",
+      center: [map.getCenter().lng, map.getCenter().lat],
+      zoom: map.getZoom(),
+    });
   }, [spawnCenter]);
 
   // Update markers when world data or players change
   useEffect(() => {
-    if (!markersRef.current || !worldData.worldData) return;
+    if (!spawnLayerRef.current || !playersLayerRef.current || !worldData.worldData) return;
 
-    const markers = markersRef.current;
-    markers.clearLayers();
+    spawnLayerRef.current.clearLayers();
+    playersLayerRef.current.clearLayers();
 
     // Spawn marker (red circle with glow)
     const spawn = worldData.worldData.spawn;
@@ -173,7 +229,7 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
         `<b>Spawn</b><br>${spawn[0]}, ${spawn[1]}, ${spawn[2]}`,
         { direction: "top", offset: [0, -14] }
       )
-      .addTo(markers);
+      .addTo(spawnLayerRef.current);
 
     // Player markers (blue circles)
     for (const player of players) {
@@ -196,43 +252,194 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
           `<b>${name}</b><br>${Math.round(player.position[0])}, ${Math.round(player.position[1])}, ${Math.round(player.position[2])}`,
           { direction: "top", offset: [0, -10] }
         )
-        .addTo(markers);
+        .addTo(playersLayerRef.current);
     }
   }, [worldData.worldData, players]);
+
+  // Toggle spawn layer visibility
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = spawnLayerRef.current;
+    if (!map || !layer) return;
+    if (showSpawn) {
+      if (!map.hasLayer(layer)) map.addLayer(layer);
+    } else {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    }
+  }, [showSpawn]);
+
+  // Toggle players layer visibility
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = playersLayerRef.current;
+    if (!map || !layer) return;
+    if (showPlayers) {
+      if (!map.hasLayer(layer)) map.addLayer(layer);
+    } else {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    }
+  }, [showPlayers]);
 
   // Load biome labels when map is ready and surface index is available
   useEffect(() => {
     if (!mapRef.current || !biomeLayerRef.current) return;
     if (worldData.surfaceIndex.length === 0) return;
 
-    loadBiomeLabels(mapRef.current, biomeLayerRef.current);
-
-    // Also reload biome labels when zoom changes (show/hide based on zoom)
     const map = mapRef.current;
     const biomeLayer = biomeLayerRef.current;
+    let loadingTilesRef = new Set<string>();
 
-    function onZoomEnd() {
-      if (!map) return;
+    async function updateBiomeLabelsForViewport() {
+      const bounds = map.getBounds();
       const zoom = map.getZoom();
-      // Show biome labels only at zoom >= -1 (LOD 1 and 2)
-      if (zoom >= -1) {
-        if (!map.hasLayer(biomeLayer)) {
-          map.addLayer(biomeLayer);
-        }
-      } else {
-        if (map.hasLayer(biomeLayer)) {
-          map.removeLayer(biomeLayer);
+      // Show biome labels only at zoom >= ZOOM_LOD1 (LOD 1 only, full detail)
+      const wantVisible = zoom >= ZOOM_LOD1 - 3;
+
+      if (!wantVisible) {
+        biomeLayer.clearLayers();
+        if (map.hasLayer(biomeLayer)) map.removeLayer(biomeLayer);
+        return;
+      }
+
+      if (!map.hasLayer(biomeLayer)) map.addLayer(biomeLayer);
+
+      // Calculate which LOD-1 tiles are visible in the current viewport
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const minX = Math.floor(Math.min(sw.lng, ne.lng) / 256);
+      const maxX = Math.floor(Math.max(sw.lng, ne.lng) / 256);
+      const minY = Math.floor(Math.min(sw.lat, ne.lat) / 256);
+      const maxY = Math.floor(Math.max(sw.lat, ne.lat) / 256);
+
+      // Collect all visible LOD-1 tiles
+      const visibleTiles: { tileX: number; tileY: number }[] = [];
+      for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
+          visibleTiles.push({ tileX: x, tileY: y });
         }
       }
+
+      // Collect all biome regions from visible tiles before rendering
+      interface BiomeLabel {
+        pos: L.LatLng;
+        displayName: string;
+        distanceToCenter: number;
+      }
+      const allLabels: BiomeLabel[] = [];
+
+      // Load biome data for visible tiles (that aren't already loading)
+      const loadPromises: Promise<void>[] = [];
+      for (const tile of visibleTiles) {
+        const key = `${tile.tileX}/${tile.tileY}`;
+        if (loadingTilesRef.has(key)) continue;
+        loadingTilesRef.add(key);
+
+        const promise = (async () => {
+          try {
+            const res = await fetch(`/api/biomes/1/${tile.tileX}/${tile.tileY}`);
+            if (!res.ok) return;
+            const data = await res.json();
+
+            if (!data || !data.regions) return;
+
+            for (const region of data.regions) {
+              if (region.count < 256) continue;
+
+              const pos = L.latLng(region.centerY, region.centerX);
+              const displayName = formatBiomeName(region.biomeName);
+
+              allLabels.push({
+                pos,
+                displayName,
+                distanceToCenter: 0, // will be calculated after all labels are collected
+              });
+            }
+          } catch (e) {
+            console.warn(`Failed to load biome labels for tile ${key}:`, e);
+          } finally {
+            loadingTilesRef.delete(key);
+          }
+        })();
+        loadPromises.push(promise);
+      }
+
+      // Wait for all tiles to load, then render prioritized labels
+      Promise.all(loadPromises).then(() => {
+        const mapCenter = map.getCenter();
+
+        // Calculate distance from center for each label
+        for (const label of allLabels) {
+          label.distanceToCenter = mapCenter.distanceTo(label.pos);
+        }
+
+        // Sort by distance (closest first)
+        allLabels.sort((a, b) => a.distanceToCenter - b.distanceToCenter);
+
+        // Clear existing layer and render only the top MAX_BIOME_LABELS
+        biomeLayer.clearLayers();
+
+        for (let i = 0; i < Math.min(allLabels.length, MAX_BIOME_LABELS); i++) {
+          const label = allLabels[i];
+          const biomeIcon = L.divIcon({
+            className: "",
+            html: `<div style="
+              white-space: nowrap;
+              font-size: 11px;
+              font-weight: 600;
+              color: rgba(255, 255, 255, 0.7);
+              text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.5);
+              pointer-events: none;
+              transform: translate(-50%, -50%);
+            ">${label.displayName}</div>`,
+            iconSize: [0, 0],
+          });
+
+          L.marker(label.pos, {
+            icon: biomeIcon,
+            interactive: false,
+          }).addTo(biomeLayer);
+        }
+      });
     }
-    map.on("zoomend", onZoomEnd);
-    // Run once to set initial visibility
-    onZoomEnd();
+
+    // Initial load
+    updateBiomeLabelsForViewport();
+
+    // Update when map moves or zooms
+    map.on("moveend", updateBiomeLabelsForViewport);
+    map.on("zoomend", updateBiomeLabelsForViewport);
 
     return () => {
-      map.off("zoomend", onZoomEnd);
+      map.off("moveend", updateBiomeLabelsForViewport);
+      map.off("zoomend", updateBiomeLabelsForViewport);
     };
   }, [worldData.surfaceIndex]);
+
+  // Toggle biome labels visibility (overrides zoom-based logic when hidden)
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = biomeLayerRef.current;
+    if (!map || !layer) return;
+    if (!showBiomeLabels) {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    } else {
+      // Re-apply zoom check: only show if zoom is in range (LOD 1 only)
+      const zoom = map.getZoom();
+      if (zoom >= ZOOM_LOD1) {
+        if (!map.hasLayer(layer)) map.addLayer(layer);
+      } else {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      }
+    }
+  }, [showBiomeLabels]);
+
+  // Fly to player position on request
+  useEffect(() => {
+    if (!flyToRequest || !mapRef.current) return;
+    const [wx, wy] = flyToRequest.pos;
+    // Leaflet CRS: lat = worldY, lng = worldX; fly at LOD 1 zoom for detail
+    mapRef.current.flyTo(L.latLng(wy, wx), ZOOM_LOD1, { animate: true, duration: 0.6 });
+  }, [flyToRequest]);
 
   return (
     <div
@@ -244,67 +451,6 @@ export function Map2D({ worldData, players, onCursorMove, subscribe }: Map2DProp
       }}
     />
   );
-}
-
-/** Fetch biome region data from the API and add labels to the biome layer */
-async function loadBiomeLabels(
-  map: L.Map,
-  biomeLayer: L.LayerGroup | null
-): Promise<void> {
-  if (!biomeLayer) return;
-  biomeLayer.clearLayers();
-
-  try {
-    // Fetch the surface index to know which tiles exist at LOD 1
-    const indexRes = await fetch("/api/world/surface-index");
-    if (!indexRes.ok) return;
-    const index: { lod: number; tileX: number; tileY: number }[] = await indexRes.json();
-    const lod1Tiles = index.filter((e) => e.lod === 1);
-
-    // Fetch biome data for each LOD 1 tile (limit to avoid overload)
-    const tilesToLoad = lod1Tiles.slice(0, 16);
-    const results = await Promise.all(
-      tilesToLoad.map(async (tile) => {
-        const res = await fetch(`/api/biomes/1/${tile.tileX}/${tile.tileY}`);
-        if (!res.ok) return null;
-        return res.json();
-      })
-    );
-
-    for (const data of results) {
-      if (!data || !data.regions) continue;
-
-      for (const region of data.regions) {
-        // region: { biomeId, biomeName, centerX, centerY, count }
-        // Only show biomes that cover a meaningful area (at least 256 cells = ~0.4% of tile)
-        if (region.count < 256) continue;
-
-        const pos = L.latLng(region.centerY, region.centerX);
-        const displayName = formatBiomeName(region.biomeName);
-
-        const biomeIcon = L.divIcon({
-          className: "",
-          html: `<div style="
-            white-space: nowrap;
-            font-size: 11px;
-            font-weight: 600;
-            color: rgba(255, 255, 255, 0.7);
-            text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.5);
-            pointer-events: none;
-            transform: translate(-50%, -50%);
-          ">${displayName}</div>`,
-          iconSize: [0, 0],
-        });
-
-        L.marker(pos, {
-          icon: biomeIcon,
-          interactive: false,
-        }).addTo(biomeLayer);
-      }
-    }
-  } catch (e) {
-    console.warn("Failed to load biome labels:", e);
-  }
 }
 
 /** Format a biome ID like "cubyz:plains/dry" into "Dry Plains" */

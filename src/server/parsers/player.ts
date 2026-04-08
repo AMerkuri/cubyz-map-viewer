@@ -2,9 +2,12 @@
  * Player data parser for players/*.zon files.
  */
 
-import { readFile, readdir } from "fs/promises";
+import { readFile, readdir, stat } from "fs/promises";
 import { join } from "path";
 import { parseZon, type ZonValue } from "./zon.js";
+
+/** Players whose save file was modified within this many milliseconds are considered active. */
+const ACTIVE_PLAYER_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 export interface PlayerData {
   name: string;
@@ -14,16 +17,26 @@ export interface PlayerData {
   health: number;
   energy: number;
   spawnPos: [number, number, number];
+  /** Unix timestamp (ms) of the last save file modification */
+  lastSeen: number;
+  /** True when the file was modified within ACTIVE_PLAYER_TIMEOUT_MS */
+  isActive: boolean;
 }
 
 export async function parsePlayerFile(filePath: string): Promise<PlayerData> {
-  const text = await readFile(filePath, "utf-8");
+  const [text, fileStat] = await Promise.all([
+    readFile(filePath, "utf-8"),
+    stat(filePath),
+  ]);
   const parsed = parseZon(text) as Record<string, ZonValue>;
 
   const entity = (parsed.entity ?? {}) as Record<string, ZonValue>;
   const pos = (entity.position ?? [0, 0, 0]) as number[];
   const rot = (entity.rotation ?? [0, 0, 0]) as number[];
   const spawnPos = (parsed.playerSpawnPos ?? [0, 0, 0]) as number[];
+
+  const lastSeen = fileStat.mtimeMs;
+  const isActive = Date.now() - lastSeen <= ACTIVE_PLAYER_TIMEOUT_MS;
 
   return {
     name: String(parsed.name ?? "Unknown"),
@@ -33,6 +46,8 @@ export async function parsePlayerFile(filePath: string): Promise<PlayerData> {
     health: Number(entity.health ?? 0),
     energy: Number(entity.energy ?? 0),
     spawnPos: [spawnPos[0] ?? 0, spawnPos[1] ?? 0, spawnPos[2] ?? 0],
+    lastSeen,
+    isActive,
   };
 }
 
@@ -53,7 +68,9 @@ export async function loadAllPlayers(
     for (const file of zonFiles) {
       try {
         const player = await parsePlayerFile(join(playersDir, file));
-        players.push(player);
+        if (player.isActive) {
+          players.push(player);
+        }
       } catch (e) {
         console.warn(`Failed to parse player file ${file}: ${e}`);
       }

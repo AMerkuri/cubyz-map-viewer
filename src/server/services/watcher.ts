@@ -12,12 +12,15 @@ export type WatchEventType =
   | "tile-updated"
   | "players-updated"
   | "world-updated"
-  | "surface-index-changed";
+  | "surface-index-changed"
+  | "region-updated";
 
 export interface WatchEvent {
   type: WatchEventType;
   /** For tile-updated: { lod, tileX, tileY } */
   data?: Record<string, unknown>;
+  /** Unix timestamp (ms) when the server broadcast this event. */
+  sentAt?: number;
 }
 
 /**
@@ -39,8 +42,9 @@ export class SaveWatcher extends EventEmitter {
     const mapsGlob = join(this.savePath, "maps", "**", "*.surface");
     const playersGlob = join(this.savePath, "players", "*.zon");
     const worldFile = join(this.savePath, "world.zig.zon");
+    const chunksGlob = join(this.savePath, "chunks", "**", "*.region");
 
-    this.watcher = watch([mapsGlob, playersGlob, worldFile], {
+    this.watcher = watch([mapsGlob, playersGlob, worldFile, chunksGlob], {
       ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: 200,
@@ -104,6 +108,18 @@ export class SaveWatcher extends EventEmitter {
           data: tileInfo,
         } as WatchEvent);
       });
+      return;
+    }
+
+    const regionInfo = this.parseRegionPath(rel);
+    if (regionInfo) {
+      const key = `region-${regionInfo.regionX}-${regionInfo.regionY}`;
+      this.debounce(key, () => {
+        this.emit("watch-event", {
+          type: "region-updated",
+          data: regionInfo,
+        } as WatchEvent);
+      });
     }
   }
 
@@ -124,6 +140,19 @@ export class SaveWatcher extends EventEmitter {
           this.emit("watch-event", {
             type: "tile-updated",
             data: tileInfo,
+          } as WatchEvent);
+        });
+      }
+    }
+
+    if (rel.endsWith(".region")) {
+      const regionInfo = this.parseRegionPath(rel);
+      if (regionInfo) {
+        const key = `region-${regionInfo.regionX}-${regionInfo.regionY}`;
+        this.debounce(key, () => {
+          this.emit("watch-event", {
+            type: "region-updated",
+            data: regionInfo,
           } as WatchEvent);
         });
       }
@@ -171,5 +200,25 @@ export class SaveWatcher extends EventEmitter {
     if (!Number.isInteger(tileX) || !Number.isInteger(tileY)) return null;
 
     return { lod, tileX, tileY };
+  }
+
+  /**
+   * Parse a relative region file path like "chunks/2/256/384/128.region"
+   * into { lod, regionX, regionY }.
+   */
+  private parseRegionPath(
+    rel: string
+  ): { lod: number; regionX: number; regionY: number } | null {
+    // Expected: chunks/{lod}/{worldX}/{worldY}/{worldZ}.region
+    const match = rel.match(/^chunks\/(\d+)\/(-?\d+)\/(-?\d+)\/-?\d+\.region$/);
+    if (!match) return null;
+
+    const lod = parseInt(match[1]);
+    const regionX = parseInt(match[2]);
+    const regionY = parseInt(match[3]);
+
+    if (isNaN(lod) || isNaN(regionX) || isNaN(regionY)) return null;
+
+    return { lod, regionX, regionY };
   }
 }

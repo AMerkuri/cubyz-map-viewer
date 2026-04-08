@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 export interface WorldData {
   name: string;
@@ -21,59 +22,77 @@ export interface SurfaceIndexEntry {
   tileY: number;
 }
 
+export interface ChunkIndexEntry {
+  lod: number;
+  regionX: number;
+  regionY: number;
+}
+
+async function fetchWorldData(): Promise<WorldData> {
+  const res = await fetch("/api/world");
+  if (!res.ok) throw new Error("Failed to fetch world data");
+  return res.json();
+}
+
+async function fetchSurfaceIndex(): Promise<SurfaceIndexEntry[]> {
+  const res = await fetch("/api/world/surface-index");
+  if (!res.ok) throw new Error("Failed to fetch surface index");
+  return res.json();
+}
+
+async function fetchChunkIndex(): Promise<ChunkIndexEntry[]> {
+  const res = await fetch("/api/world/chunk-index");
+  if (!res.ok) throw new Error("Failed to fetch chunk index");
+  return res.json();
+}
+
 export function useWorldData() {
-  const [worldData, setWorldData] = useState<WorldData | null>(null);
-  const [surfaceIndex, setSurfaceIndex] = useState<SurfaceIndexEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/world");
-      if (res.ok) {
-        setWorldData(await res.json());
-      }
-    } catch {
-      // Non-critical on refresh, keep existing data
-    }
-  }, []);
+  const worldQuery = useQuery({
+    queryKey: ["world"],
+    queryFn: fetchWorldData,
+  });
 
-  const refreshSurfaceIndex = useCallback(async () => {
-    try {
-      const res = await fetch("/api/world/surface-index");
-      if (res.ok) {
-        setSurfaceIndex(await res.json());
-      }
-    } catch {
-      // Non-critical on refresh
-    }
-  }, []);
+  const indexQuery = useQuery({
+    queryKey: ["surface-index"],
+    queryFn: fetchSurfaceIndex,
+  });
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const [worldRes, indexRes] = await Promise.all([
-          fetch("/api/world"),
-          fetch("/api/world/surface-index"),
-        ]);
+  const chunkIndexQuery = useQuery({
+    queryKey: ["chunk-index"],
+    queryFn: fetchChunkIndex,
+  });
 
-        if (!worldRes.ok) throw new Error("Failed to fetch world data");
-        if (!indexRes.ok) throw new Error("Failed to fetch surface index");
+  const refresh = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["world"] });
+  }, [queryClient]);
 
-        const world = await worldRes.json();
-        const index = await indexRes.json();
+  const refreshSurfaceIndex = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["surface-index"] });
+  }, [queryClient]);
 
-        setWorldData(world);
-        setSurfaceIndex(index);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Unknown error");
-      } finally {
-        setLoading(false);
-      }
-    }
+  const refreshChunkIndex = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["chunk-index"] });
+  }, [queryClient]);
 
-    fetchData();
-  }, []);
+  const loading = worldQuery.isLoading || indexQuery.isLoading || chunkIndexQuery.isLoading;
+  const error = worldQuery.error
+    ? (worldQuery.error instanceof Error ? worldQuery.error.message : "Unknown error")
+    : indexQuery.error
+      ? (indexQuery.error instanceof Error ? indexQuery.error.message : "Unknown error")
+      : chunkIndexQuery.error
+        ? (chunkIndexQuery.error instanceof Error ? chunkIndexQuery.error.message : "Unknown error")
+      : null;
 
-  return { worldData, surfaceIndex, loading, error, refresh, refreshSurfaceIndex };
+  return {
+    worldData: worldQuery.data ?? null,
+    surfaceIndex: indexQuery.data ?? [],
+    chunkIndex: chunkIndexQuery.data ?? [],
+    loading,
+    error,
+    refresh,
+    refreshSurfaceIndex,
+    refreshChunkIndex,
+  };
 }

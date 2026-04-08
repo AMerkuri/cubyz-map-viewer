@@ -74,7 +74,7 @@ export async function parseRegionFile(
   voxelSize: number
 ): Promise<RegionData> {
   const raw = await readFile(filePath);
-  return parseRegionBuffer(raw, worldX, worldY, worldZ, voxelSize);
+  return parseRegionBuffer(raw, worldX, worldY, worldZ, voxelSize, filePath);
 }
 
 export function parseRegionBuffer(
@@ -82,7 +82,8 @@ export function parseRegionBuffer(
   worldX: number,
   worldY: number,
   worldZ: number,
-  voxelSize: number
+  voxelSize: number,
+  filePath?: string,
 ): RegionData {
   const reader = new BinaryReader(raw);
 
@@ -115,7 +116,7 @@ export function parseRegionBuffer(
     } catch (e) {
       // Skip malformed chunks
       console.warn(
-        `Failed to decompress chunk ${i} in region (${worldX},${worldY},${worldZ}): ${e}`
+        `Failed to decompress chunk ${i} in region (${worldX},${worldY},${worldZ})${filePath ? ` [${filePath}]` : ""}: ${e}`
       );
       reader.seek(chunkStart + chunkLengths[i]);
     }
@@ -138,8 +139,8 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
       return blocks;
     }
 
-    case ChunkCompressionAlgo.DeflateWith8BitPalette:
-    case ChunkCompressionAlgo.DeflateWith8BitPaletteNoBlockEntities: {
+    case ChunkCompressionAlgo.DeflateWith8BitPalette: {
+      // algo 5: varInt compressedSize + deflate + optional block entity data
       const paletteLen = reader.readU8();
       const palette = new Uint32Array(paletteLen);
       for (let i = 0; i < paletteLen; i++) {
@@ -159,8 +160,28 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
       return blocks;
     }
 
-    case ChunkCompressionAlgo.Deflate:
-    case ChunkCompressionAlgo.DeflateNoBlockEntities: {
+    case ChunkCompressionAlgo.DeflateWith8BitPaletteNoBlockEntities: {
+      // algo 3: no varInt — compressed data fills the rest of the chunk slice
+      const paletteLen = reader.readU8();
+      const palette = new Uint32Array(paletteLen);
+      for (let i = 0; i < paletteLen; i++) {
+        palette[i] = reader.readU32();
+      }
+      const compressedSize = length - (reader.position - startPos);
+      const compressed = reader.readBytes(compressedSize);
+      const decompressed = inflateRawSync(compressed);
+
+      const blocks = new Uint32Array(CHUNK_VOLUME);
+      for (let i = 0; i < CHUNK_VOLUME; i++) {
+        const paletteIdx = decompressed[i];
+        blocks[i] = paletteIdx < paletteLen ? palette[paletteIdx] : 0;
+      }
+      reader.seek(startPos + length);
+      return blocks;
+    }
+
+    case ChunkCompressionAlgo.Deflate: {
+      // algo 4: varInt compressedSize + deflate + optional block entity data
       const compressedSize = reader.readVarInt();
       const compressed = reader.readBytes(compressedSize);
       const decompressed = inflateRawSync(compressed);
@@ -174,10 +195,25 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
       return blocks;
     }
 
+    case ChunkCompressionAlgo.DeflateNoBlockEntities: {
+      // algo 1: no varInt — compressed data fills the rest of the chunk slice
+      const compressedSize = length - (reader.position - startPos);
+      const compressed = reader.readBytes(compressedSize);
+      const decompressed = inflateRawSync(compressed);
+
+      const blocks = new Uint32Array(CHUNK_VOLUME);
+      const dataReader = new BinaryReader(decompressed);
+      for (let i = 0; i < CHUNK_VOLUME; i++) {
+        blocks[i] = dataReader.readU32();
+      }
+      reader.seek(startPos + length);
+      return blocks;
+    }
+
     case ChunkCompressionAlgo.DeflateWithPositionNoBlockEntities: {
-      // Legacy format: 16 bytes position header + deflate
+      // algo 0: 16 bytes position header, then no varInt — compressed data fills the rest
       reader.skip(16); // skip position data
-      const compressedSize = reader.readVarInt();
+      const compressedSize = length - (reader.position - startPos);
       const compressed = reader.readBytes(compressedSize);
       const decompressed = inflateRawSync(compressed);
 

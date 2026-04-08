@@ -126,25 +126,44 @@ export class ColorMapService {
     }
   }
 
-  private async computeTextureColors(texturesDir: string): Promise<void> {
-    // Build a map of texture name -> file path
-    const textureFiles = new Map<string, string>();
+  private async scanTextureDir(
+    baseDir: string,
+    currentDir: string,
+    out: Map<string, string>,
+  ): Promise<void> {
+    let entries: string[];
     try {
-      const files = await readdir(texturesDir);
-      for (const file of files) {
-        if (
-          file.endsWith(".png") &&
-          !file.includes("_emission") &&
-          !file.includes("_reflectivity") &&
-          !file.includes("_absorption")
-        ) {
-          const name = basename(file, ".png");
-          textureFiles.set(`cubyz:${name}`, join(texturesDir, file));
-        }
-      }
+      entries = await readdir(currentDir);
     } catch {
       return;
     }
+
+    for (const entry of entries) {
+      const fullPath = join(currentDir, entry);
+      const st = await stat(fullPath);
+
+      if (st.isDirectory()) {
+        await this.scanTextureDir(baseDir, fullPath, out);
+      } else if (
+        entry.endsWith(".png") &&
+        !entry.includes("_emission") &&
+        !entry.includes("_reflectivity") &&
+        !entry.includes("_absorption")
+      ) {
+        // Build texture name relative to base textures dir, e.g. "cubyz:leaves/oak"
+        const rel = fullPath.slice(baseDir.length + 1).replace(/\\/g, "/");
+        const name = rel.slice(0, -".png".length);
+        out.set(`cubyz:${name}`, fullPath);
+      }
+    }
+  }
+
+  private async computeTextureColors(texturesDir: string): Promise<void> {
+    // Build a map of texture name -> file path by scanning subdirectories recursively.
+    // Texture names use slash-separated paths relative to the textures dir, e.g.
+    // "cubyz:leaves/oak" maps to textures/leaves/oak.png.
+    const textureFiles = new Map<string, string>();
+    await this.scanTextureDir(texturesDir, texturesDir, textureFiles);
 
     // Compute average color for each block that has a texture
     for (const [blockId, textureName] of this.blockTextures) {

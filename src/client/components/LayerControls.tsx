@@ -1,0 +1,106 @@
+export interface LayerVisibility {
+  biomeLabels: boolean;
+  players: boolean;
+  spawn: boolean;
+  chunkBorders: boolean;
+  showTerrain: boolean;
+  voxelHeightLabels: boolean;
+}
+
+interface LayerControlsProps {
+  visibility: LayerVisibility;
+  onChange: (next: LayerVisibility) => void;
+  view: "terrain" | "voxel";
+}
+
+interface ToggleButtonProps {
+  label: string;
+  active: boolean;
+  onToggle: () => void;
+}
+
+function ToggleButton({ label, active, onToggle }: ToggleButtonProps) {
+  return (
+    <button
+      onClick={onToggle}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "5px 10px",
+        border: "none",
+        cursor: "pointer",
+        fontSize: 12,
+        fontWeight: 500,
+        background: "transparent",
+        color: active ? "#fff" : "#666",
+        textAlign: "left",
+        width: "100%",
+        transition: "color 0.15s",
+      }}
+    >
+      <span
+        style={{
+          display: "inline-block",
+          width: 10,
+          height: 10,
+          borderRadius: 2,
+          background: active ? "#4a90d9" : "#333",
+          border: `1px solid ${active ? "#4a90d9" : "#555"}`,
+          flexShrink: 0,
+          transition: "background 0.15s, border-color 0.15s",
+        }}
+      />
+      {label}
+    </button>
+  );
+}
+
+export function LayerControls({ visibility, onChange, view }: LayerControlsProps) {
+  function toggle(key: keyof LayerVisibility) {
+    onChange({ ...visibility, [key]: !visibility[key] });
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <ToggleButton
+        label="Biome Labels"
+        active={visibility.biomeLabels}
+        onToggle={() => toggle("biomeLabels")}
+      />
+      <ToggleButton
+        label="Players"
+        active={visibility.players}
+        onToggle={() => toggle("players")}
+      />
+      <ToggleButton
+        label="Spawn"
+        active={visibility.spawn}
+        onToggle={() => toggle("spawn")}
+      />
+      {view === "terrain" && (
+        <>
+          <ToggleButton
+            label="Chunk Borders"
+            active={visibility.chunkBorders}
+            onToggle={() => toggle("chunkBorders")}
+          />
+        </>
+      )}
+      {view === "voxel" && (
+        <>
+          <ToggleButton
+            label="Chunk Borders"
+            active={visibility.chunkBorders}
+            onToggle={() => toggle("chunkBorders")}
+          />
+          <ToggleButton
+            label="Voxel Heights"
+            active={visibility.voxelHeightLabels}
+            onToggle={() => toggle("voxelHeightLabels")}
+          />
+        </>
+      )}
+    </div>
+  );
+}

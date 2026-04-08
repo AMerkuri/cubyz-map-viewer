@@ -5,12 +5,19 @@
 
 import { Router, type Request, type Response } from "express";
 import { join } from "path";
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { parseSurfaceFile, MAP_SIZE } from "../parsers/surface.js";
 import { buildTerrainData } from "../services/terrain-data.js";
 import type { ColorMapService } from "../services/color-map.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
+
+function etagMatches(ifNoneMatch: string | string[] | undefined, etag: string): boolean {
+  if (!ifNoneMatch) return false;
+  const value = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(",") : ifNoneMatch;
+  const tags = value.split(",").map((tag) => tag.trim());
+  return tags.includes("*") || tags.includes(etag);
+}
 
 export function createTerrainRouter(
   savePath: string,
@@ -44,6 +51,15 @@ export function createTerrainRouter(
         return;
       }
 
+      const surfaceStat = statSync(surfacePath);
+      const etag = `"terrain-${lod}-${worldX}-${worldY}-${Math.trunc(surfaceStat.mtimeMs)}-${surfaceStat.size}"`;
+      if (etagMatches(req.headers["if-none-match"], etag)) {
+        res.set("Cache-Control", "public, max-age=0, must-revalidate");
+        res.set("ETag", etag);
+        res.status(304).end();
+        return;
+      }
+
       const surface = await parseSurfaceFile(
         surfacePath,
         worldX,
@@ -52,7 +68,8 @@ export function createTerrainRouter(
       );
       const terrainData = buildTerrainData(surface, colorMap, 128);
 
-      res.set("Cache-Control", "public, max-age=60");
+      res.set("Cache-Control", "public, max-age=0, must-revalidate");
+      res.set("ETag", etag);
       res.json(terrainData);
     } catch (e) {
       console.error(`Terrain data error: ${e}`);

@@ -65,30 +65,18 @@ export class BinaryReader {
   }
 
   /**
-   * Read MSB-first varint (Cubyz format).
-   * Continuation bit in high bit, data in lower 7 bits, MSB first.
+   * Read LEB128 varint (Cubyz format).
+   * Continuation bit in high bit, data in lower 7 bits, LSB first.
    */
   readVarInt(): number {
     let result = 0;
     let shift = 0;
-    // First pass: count bytes to determine shift
-    const startPos = this.offset;
-    let byteCount = 0;
     while (this.offset < this.buffer.length) {
       const byte = this.buffer[this.offset];
       this.offset += 1;
-      byteCount += 1;
-      if ((byte & 0x80) === 0) break;
-    }
-    // Reset and read with proper MSB-first ordering
-    this.offset = startPos;
-    shift = (byteCount - 1) * 7;
-    result = 0;
-    for (let i = 0; i < byteCount; i++) {
-      const byte = this.buffer[this.offset];
-      this.offset += 1;
       result |= (byte & 0x7f) << shift;
-      shift -= 7;
+      if ((byte & 0x80) === 0) break;
+      shift += 7;
     }
     return result;
   }

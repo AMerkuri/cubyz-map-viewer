@@ -5,6 +5,7 @@
  */
 
 import express from "express";
+import compression from "compression";
 import { createServer } from "http";
 import { join, resolve, dirname } from "path";
 import { existsSync } from "fs";
@@ -24,11 +25,14 @@ import { createWorldRouter } from "./api/world.js";
 import { createPlayersRouter } from "./api/players.js";
 import { createTerrainRouter } from "./api/terrain.js";
 import { createBiomesRouter } from "./api/biomes.js";
+import { createVoxelsRouter, clearAllVoxelCache, clearVoxelCache } from "./api/voxels.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT = parseInt(process.env.PORT ?? "3001");
+const HOST = process.env.HOST ?? "0.0.0.0";
 const CACHE_SIZE = parseInt(process.env.CACHE_SIZE ?? "500");
+const VOXEL_FULL_CLEAR_THROTTLE_MS = parseInt(process.env.VOXEL_FULL_CLEAR_THROTTLE_MS ?? "1000");
 
 async function findSavePath(): Promise<string> {
   // Check env var first
@@ -141,6 +145,9 @@ async function main() {
   // Create Express app
   const app = express();
 
+  // Compress all responses (gzip/deflate)
+  app.use(compression());
+
   // CORS for dev
   app.use((_req, res, next) => {
     res.set("Access-Control-Allow-Origin", "*");
@@ -155,6 +162,7 @@ async function main() {
   app.use("/api/players", createPlayersRouter(savePath));
   app.use("/api/terrain", createTerrainRouter(savePath, colorMap));
   app.use("/api/biomes", createBiomesRouter(savePath, biomePalette));
+  app.use("/api/voxels", createVoxelsRouter(savePath, colorMap));
 
   app.get("/api/blocks/colors", (_req, res) => {
     res.json(colorMap.getAllBlockColors());
@@ -193,7 +201,10 @@ async function main() {
   });
 
   function broadcast(event: WatchEvent): void {
-    const msg = JSON.stringify(event);
+    const msg = JSON.stringify({
+      ...event,
+      sentAt: Date.now(),
+    });
     for (const client of wsClients) {
       if (client.readyState === 1) { // WebSocket.OPEN
         client.send(msg);
@@ -203,12 +214,25 @@ async function main() {
 
   // File watcher for live updates
   const watcher = new SaveWatcher(savePath);
+  let voxelFullClearCooldownUntil = 0;
 
   watcher.on("watch-event", (event: WatchEvent) => {
     // Invalidate tile cache when a surface file changes
     if (event.type === "tile-updated" && event.data) {
       const { lod, tileX, tileY } = event.data as { lod: number; tileX: number; tileY: number };
       tileCache.delete(`${lod}/${tileX}/${tileY}`);
+
+      const now = Date.now();
+      if (now >= voxelFullClearCooldownUntil) {
+        clearAllVoxelCache();
+        voxelFullClearCooldownUntil = now + VOXEL_FULL_CLEAR_THROTTLE_MS;
+      }
+    }
+
+    // Invalidate voxel mesh cache when a region file changes
+    if (event.type === "region-updated" && event.data) {
+      const { lod, regionX, regionY } = event.data as { lod: number; regionX: number; regionY: number };
+      clearVoxelCache(`${lod}/${regionX}/${regionY}`);
     }
 
     // Broadcast to all connected WebSocket clients
@@ -227,16 +251,18 @@ async function main() {
   });
 
   // Start server
-  server.listen(PORT, () => {
+  server.listen(PORT, HOST, () => {
     console.log(`\nCubyz Map Viewer API running on http://localhost:${PORT}`);
     console.log(`Frontend dev server: http://localhost:5173`);
     console.log(`\nAPI endpoints:`);
     console.log(`  GET /api/world              - World metadata`);
     console.log(`  GET /api/world/surface-index - Available surface files`);
+    console.log(`  GET /api/world/chunk-index  - Available chunk columns`);
     console.log(`  GET /api/players            - Player positions`);
     console.log(`  GET /api/tiles/:lod/:x/:y.png - Map tiles`);
     console.log(`  GET /api/terrain/:lod/:x/:y - 3D terrain data`);
     console.log(`  GET /api/biomes/:lod/:x/:y  - Biome regions for tile`);
+    console.log(`  GET /api/voxels/:lod/:rx/:ry - Greedy-meshed voxel geometry`);
     console.log(`  GET /api/blocks/colors      - Block color palette`);
     console.log(`  WS  /ws                     - Real-time updates`);
   });
