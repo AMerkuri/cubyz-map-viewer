@@ -93,6 +93,13 @@ interface LoadedVoxelTile {
   borderLines: THREE.LineSegments;
 }
 
+interface VoxelFocusState {
+  point: THREE.Vector3;
+  zoomDist: number;
+  lastHitAt: number;
+  initialized: boolean;
+}
+
 export interface InitialCameraState {
   pos: [number, number, number];
   zoom: number;
@@ -158,10 +165,10 @@ const LOD_DISTANCE_THRESHOLDS = [
 const LOD_UNLOAD_HYSTERESIS = 1.5;
 const MAX_CONCURRENT_VOXEL_FETCHES = 8;
 const MAX_VOXEL_RETRIES = 2;
-const TERRAIN_RENDER_RADIUS_SCALE = LOD_UNLOAD_HYSTERESIS * 2.25;
-const TERRAIN_MAX_LOD_UNLOAD_DIST = (LOD_DISTANCE_THRESHOLDS[LOD_DISTANCE_THRESHOLDS.length - 2]?.maxDist ?? 9600)
-  * TERRAIN_RENDER_RADIUS_SCALE * 1.2;
-const INITIAL_CAMERA_ZOOM = 1300;
+const VOXEL_FOCUS_STICKY_MS = 1500;
+const VOXEL_FOCUS_SMOOTH_ALPHA = 0.6;
+const VOXEL_LOD_HYSTERESIS_RATIO = 0.12;
+const INITIAL_CAMERA_ZOOM = 1500;
 const DEFAULT_START_OFFSET_Y = 400;
 const DEFAULT_START_OFFSET_Z = 300;
 
@@ -200,14 +207,38 @@ function getUnloadDistForLod(lod: number): number {
   return entry.maxDist * LOD_UNLOAD_HYSTERESIS;
 }
 
-function getTerrainLodForDistance(dist: number): number {
-  return getLodForDistance(dist / TERRAIN_RENDER_RADIUS_SCALE);
+function getLodForDistanceWithHysteresis(dist: number, previousLod: number): number {
+  const previousIndex = LOD_LEVELS.indexOf(previousLod);
+  if (previousIndex === -1) return getLodForDistance(dist);
+
+  const previousMinBase = previousIndex > 0
+    ? (LOD_DISTANCE_THRESHOLDS[previousIndex - 1]?.maxDist ?? 0)
+    : 0;
+  const previousMax = LOD_DISTANCE_THRESHOLDS[previousIndex]?.maxDist ?? Infinity;
+  const stickMin = previousMinBase * (1 - VOXEL_LOD_HYSTERESIS_RATIO);
+  const stickMax = Number.isFinite(previousMax)
+    ? previousMax * (1 + VOXEL_LOD_HYSTERESIS_RATIO)
+    : Infinity;
+
+  if (dist >= stickMin && dist <= stickMax) {
+    return previousLod;
+  }
+
+  return getLodForDistance(dist);
 }
 
-function getTerrainUnloadDistForLod(lod: number): number {
-  const unloadDist = getUnloadDistForLod(lod);
-  if (!Number.isFinite(unloadDist)) return TERRAIN_MAX_LOD_UNLOAD_DIST;
-  return unloadDist * TERRAIN_RENDER_RADIUS_SCALE;
+function clampDistanceToLodRange(dist: number, lod: number): number {
+  const lodIndex = LOD_LEVELS.indexOf(lod);
+  if (lodIndex === -1) return dist;
+
+  const lowerBase = lodIndex > 0
+    ? (LOD_DISTANCE_THRESHOLDS[lodIndex - 1]?.maxDist ?? 0)
+    : 0;
+  const upperBase = LOD_DISTANCE_THRESHOLDS[lodIndex]?.maxDist ?? Infinity;
+
+  const lower = lodIndex > 0 ? lowerBase + 0.001 : 0;
+  const upper = Number.isFinite(upperBase) ? upperBase - 0.001 : Infinity;
+  return Math.min(Math.max(dist, lower), upper);
 }
 
 function getLodBorderColor(lod: number): { line: number; label: string } {
@@ -686,6 +717,12 @@ export function Map3D({
   const biomeRefreshTokenRef = useRef(0);
   const lastChunkStatsRef = useRef("");
   const activeFocusLodRef = useRef<number>(1);
+  const voxelFocusStateRef = useRef<VoxelFocusState>({
+    point: new THREE.Vector3(),
+    zoomDist: 0,
+    lastHitAt: 0,
+    initialized: false,
+  });
 
   function terrainTileKey(lod: number, tileX: number, tileY: number): string {
     return `${lod}/${tileX}/${tileY}`;
@@ -856,7 +893,7 @@ export function Map3D({
     }
   }
 
-  function updateTerrainVisibility(target: THREE.Vector3) {
+  function updateTerrainVisibility(target: THREE.Vector3, camDist: number) {
     let changed = false;
 
     for (const tile of loadedTerrainRef.current.values()) {
@@ -866,9 +903,10 @@ export function Map3D({
       const centerSceneY = -centerWorldY;
       const dx = centerWorldX - target.x;
       const dy = centerSceneY - target.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+      const xyDist = Math.sqrt(dx * dx + dy * dy);
+      const dist = Math.max(xyDist, camDist);
 
-      const desiredLod = getTerrainLodForDistance(dist);
+      const desiredLod = getLodForDistance(dist);
       const hasReplacement = hasLoadedTerrainTileAtWorld(desiredLod, centerWorldX, centerWorldY);
       const visible = tile.lod === desiredLod || !hasReplacement;
 
@@ -951,7 +989,7 @@ export function Map3D({
     }
   }
 
-  function updateVoxelLod(target: THREE.Vector3, camDist: number) {
+  function updateVoxelLod(target: THREE.Vector3, camDist: number, focusLod: number) {
     const index = chunkIndexRef.current;
     if (index.length === 0) return;
 
@@ -977,7 +1015,7 @@ export function Map3D({
           const dy = centerWorldY - yWorldTarget;
           const xyDist = Math.sqrt(dx * dx + dy * dy);
           const effectiveDist = Math.max(xyDist, camDist);
-          const desiredLod = getLodForDistance(effectiveDist);
+          const desiredLod = getLodForDistanceWithHysteresis(effectiveDist, focusLod);
           if (desiredLod !== lod) continue;
           const key = `${lod}/${regionX}/${regionY}`;
           desiredLodByCell.add(key);
@@ -996,7 +1034,7 @@ export function Map3D({
       const yWorldTarget = -target.y;
       const xyDist = Math.hypot(worldX - target.x, worldY - yWorldTarget);
       const effectiveDist = Math.max(xyDist, camDist);
-      const desiredLod = getLodForDistance(effectiveDist);
+      const desiredLod = getLodForDistanceWithHysteresis(effectiveDist, focusLod);
       const desiredSize = regionWorldSize(desiredLod);
       const desiredRegionX = Math.floor(worldX / desiredSize) * desiredSize;
       const desiredRegionY = Math.floor(worldY / desiredSize) * desiredSize;
@@ -1125,7 +1163,7 @@ export function Map3D({
           continue;
         }
 
-        const replacementLod = getLodForDistance(dist);
+        const replacementLod = getLodForDistanceWithHysteresis(dist, focusLod);
         if (
           replacementLod !== tile.lod
           && !hasLoadedVoxelTileAtWorld(replacementLod, centerWorldX, centerWorldY)
@@ -1159,7 +1197,7 @@ export function Map3D({
     }
   }
 
-  async function refreshBiomeLabels(target: THREE.Vector3) {
+  async function refreshBiomeLabels(target: THREE.Vector3, camDist: number) {
     if (!showBiomeLabelsRef.current) {
       clearBiomeLabels();
       return;
@@ -1204,13 +1242,14 @@ export function Map3D({
           const tileWorldSize = 256 * entry.lod;
           const centerX = entry.worldX + tileWorldSize / 2;
           const centerY = entry.worldY + tileWorldSize / 2;
-          const dist = Math.hypot(centerX - target.x, -centerY - target.y);
-          return {
-            entry,
-            dist,
-            desiredLod: getTerrainLodForDistance(dist),
-          };
-        })
+            const xyDist = Math.hypot(centerX - target.x, -centerY - target.y);
+            const dist = Math.max(xyDist, camDist);
+            return {
+              entry,
+              dist,
+              desiredLod: getLodForDistance(dist),
+            };
+          })
         .filter((item) => item.entry.lod === item.desiredLod)
         .sort((a, b) => a.dist - b.dist)
         .slice(0, 14);
@@ -1499,42 +1538,68 @@ export function Map3D({
     point: THREE.Vector3;
     zoomDist: number;
   } {
+    const now = performance.now();
     const fallbackPoint = controls.target.clone();
     const fallbackZoomDist = camera.position.distanceTo(controls.target);
+    const state = voxelFocusStateRef.current;
+
+    let rawPoint = fallbackPoint;
+    let rawZoomDist = fallbackZoomDist;
+    let hadRayHit = false;
 
     const voxelGroup = voxelGroupRef.current;
-    if (!voxelGroup || voxelGroup.children.length === 0) {
-      return { point: fallbackPoint, zoomDist: fallbackZoomDist };
+    if (voxelGroup && voxelGroup.children.length > 0) {
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const intersections = raycaster.intersectObjects(voxelGroup.children, false);
+      if (intersections.length > 0) {
+        hadRayHit = true;
+        rawPoint = intersections[0].point.clone();
+        const hitZoomDist = camera.position.distanceTo(intersections[0].point);
+        rawZoomDist = Math.min(fallbackZoomDist, hitZoomDist);
+        state.lastHitAt = now;
+      }
     }
 
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const intersections = raycaster.intersectObjects(voxelGroup.children, false);
-    if (intersections.length === 0) {
-      return { point: fallbackPoint, zoomDist: fallbackZoomDist };
+    if (!hadRayHit && state.initialized && now - state.lastHitAt <= VOXEL_FOCUS_STICKY_MS) {
+      rawPoint = state.point.clone();
+      rawZoomDist = clampDistanceToLodRange(state.zoomDist, activeFocusLodRef.current);
     }
 
-    const hitPoint = intersections[0].point.clone();
-    const hitZoomDist = camera.position.distanceTo(intersections[0].point);
+    if (!state.initialized) {
+      state.initialized = true;
+      state.point.copy(rawPoint);
+      state.zoomDist = rawZoomDist;
+      return {
+        point: rawPoint,
+        zoomDist: rawZoomDist,
+      };
+    }
+
+    state.point.lerp(rawPoint, VOXEL_FOCUS_SMOOTH_ALPHA);
+    state.zoomDist = THREE.MathUtils.lerp(state.zoomDist, rawZoomDist, VOXEL_FOCUS_SMOOTH_ALPHA);
+
     return {
-      point: hitPoint,
-      zoomDist: Math.min(fallbackZoomDist, hitZoomDist),
+      point: state.point.clone(),
+      zoomDist: state.zoomDist,
     };
   }
 
   function checkAndUpdateLOD(camera: THREE.PerspectiveCamera, controls: OrbitControls) {
     const target = controls.target;
+    const camDist = camera.position.distanceTo(target);
 
     if (modeRef.current === "terrain") {
-      activeFocusLodRef.current = getTerrainLodForDistance(camera.position.distanceTo(target));
+      activeFocusLodRef.current = getLodForDistance(camDist);
       const index = surfaceIndexRef.current;
       if (index.length > 0) {
         for (const entry of index) {
           const tileWorldSize = 256 * entry.lod;
           const centerX = entry.worldX + tileWorldSize / 2;
           const centerY = -(entry.worldY + tileWorldSize / 2);
-          const dist = Math.hypot(centerX - target.x, centerY - target.y);
-          const desiredLod = getTerrainLodForDistance(dist);
+          const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
+          const dist = Math.max(xyDist, camDist);
+          const desiredLod = getLodForDistance(dist);
           if (entry.lod !== desiredLod) continue;
           const key = terrainTileKey(entry.lod, entry.tileX, entry.tileY);
           if (loadedTerrainRef.current.has(key) || loadingTerrainRef.current.has(key)) continue;
@@ -1547,8 +1612,9 @@ export function Map3D({
         const centerWorldX = tile.worldX + tileWorldSize / 2;
         const centerWorldY = tile.worldY + tileWorldSize / 2;
         const centerSceneY = -centerWorldY;
-        const dist = Math.hypot(centerWorldX - target.x, centerSceneY - target.y);
-        const unloadDist = getTerrainUnloadDistForLod(tile.lod);
+        const xyDist = Math.hypot(centerWorldX - target.x, centerSceneY - target.y);
+        const dist = Math.max(xyDist, camDist);
+        const unloadDist = getUnloadDistForLod(tile.lod);
         if (dist > unloadDist) {
           // Guarantee eventual eviction for far-away terrain even when no
           // replacement LOD tile exists at this location.
@@ -1560,7 +1626,7 @@ export function Map3D({
             continue;
           }
 
-          const replacementLod = getTerrainLodForDistance(dist);
+          const replacementLod = getLodForDistance(dist);
           if (
             replacementLod !== tile.lod
             && !hasLoadedTerrainTileAtWorld(replacementLod, centerWorldX, centerWorldY)
@@ -1574,12 +1640,13 @@ export function Map3D({
         }
       }
 
-      updateTerrainVisibility(target);
+      updateTerrainVisibility(target, camDist);
       terrainVisibilityDirtyRef.current = false;
     } else {
       const focus = resolveVoxelLodFocus(camera, controls);
-      activeFocusLodRef.current = getLodForDistance(focus.zoomDist);
-      updateVoxelLod(focus.point, focus.zoomDist);
+      const focusLod = getLodForDistanceWithHysteresis(focus.zoomDist, activeFocusLodRef.current);
+      activeFocusLodRef.current = focusLod;
+      updateVoxelLod(focus.point, focus.zoomDist, focusLod);
     }
 
     if (debugLabelsDirtyRef.current) {
@@ -1588,7 +1655,7 @@ export function Map3D({
     }
     if (biomeLabelsDirtyRef.current) {
       biomeLabelsDirtyRef.current = false;
-      void refreshBiomeLabels(target);
+      void refreshBiomeLabels(target, camDist);
     }
 
     const offset = camera.position.clone().sub(target);
@@ -1931,7 +1998,8 @@ export function Map3D({
       }
 
       if (terrainVisibilityDirtyRef.current && modeRef.current === "terrain") {
-        updateTerrainVisibility(controls.target);
+        const camDist = camera.position.distanceTo(controls.target);
+        updateTerrainVisibility(controls.target, camDist);
         terrainVisibilityDirtyRef.current = false;
       }
 
@@ -1941,12 +2009,13 @@ export function Map3D({
       }
 
       if (showBiomeLabelsRef.current && biomeLabelsDirtyRef.current) {
-        biomeRefreshCounter++;
-        if (biomeRefreshCounter % 20 === 0) {
-          biomeLabelsDirtyRef.current = false;
-          void refreshBiomeLabels(controls.target);
+          biomeRefreshCounter++;
+          if (biomeRefreshCounter % 20 === 0) {
+            biomeLabelsDirtyRef.current = false;
+            const camDist = camera.position.distanceTo(controls.target);
+            void refreshBiomeLabels(controls.target, camDist);
+          }
         }
-      }
 
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
@@ -2240,7 +2309,8 @@ export function Map3D({
       clearBiomeLabels();
     }
     if (showBiomeLabels && sceneRef.current) {
-      void refreshBiomeLabels(sceneRef.current.controls.target);
+      const camDist = sceneRef.current.camera.position.distanceTo(sceneRef.current.controls.target);
+      void refreshBiomeLabels(sceneRef.current.controls.target, camDist);
     }
   }, [showBiomeLabels, mode]);
 
