@@ -30,7 +30,21 @@ type ChunkStats = {
     failed: number;
   };
   loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
+  memoryBytes: number;
+  memoryBreakdown: {
+    terrain: number;
+    voxels: number;
+    queued: number;
+  };
+  memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
+  jsHeapBytes: number | null;
 };
+
+function formatMemoryBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function App() {
   // Parse URL params once on mount — lazy initializer so it never re-runs.
@@ -75,6 +89,14 @@ export function App() {
       failed: 0,
     },
     loadedByLod: {},
+    memoryBytes: 0,
+    memoryBreakdown: {
+      terrain: 0,
+      voxels: 0,
+      queued: 0,
+    },
+    memoryByLod: {},
+    jsHeapBytes: null,
   });
   const worldData = useWorldData();
 
@@ -186,8 +208,10 @@ export function App() {
     spawn: true,
     chunkBorders: false,
     showTerrain: true,
+    showVoxelTerrain: false,
     voxelHeightLabels: false,
   });
+  const [voxelLod1MaxDist, setVoxelLod1MaxDist] = useState(600);
 
   const handleLayerVisibilityChange = useCallback((next: LayerVisibility) => {
     setLayerVisibility(next);
@@ -248,8 +272,10 @@ export function App() {
         showSpawn={layerVisibility.spawn}
         showChunkBorders={layerVisibility.chunkBorders}
         showTerrain={layerVisibility.showTerrain}
+        showVoxelTerrain={layerVisibility.showVoxelTerrain}
         showVoxelHeightLabels={layerVisibility.voxelHeightLabels}
         showBiomeLabels={layerVisibility.biomeLabels}
+        voxelLod1MaxDist={voxelLod1MaxDist}
         mode={view}
         onCursorMove={handleCursorMove}
         onChunkStatsChange={handleChunkStatsChange}
@@ -355,6 +381,20 @@ export function App() {
                 .map((lod) => `L${lod}:${chunkStats.loadedByLod[lod] ?? 0}`)
                 .join("  ")}
             </div>
+
+            <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Estimated Memory</div>
+            <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
+            <div>Terrain: {formatMemoryBytes(chunkStats.memoryBreakdown.terrain)}</div>
+            <div>Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}</div>
+            <div>Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}</div>
+            <div>JS heap: {chunkStats.jsHeapBytes === null ? "n/a" : formatMemoryBytes(chunkStats.jsHeapBytes)}</div>
+
+            <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Memory by LOD</div>
+            <div>
+              {([1, 2, 4, 8, 16, 32] as const)
+                .map((lod) => `L${lod}:${formatMemoryBytes(chunkStats.memoryByLod[lod] ?? 0)}`)
+                .join("  ")}
+            </div>
           </div>
         </OverlayPanel>
       </div>
@@ -394,6 +434,8 @@ export function App() {
             visibility={layerVisibility}
             onChange={handleLayerVisibilityChange}
             view={view}
+            voxelLod1MaxDist={voxelLod1MaxDist}
+            onVoxelLod1MaxDistChange={setVoxelLod1MaxDist}
           />
         </div>
       </OverlayPanel>

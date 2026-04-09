@@ -55,6 +55,7 @@ export interface VoxelMeshData {
 
 /** Width/depth of one voxel region column in world blocks (4 chunks × 32 = 128) */
 export const VOXEL_REGION_SIZE = 128;
+const CHUNK_COLUMN_SIZE = 32;
 
 /**
  * Run greedy meshing on a dense 3D block array.
@@ -93,6 +94,10 @@ export function greedyMesh(
 
   function isOpaque(x: number, y: number, z: number): boolean {
     return getBlock(x, y, z) !== 0;
+  }
+
+  function cellsUntilChunkBoundary(coord: number): number {
+    return CHUNK_COLUMN_SIZE - (coord % CHUNK_COLUMN_SIZE);
   }
 
   function addQuad(
@@ -160,8 +165,9 @@ export function greedyMesh(
             dz++;
           }
           // Extend in Y
+          const maxDy = Math.min(depth - y, cellsUntilChunkBoundary(y));
           let dy = 1;
-          outer: while (y + dy < depth) {
+          outer: while (dy < maxDy) {
             for (let k = 0; k < dz; k++) {
               if (mask[(y + dy) * height + z + k] !== typ || used[(y + dy) * height + z + k]) {
                 break outer;
@@ -225,8 +231,9 @@ export function greedyMesh(
           while (z + dz < height && mask[x * height + z + dz] === typ && !used[x * height + z + dz]) {
             dz++;
           }
+          const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
-          outer: while (x + dx < width) {
+          outer: while (dx < maxDx) {
             for (let k = 0; k < dz; k++) {
               if (mask[(x + dx) * height + z + k] !== typ || used[(x + dx) * height + z + k]) {
                 break outer;
@@ -285,12 +292,14 @@ export function greedyMesh(
           const typ = mask[x * depth + y];
           if (typ === 0 || used[x * depth + y]) continue;
 
+          const maxDy = Math.min(depth - y, cellsUntilChunkBoundary(y));
           let dy = 1;
-          while (y + dy < depth && mask[x * depth + y + dy] === typ && !used[x * depth + y + dy]) {
+          while (dy < maxDy && mask[x * depth + y + dy] === typ && !used[x * depth + y + dy]) {
             dy++;
           }
+          const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
-          outer: while (x + dx < width) {
+          outer: while (dx < maxDx) {
             for (let k = 0; k < dy; k++) {
               if (mask[(x + dx) * depth + y + k] !== typ || used[(x + dx) * depth + y + k]) {
                 break outer;
@@ -330,6 +339,8 @@ export function greedyMesh(
  *   - Per-quad (not per-vertex) colors — client expands 1→4 vertices
  *   - Positions stored as relative u8 XY + u16 Z offsets from worldX/Y/Z
  *   - Returns an ArrayBuffer ready to send as application/octet-stream
+ *   - Preserves 32×32 internal chunk-column boundaries so the client can
+ *     independently cull parent/child LOD columns without geometry overlap
  *
  * See module docblock for the exact binary layout.
  */
@@ -386,6 +397,10 @@ export function greedyMeshBinary(
 
   function isOpaque(x: number, y: number, z: number): boolean {
     return getBlock(x, y, z) !== 0;
+  }
+
+  function cellsUntilChunkBoundary(coord: number): number {
+    return CHUNK_COLUMN_SIZE - (coord % CHUNK_COLUMN_SIZE);
   }
 
   /**
@@ -455,8 +470,9 @@ export function greedyMeshBinary(
           if (typ === 0 || used[y * height + z]) continue;
           let dz = 1;
           while (z + dz < height && mask[y * height + z + dz] === typ && !used[y * height + z + dz]) dz++;
+          const maxDy = Math.min(depth - y, cellsUntilChunkBoundary(y));
           let dy = 1;
-          outer: while (y + dy < depth) {
+          outer: while (dy < maxDy) {
             for (let k = 0; k < dz; k++) {
               if (mask[(y + dy) * height + z + k] !== typ || used[(y + dy) * height + z + k]) break outer;
             }
@@ -491,8 +507,9 @@ export function greedyMeshBinary(
           if (typ === 0 || used[x * height + z]) continue;
           let dz = 1;
           while (z + dz < height && mask[x * height + z + dz] === typ && !used[x * height + z + dz]) dz++;
+          const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
-          outer: while (x + dx < width) {
+          outer: while (dx < maxDx) {
             for (let k = 0; k < dz; k++) {
               if (mask[(x + dx) * height + z + k] !== typ || used[(x + dx) * height + z + k]) break outer;
             }
@@ -526,10 +543,12 @@ export function greedyMeshBinary(
         for (let y = 0; y < depth; y++) {
           const typ = mask[x * depth + y];
           if (typ === 0 || used[x * depth + y]) continue;
+          const maxDy = Math.min(depth - y, cellsUntilChunkBoundary(y));
           let dy = 1;
-          while (y + dy < depth && mask[x * depth + y + dy] === typ && !used[x * depth + y + dy]) dy++;
+          while (dy < maxDy && mask[x * depth + y + dy] === typ && !used[x * depth + y + dy]) dy++;
+          const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
-          outer: while (x + dx < width) {
+          outer: while (dx < maxDx) {
             for (let k = 0; k < dy; k++) {
               if (mask[(x + dx) * depth + y + k] !== typ || used[(x + dx) * depth + y + k]) break outer;
             }
@@ -549,14 +568,13 @@ export function greedyMeshBinary(
 
   // Chunk-column coverage bitmask: bit (cx*4+cy) is set when the 32×32 column
   // at local offsets (cx*32 .. cx*32+31, cy*32 .. cy*32+31) has ≥1 non-air block.
-  const CHUNK_COL_SIZE = 32; // blocks per chunk column axis
   let chunkCoverage = 0;
   for (let cx = 0; cx < 4; cx++) {
     for (let cy = 0; cy < 4; cy++) {
-      const x0 = cx * CHUNK_COL_SIZE;
-      const y0 = cy * CHUNK_COL_SIZE;
-      outer: for (let lx = x0; lx < x0 + CHUNK_COL_SIZE; lx++) {
-        for (let ly = y0; ly < y0 + CHUNK_COL_SIZE; ly++) {
+      const x0 = cx * CHUNK_COLUMN_SIZE;
+      const y0 = cy * CHUNK_COLUMN_SIZE;
+      outer: for (let lx = x0; lx < x0 + CHUNK_COLUMN_SIZE; lx++) {
+        for (let ly = y0; ly < y0 + CHUNK_COLUMN_SIZE; ly++) {
           for (let lz = 0; lz < height; lz++) {
             if (blockTypes[lx * depth * height + ly * height + lz] !== 0) {
               chunkCoverage |= 1 << (cx * 4 + cy);

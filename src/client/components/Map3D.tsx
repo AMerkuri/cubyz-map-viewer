@@ -8,7 +8,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { useWorldData } from "../hooks/useWorldData.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { TerrainUpdatesBatchEvent, WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
-import type { SurfaceIndexEntry } from "../hooks/useWorldData.js";
+import type { ChunkIndexEntry, SurfaceIndexEntry } from "../hooks/useWorldData.js";
 
 interface TerrainMeshData {
   width: number;
@@ -46,6 +46,15 @@ interface PendingVoxelMeshItem {
   chunkCoverage: number;
   chunkTopHeights: Float32Array;
   voxelSize: number;
+}
+
+interface PendingVoxelFetchRequest {
+  key: string;
+  lod: number;
+  regionX: number;
+  regionY: number;
+  priority: number;
+  generation: number;
 }
 
 interface WorkerOut {
@@ -93,6 +102,37 @@ interface LoadedVoxelTile {
   borderLines: THREE.LineSegments;
 }
 
+interface ChunkStatsPayload {
+  loading: number;
+  loaded: number;
+  fps: number;
+  focusLod: number;
+  mode: "terrain" | "voxel";
+  loadingBreakdown: {
+    terrain: number;
+    voxels: number;
+    fetchQueue: number;
+    meshQueue: number;
+  };
+  voxelHealth: {
+    missing: number;
+    failed: number;
+  };
+  loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
+  memoryBytes: number;
+  memoryBreakdown: {
+    terrain: number;
+    voxels: number;
+    queued: number;
+  };
+  memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
+  jsHeapBytes: number | null;
+}
+
+interface PerformanceMemoryInfo {
+  usedJSHeapSize: number;
+}
+
 interface VoxelFocusState {
   point: THREE.Vector3;
   zoomDist: number;
@@ -116,33 +156,19 @@ interface Map3DProps {
   showSpawn: boolean;
   showChunkBorders: boolean;
   showTerrain: boolean;
+  showVoxelTerrain: boolean;
   showBiomeLabels: boolean;
   showVoxelHeightLabels: boolean;
+  voxelLod1MaxDist: number;
   onCursorMove: (pos: [number, number, number] | null) => void;
-  onChunkStatsChange: (stats: {
-    loading: number;
-    loaded: number;
-    fps: number;
-    focusLod: number;
-    mode: "terrain" | "voxel";
-    loadingBreakdown: {
-      terrain: number;
-      voxels: number;
-      fetchQueue: number;
-      meshQueue: number;
-    };
-    voxelHealth: {
-      missing: number;
-      failed: number;
-    };
-    loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
-  }) => void;
+  onChunkStatsChange: (stats: ChunkStatsPayload) => void;
   initialCameraState: InitialCameraState | null;
   onShareStateChange: (state: { mode: "terrain" | "voxel"; pos: [number, number, number]; zoom: number; theta: number; phi: number }) => void;
   flyToRequest: { pos: [number, number, number]; key: number } | null;
 }
 
 const LOD_LEVELS = [1, 2, 4, 8, 16, 32];
+const FULL_VOXEL_QUADRANT_MASK = 0b1111;
 
 const LOD_BORDER_COLORS: Record<number, { line: number; label: string }> = {
   1: { line: 0x44ff66, label: "#44ff66" },
@@ -153,7 +179,7 @@ const LOD_BORDER_COLORS: Record<number, { line: number; label: string }> = {
   32: { line: 0xff3344, label: "#ff3344" },
 };
 
-const LOD_DISTANCE_THRESHOLDS = [
+const TERRAIN_LOD_DISTANCE_THRESHOLDS = [
   { maxDist: 600, lod: 1 },
   { maxDist: 1200, lod: 2 },
   { maxDist: 2400, lod: 4 },
@@ -168,6 +194,8 @@ const MAX_VOXEL_RETRIES = 2;
 const VOXEL_FOCUS_STICKY_MS = 1500;
 const VOXEL_FOCUS_SMOOTH_ALPHA = 0.6;
 const VOXEL_LOD_HYSTERESIS_RATIO = 0.12;
+const VOXEL_DETAIL_REQUEST_DEBOUNCE_MS = 180;
+const VOXEL_UNLOAD_GRACE_MS = 750;
 const INITIAL_CAMERA_ZOOM = 1500;
 const DEFAULT_START_OFFSET_Y = 400;
 const DEFAULT_START_OFFSET_Z = 300;
@@ -175,6 +203,7 @@ const DEFAULT_START_OFFSET_Z = 300;
 const VOXEL_REGION_CELLS = 128;
 const VOXEL_CHUNK_CELLS = 32;
 const TERRAIN_SKIRT_DEPTH = 32;
+const TERRAIN_UNDERLAY_OFFSET_Z = -6;
 const MAX_BIOME_LABELS = 120;
 
 const terrainMaterial = new THREE.MeshLambertMaterial({
@@ -194,27 +223,50 @@ function worldToScene(worldX: number, worldY: number, worldZ: number): [number, 
   return [worldX, -worldY, worldZ];
 }
 
-function getLodForDistance(dist: number): number {
-  for (const threshold of LOD_DISTANCE_THRESHOLDS) {
+function shouldRenderTerrainForMode(
+  mode: "terrain" | "voxel",
+  showTerrain: boolean,
+  showVoxelTerrain: boolean,
+): boolean {
+  return mode === "terrain" ? showTerrain : showVoxelTerrain;
+}
+
+function createVoxelLodDistanceThresholds(lod1MaxDist: number): { maxDist: number; lod: number }[] {
+  return [
+    { lod: 1, maxDist: lod1MaxDist },
+    { lod: 2, maxDist: 1200 },
+    { lod: 4, maxDist: 2400 },
+    { lod: 8, maxDist: 4800 },
+    { lod: 16, maxDist: 9600 },
+    { lod: 32, maxDist: Infinity },
+  ];
+}
+
+function getLodForDistance(dist: number, thresholds: { maxDist: number; lod: number }[]): number {
+  for (const threshold of thresholds) {
     if (dist <= threshold.maxDist) return threshold.lod;
   }
   return 32;
 }
 
-function getUnloadDistForLod(lod: number): number {
-  const entry = LOD_DISTANCE_THRESHOLDS.find((t) => t.lod === lod);
+function getUnloadDistForLod(lod: number, thresholds: { maxDist: number; lod: number }[]): number {
+  const entry = thresholds.find((t) => t.lod === lod);
   if (!entry || entry.maxDist === Infinity) return Infinity;
   return entry.maxDist * LOD_UNLOAD_HYSTERESIS;
 }
 
-function getLodForDistanceWithHysteresis(dist: number, previousLod: number): number {
+function getLodForDistanceWithHysteresis(
+  dist: number,
+  previousLod: number,
+  thresholds: { maxDist: number; lod: number }[],
+): number {
   const previousIndex = LOD_LEVELS.indexOf(previousLod);
-  if (previousIndex === -1) return getLodForDistance(dist);
+  if (previousIndex === -1) return getLodForDistance(dist, thresholds);
 
   const previousMinBase = previousIndex > 0
-    ? (LOD_DISTANCE_THRESHOLDS[previousIndex - 1]?.maxDist ?? 0)
+    ? (thresholds[previousIndex - 1]?.maxDist ?? 0)
     : 0;
-  const previousMax = LOD_DISTANCE_THRESHOLDS[previousIndex]?.maxDist ?? Infinity;
+  const previousMax = thresholds[previousIndex]?.maxDist ?? Infinity;
   const stickMin = previousMinBase * (1 - VOXEL_LOD_HYSTERESIS_RATIO);
   const stickMax = Number.isFinite(previousMax)
     ? previousMax * (1 + VOXEL_LOD_HYSTERESIS_RATIO)
@@ -224,17 +276,17 @@ function getLodForDistanceWithHysteresis(dist: number, previousLod: number): num
     return previousLod;
   }
 
-  return getLodForDistance(dist);
+  return getLodForDistance(dist, thresholds);
 }
 
-function clampDistanceToLodRange(dist: number, lod: number): number {
+function clampDistanceToLodRange(dist: number, lod: number, thresholds: { maxDist: number; lod: number }[]): number {
   const lodIndex = LOD_LEVELS.indexOf(lod);
   if (lodIndex === -1) return dist;
 
   const lowerBase = lodIndex > 0
-    ? (LOD_DISTANCE_THRESHOLDS[lodIndex - 1]?.maxDist ?? 0)
+    ? (thresholds[lodIndex - 1]?.maxDist ?? 0)
     : 0;
-  const upperBase = LOD_DISTANCE_THRESHOLDS[lodIndex]?.maxDist ?? Infinity;
+  const upperBase = thresholds[lodIndex]?.maxDist ?? Infinity;
 
   const lower = lodIndex > 0 ? lowerBase + 0.001 : 0;
   const upper = Number.isFinite(upperBase) ? upperBase - 0.001 : Infinity;
@@ -315,6 +367,28 @@ function chunkWorldSize(lod: number): number {
 function formatHeight(value: number): string {
   if (!Number.isFinite(value)) return "n/a";
   return value.toFixed(1);
+}
+
+function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
+  let total = 0;
+
+  for (const attr of Object.values(geometry.attributes)) {
+    total += attr.array.byteLength;
+  }
+
+  if (geometry.index) {
+    total += geometry.index.array.byteLength;
+  }
+
+  return total;
+}
+
+function addMemoryToLod(
+  target: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>,
+  lod: 1 | 2 | 4 | 8 | 16 | 32,
+  bytes: number,
+) {
+  target[lod] = (target[lod] ?? 0) + bytes;
 }
 
 function countBits16(v: number): number {
@@ -512,6 +586,9 @@ function buildVoxelColumnSubMeshes(item: PendingVoxelMeshItem): {
   const { positions, normals, colors, indices, lod, regionX, regionY } = item;
   const chunkSize = chunkWorldSize(lod);
 
+  // The server greedy mesher preserves 32x32 internal chunk-column boundaries,
+  // so assigning triangles by centroid keeps each submesh aligned to one column.
+
   let minZ = Number.POSITIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
   for (let i = 2; i < positions.length; i += 3) {
@@ -624,6 +701,16 @@ function parseVoxelKey(key: string): { lod: number; regionX: number; regionY: nu
   return { lod, regionX, regionY };
 }
 
+function voxelQuadrantBit(quadrant: number): number {
+  return 1 << quadrant;
+}
+
+function voxelSubMeshQuadrant(colIndex: number): number {
+  const colX = Math.floor(colIndex / 4);
+  const colY = colIndex % 4;
+  return (colX >= 2 ? 1 : 0) + (colY >= 2 ? 2 : 0);
+}
+
 export function Map3D({
   mode,
   worldData,
@@ -633,8 +720,10 @@ export function Map3D({
   showSpawn,
   showChunkBorders,
   showTerrain,
+  showVoxelTerrain,
   showBiomeLabels,
   showVoxelHeightLabels,
+  voxelLod1MaxDist,
   onCursorMove,
   onChunkStatsChange,
   initialCameraState,
@@ -677,13 +766,23 @@ export function Map3D({
   const loadingVoxelsRef = useRef<Set<string>>(new Set());
   const missingVoxelsRef = useRef<Set<string>>(new Set());
   const failedVoxelsRef = useRef<Map<string, number>>(new Map());
-  const pendingVoxelFetchQueueRef = useRef<{ lod: number; regionX: number; regionY: number }[]>([]);
+  const pendingVoxelFetchQueueRef = useRef<PendingVoxelFetchRequest[]>([]);
   const activeVoxelFetchCountRef = useRef(0);
+  const voxelFetchControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const activeVoxelRequestKeysRef = useRef<Set<string>>(new Set());
+  const activeVoxelRequestGenerationRef = useRef(0);
+  const pendingVoxelDetailRequestsRef = useRef<Map<string, PendingVoxelFetchRequest>>(new Map());
+  const committedVoxelDetailRequestsRef = useRef<Map<string, PendingVoxelFetchRequest>>(new Map());
+  const voxelUnloadGraceUntilRef = useRef<Map<string, number>>(new Map());
+  const voxelLastCameraSampleRef = useRef<{ camera: THREE.Vector3; target: THREE.Vector3 } | null>(null);
+  const voxelLastMotionAtRef = useRef(0);
   const pendingVoxelMeshQueueRef = useRef<PendingVoxelMeshItem[]>([]);
   const workerRef = useRef<Worker | null>(null);
 
   const surfaceIndexRef = useRef<SurfaceIndexEntry[]>([]);
   const chunkIndexRef = useRef(worldData.chunkIndex);
+  const availableVoxelKeysRef = useRef<Set<string>>(new Set());
+  const voxelRootEntriesRef = useRef<ChunkIndexEntry[]>([]);
 
   const playersRef = useRef(players);
   playersRef.current = players;
@@ -705,10 +804,14 @@ export function Map3D({
   showChunkBordersRef.current = showChunkBorders;
   const showTerrainRef = useRef(showTerrain);
   showTerrainRef.current = showTerrain;
+  const showVoxelTerrainRef = useRef(showVoxelTerrain);
+  showVoxelTerrainRef.current = showVoxelTerrain;
   const showBiomeLabelsRef = useRef(showBiomeLabels);
   showBiomeLabelsRef.current = showBiomeLabels;
   const showVoxelHeightLabelsRef = useRef(showVoxelHeightLabels);
   showVoxelHeightLabelsRef.current = showVoxelHeightLabels;
+  const voxelLodThresholdsRef = useRef(createVoxelLodDistanceThresholds(voxelLod1MaxDist));
+  voxelLodThresholdsRef.current = createVoxelLodDistanceThresholds(voxelLod1MaxDist);
 
   const keysHeldRef = useRef<Set<string>>(new Set());
   const terrainVisibilityDirtyRef = useRef(false);
@@ -739,6 +842,18 @@ export function Map3D({
     return terrainTileKey(lod, tileX, tileY);
   }
 
+  function hasAllImmediateFinerTerrainChildrenLoaded(tile: LoadedTerrainTile): boolean {
+    if (tile.lod <= 1) return false;
+    const finerLod = tile.lod / 2;
+    for (let ox = 0; ox <= 1; ox++) {
+      for (let oy = 0; oy <= 1; oy++) {
+        const childKey = terrainTileKey(finerLod, tile.tileX * 2 + ox, tile.tileY * 2 + oy);
+        if (!loadedTerrainRef.current.has(childKey)) return false;
+      }
+    }
+    return true;
+  }
+
   function voxelTileKeyAtWorld(lod: number, worldXPos: number, worldYPos: number): string {
     const size = regionWorldSize(lod);
     const regionX = Math.floor(worldXPos / size) * size;
@@ -746,12 +861,52 @@ export function Map3D({
     return voxelTileKey(lod, regionX, regionY);
   }
 
-  function hasLoadedTerrainTileAtWorld(lod: number, worldXPos: number, worldYPos: number): boolean {
-    return loadedTerrainRef.current.has(terrainTileKeyAtWorld(lod, worldXPos, worldYPos));
+  function getVoxelParentRegion(lod: number, regionX: number, regionY: number): ChunkIndexEntry | null {
+    const parentLod = lod * 2;
+    if (!LOD_LEVELS.includes(parentLod)) return null;
+
+    const parentSize = regionWorldSize(parentLod);
+    return {
+      lod: parentLod,
+      regionX: Math.floor(regionX / parentSize) * parentSize,
+      regionY: Math.floor(regionY / parentSize) * parentSize,
+    };
   }
 
-  function hasLoadedVoxelTileAtWorld(lod: number, worldXPos: number, worldYPos: number): boolean {
-    return loadedVoxelsRef.current.has(voxelTileKeyAtWorld(lod, worldXPos, worldYPos));
+  function getImmediateFinerVoxelChildren(lod: number, regionX: number, regionY: number): ChunkIndexEntry[] {
+    if (lod <= 1) return [];
+
+    const childLod = lod / 2;
+    const childSize = regionWorldSize(childLod);
+    return [
+      { lod: childLod, regionX, regionY },
+      { lod: childLod, regionX: regionX + childSize, regionY },
+      { lod: childLod, regionX, regionY: regionY + childSize },
+      { lod: childLod, regionX: regionX + childSize, regionY: regionY + childSize },
+    ];
+  }
+
+  function rebuildVoxelIndexCache(entries: ChunkIndexEntry[]) {
+    const availableKeys = new Set<string>();
+    for (const entry of entries) {
+      availableKeys.add(voxelTileKey(entry.lod, entry.regionX, entry.regionY));
+    }
+
+    const roots: ChunkIndexEntry[] = [];
+    for (const entry of entries) {
+      const parent = getVoxelParentRegion(entry.lod, entry.regionX, entry.regionY);
+      if (!parent || !availableKeys.has(voxelTileKey(parent.lod, parent.regionX, parent.regionY))) {
+        roots.push(entry);
+      }
+    }
+
+    roots.sort((a, b) => b.lod - a.lod || a.regionX - b.regionX || a.regionY - b.regionY);
+    availableVoxelKeysRef.current = availableKeys;
+    voxelRootEntriesRef.current = roots;
+  }
+
+  function hasLoadedTerrainTileAtWorld(lod: number, worldXPos: number, worldYPos: number): boolean {
+    return loadedTerrainRef.current.has(terrainTileKeyAtWorld(lod, worldXPos, worldYPos));
   }
 
   function clearDebugLabels() {
@@ -802,16 +957,27 @@ export function Map3D({
     (vt.borderLines.material as THREE.Material).dispose();
     loadedVoxelsRef.current.delete(key);
     loadingVoxelsRef.current.delete(key);
+    voxelUnloadGraceUntilRef.current.delete(key);
   }
 
   function clearVoxelTiles() {
     for (const key of loadedVoxelsRef.current.keys()) {
       unloadVoxelTile(key);
     }
+    for (const controller of voxelFetchControllersRef.current.values()) {
+      controller.abort();
+    }
+    voxelFetchControllersRef.current.clear();
     loadedVoxelsRef.current.clear();
     loadingVoxelsRef.current.clear();
     missingVoxelsRef.current.clear();
     failedVoxelsRef.current.clear();
+    activeVoxelRequestKeysRef.current.clear();
+    pendingVoxelDetailRequestsRef.current.clear();
+    committedVoxelDetailRequestsRef.current.clear();
+    voxelUnloadGraceUntilRef.current.clear();
+    voxelLastCameraSampleRef.current = null;
+    voxelLastMotionAtRef.current = 0;
     pendingVoxelFetchQueueRef.current = [];
     pendingVoxelMeshQueueRef.current = [];
     activeVoxelFetchCountRef.current = 0;
@@ -854,22 +1020,42 @@ export function Map3D({
     }
   }
 
-  async function loadTerrainTile(lod: number, tileX: number, tileY: number) {
+  async function loadTerrainTile(
+    lod: number,
+    tileX: number,
+    tileY: number,
+    options: { replaceExisting?: boolean } = {},
+  ) {
+    const replaceExisting = options.replaceExisting === true;
     const key = terrainTileKey(lod, tileX, tileY);
-    if (loadingTerrainRef.current.has(key) || loadedTerrainRef.current.has(key)) return;
+    if (loadingTerrainRef.current.has(key)) return;
+    if (!replaceExisting && loadedTerrainRef.current.has(key)) return;
     loadingTerrainRef.current.add(key);
 
     try {
       const data = await fetchTerrain(lod, tileX, tileY);
       if (!data || !terrainGroupRef.current) return;
-      if (loadedTerrainRef.current.has(key)) return;
+      const current = loadedTerrainRef.current.get(key);
+      if (current && !replaceExisting) return;
 
       const mesh = buildFullTileMesh(data);
       const border = buildSurfaceTileBorderLines(data.worldX, data.worldY, lod, mesh);
+      const renderTerrain = shouldRenderTerrainForMode(
+        modeRef.current,
+        showTerrainRef.current,
+        showVoxelTerrainRef.current,
+      );
+      mesh.visible = renderTerrain;
+      border.lines.visible = modeRef.current === "terrain" && showChunkBordersRef.current && renderTerrain;
+      border.label.visible = modeRef.current === "terrain" && showChunkBordersRef.current && renderTerrain;
 
       terrainGroupRef.current.add(mesh);
       chunkBorderGroupRef.current?.add(border.lines);
       chunkBorderGroupRef.current?.add(border.label);
+
+      if (current) {
+        disposeTerrainTile(current);
+      }
 
       loadedTerrainRef.current.set(key, {
         key,
@@ -894,6 +1080,11 @@ export function Map3D({
   }
 
   function updateTerrainVisibility(target: THREE.Vector3, camDist: number) {
+    const renderTerrain = shouldRenderTerrainForMode(
+      modeRef.current,
+      showTerrainRef.current,
+      showVoxelTerrainRef.current,
+    );
     let changed = false;
 
     for (const tile of loadedTerrainRef.current.values()) {
@@ -906,16 +1097,22 @@ export function Map3D({
       const xyDist = Math.sqrt(dx * dx + dy * dy);
       const dist = Math.max(xyDist, camDist);
 
-      const desiredLod = getLodForDistance(dist);
-      const hasReplacement = hasLoadedTerrainTileAtWorld(desiredLod, centerWorldX, centerWorldY);
-      const visible = tile.lod === desiredLod || !hasReplacement;
+      const desiredLod = getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
+      let replacedByPriority = false;
+      if (desiredLod > tile.lod) {
+        replacedByPriority = hasLoadedTerrainTileAtWorld(desiredLod, centerWorldX, centerWorldY);
+      } else if (desiredLod < tile.lod) {
+        replacedByPriority = hasAllImmediateFinerTerrainChildrenLoaded(tile);
+      }
+
+      const visible = renderTerrain && !replacedByPriority;
 
       if (tile.mesh.visible !== visible) {
         tile.mesh.visible = visible;
         changed = true;
       }
-      tile.borderLines.visible = visible;
-      tile.borderLabel.visible = visible;
+      tile.borderLines.visible = modeRef.current === "terrain" && showChunkBordersRef.current && visible;
+      tile.borderLabel.visible = modeRef.current === "terrain" && showChunkBordersRef.current && visible;
     }
 
     if (changed) {
@@ -924,252 +1121,333 @@ export function Map3D({
     }
   }
 
-  function requestVoxelRegion(lod: number, regionX: number, regionY: number) {
-    const key = voxelTileKey(lod, regionX, regionY);
-    if (loadingVoxelsRef.current.has(key) || loadedVoxelsRef.current.has(key)) return;
+  function compareVoxelFetchRequests(a: PendingVoxelFetchRequest, b: PendingVoxelFetchRequest): number {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return b.generation - a.generation;
+  }
+
+  function queueVoxelFetchRequest(request: PendingVoxelFetchRequest) {
+    const existingIndex = pendingVoxelFetchQueueRef.current.findIndex((item) => item.key === request.key);
+    if (existingIndex !== -1) {
+      pendingVoxelFetchQueueRef.current[existingIndex] = request;
+    } else {
+      pendingVoxelFetchQueueRef.current.push(request);
+    }
+    pendingVoxelFetchQueueRef.current.sort(compareVoxelFetchRequests);
+  }
+
+  function finishVoxelFetch(key: string) {
+    voxelFetchControllersRef.current.delete(key);
+    activeVoxelFetchCountRef.current = Math.max(0, activeVoxelFetchCountRef.current - 1);
+    drainVoxelFetchQueue();
+  }
+
+  function requestVoxelRegion(request: PendingVoxelFetchRequest) {
+    const { key } = request;
+    if (loadedVoxelsRef.current.has(key)) return;
     if (missingVoxelsRef.current.has(key)) return;
+
     const retries = failedVoxelsRef.current.get(key);
     if (retries !== undefined && retries >= MAX_VOXEL_RETRIES) return;
     if (!workerRef.current) return;
 
-    loadingVoxelsRef.current.add(key);
+    if (voxelFetchControllersRef.current.has(key)) return;
 
-    if (activeVoxelFetchCountRef.current >= MAX_CONCURRENT_VOXEL_FETCHES) {
-      pendingVoxelFetchQueueRef.current.push({ lod, regionX, regionY });
+    if (loadingVoxelsRef.current.has(key)) {
+      if (pendingVoxelMeshQueueRef.current.some((item) => item.key === key)) return;
+      queueVoxelFetchRequest(request);
       return;
     }
 
-    activeVoxelFetchCountRef.current++;
-    void fetchVoxelRegion(lod, regionX, regionY);
+    loadingVoxelsRef.current.add(key);
+    queueVoxelFetchRequest(request);
   }
 
   function drainVoxelFetchQueue() {
-    activeVoxelFetchCountRef.current = Math.max(0, activeVoxelFetchCountRef.current - 1);
-    while (pendingVoxelFetchQueueRef.current.length > 0) {
+    pendingVoxelFetchQueueRef.current.sort(compareVoxelFetchRequests);
+
+    while (
+      activeVoxelFetchCountRef.current < MAX_CONCURRENT_VOXEL_FETCHES
+      && pendingVoxelFetchQueueRef.current.length > 0
+    ) {
       const next = pendingVoxelFetchQueueRef.current.shift()!;
-      const key = voxelTileKey(next.lod, next.regionX, next.regionY);
-      if (!loadingVoxelsRef.current.has(key)) continue;
+      if (!activeVoxelRequestKeysRef.current.has(next.key)) {
+        loadingVoxelsRef.current.delete(next.key);
+        continue;
+      }
+      if (loadedVoxelsRef.current.has(next.key) || missingVoxelsRef.current.has(next.key)) {
+        loadingVoxelsRef.current.delete(next.key);
+        continue;
+      }
+
+      const retries = failedVoxelsRef.current.get(next.key);
+      if (retries !== undefined && retries >= MAX_VOXEL_RETRIES) {
+        loadingVoxelsRef.current.delete(next.key);
+        continue;
+      }
+      if (voxelFetchControllersRef.current.has(next.key)) {
+        continue;
+      }
+      if (!loadingVoxelsRef.current.has(next.key)) {
+        continue;
+      }
+
       activeVoxelFetchCountRef.current++;
-      void fetchVoxelRegion(next.lod, next.regionX, next.regionY);
-      return;
+      const controller = new AbortController();
+      voxelFetchControllersRef.current.set(next.key, controller);
+      void fetchVoxelRegion(next, controller);
     }
   }
 
-  async function fetchVoxelRegion(lod: number, regionX: number, regionY: number) {
-    const key = voxelTileKey(lod, regionX, regionY);
+  function syncVoxelRequests(requests: Map<string, PendingVoxelFetchRequest>) {
+    activeVoxelRequestKeysRef.current = new Set(requests.keys());
+
+    pendingVoxelFetchQueueRef.current = pendingVoxelFetchQueueRef.current.filter((item) => {
+      const updated = requests.get(item.key);
+      if (!updated || loadedVoxelsRef.current.has(item.key)) {
+        loadingVoxelsRef.current.delete(item.key);
+        return false;
+      }
+      item.priority = updated.priority;
+      item.generation = updated.generation;
+      return true;
+    });
+    pendingVoxelFetchQueueRef.current.sort(compareVoxelFetchRequests);
+
+    pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter((item) => {
+      if (activeVoxelRequestKeysRef.current.has(item.key) || loadedVoxelsRef.current.has(item.key)) {
+        return true;
+      }
+      loadingVoxelsRef.current.delete(item.key);
+      return false;
+    });
+
+    for (const [key, controller] of voxelFetchControllersRef.current) {
+      if (!activeVoxelRequestKeysRef.current.has(key)) {
+        controller.abort();
+      }
+    }
+
+    for (const request of requests.values()) {
+      requestVoxelRegion(request);
+    }
+
+    drainVoxelFetchQueue();
+  }
+
+  async function fetchVoxelRegion(request: PendingVoxelFetchRequest, controller: AbortController) {
+    const { key, lod, regionX, regionY } = request;
+
     try {
-      const res = await fetch(`/api/voxels/${lod}/${regionX}/${regionY}`);
+      const res = await fetch(`/api/voxels/${lod}/${regionX}/${regionY}`, { signal: controller.signal });
+      if (!activeVoxelRequestKeysRef.current.has(key) && !loadedVoxelsRef.current.has(key)) {
+        loadingVoxelsRef.current.delete(key);
+        return;
+      }
       if (res.status === 204) {
         missingVoxelsRef.current.add(key);
         loadingVoxelsRef.current.delete(key);
-        drainVoxelFetchQueue();
         return;
       }
       if (!res.ok) {
         failedVoxelsRef.current.set(key, (failedVoxelsRef.current.get(key) ?? 0) + 1);
         loadingVoxelsRef.current.delete(key);
-        drainVoxelFetchQueue();
         return;
       }
 
       const buffer = await res.arrayBuffer();
-      if (!workerRef.current) {
+      if (!workerRef.current || (!activeVoxelRequestKeysRef.current.has(key) && !loadedVoxelsRef.current.has(key))) {
         loadingVoxelsRef.current.delete(key);
-        drainVoxelFetchQueue();
         return;
       }
 
       workerRef.current.postMessage({ buffer, lod, regionX, regionY }, [buffer]);
-      drainVoxelFetchQueue();
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        loadingVoxelsRef.current.delete(key);
+        return;
+      }
+
       console.error(`Failed to load voxel region ${key}:`, e);
-      failedVoxelsRef.current.set(key, (failedVoxelsRef.current.get(key) ?? 0) + 1);
+      if (activeVoxelRequestKeysRef.current.has(key)) {
+        failedVoxelsRef.current.set(key, (failedVoxelsRef.current.get(key) ?? 0) + 1);
+      }
       loadingVoxelsRef.current.delete(key);
-      drainVoxelFetchQueue();
+    } finally {
+      finishVoxelFetch(key);
     }
   }
 
   function updateVoxelLod(target: THREE.Vector3, camDist: number, focusLod: number) {
-    const index = chunkIndexRef.current;
-    if (index.length === 0) return;
-
-    const desiredLodByCell = new Set<string>();
-    for (let lodIdx = LOD_LEVELS.length - 1; lodIdx >= 0; lodIdx--) {
-      const lod = LOD_LEVELS[lodIdx];
-      const cellSize = regionWorldSize(lod);
-      const radiusBase = getUnloadDistForLod(lod);
-      const radius = Number.isFinite(radiusBase)
-        ? radiusBase
-        : (LOD_DISTANCE_THRESHOLDS[LOD_DISTANCE_THRESHOLDS.length - 2]?.maxDist ?? 9600) * 2;
-      const xMin = Math.floor((target.x - radius) / cellSize) * cellSize;
-      const xMax = Math.floor((target.x + radius) / cellSize) * cellSize;
-      const yWorldTarget = -target.y;
-      const yMin = Math.floor((yWorldTarget - radius) / cellSize) * cellSize;
-      const yMax = Math.floor((yWorldTarget + radius) / cellSize) * cellSize;
-
-      for (let regionX = xMin; regionX <= xMax; regionX += cellSize) {
-        for (let regionY = yMin; regionY <= yMax; regionY += cellSize) {
-          const centerWorldX = regionX + cellSize / 2;
-          const centerWorldY = regionY + cellSize / 2;
-          const dx = centerWorldX - target.x;
-          const dy = centerWorldY - yWorldTarget;
-          const xyDist = Math.sqrt(dx * dx + dy * dy);
-          const effectiveDist = Math.max(xyDist, camDist);
-          const desiredLod = getLodForDistanceWithHysteresis(effectiveDist, focusLod);
-          if (desiredLod !== lod) continue;
-          const key = `${lod}/${regionX}/${regionY}`;
-          desiredLodByCell.add(key);
-        }
-      }
+    const roots = voxelRootEntriesRef.current;
+    if (roots.length === 0) {
+      pendingVoxelDetailRequestsRef.current.clear();
+      committedVoxelDetailRequestsRef.current.clear();
+      syncVoxelRequests(new Map());
+      return;
     }
 
-    for (const entry of index) {
-      const desiredKey = `${entry.lod}/${entry.regionX}/${entry.regionY}`;
-      if (!desiredLodByCell.has(desiredKey)) continue;
+    const now = performance.now();
+    const voxelThresholds = voxelLodThresholdsRef.current;
+    const requestGeneration = activeVoxelRequestGenerationRef.current + 1;
+    activeVoxelRequestGenerationRef.current = requestGeneration;
+    const yWorldTarget = -target.y;
+    const fallbackMaxDist = (voxelThresholds[voxelThresholds.length - 2]?.maxDist ?? 9600) * 2;
+    const visibleQuadrantMasks = new Map<string, number>();
+    const coverageVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
+    const detailVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
+    const stableForDetail = now - voxelLastMotionAtRef.current >= VOXEL_DETAIL_REQUEST_DEBOUNCE_MS;
 
-      requestVoxelRegion(entry.lod, entry.regionX, entry.regionY);
+    const addVisibleQuadrant = (key: string, quadrant: number) => {
+      visibleQuadrantMasks.set(key, (visibleQuadrantMasks.get(key) ?? 0) | voxelQuadrantBit(quadrant));
+    };
+
+    const getTileEffectiveDist = (lod: number, regionX: number, regionY: number): number => {
+      const size = regionWorldSize(lod);
+      const dx = target.x < regionX
+        ? regionX - target.x
+        : target.x > regionX + size
+          ? target.x - (regionX + size)
+          : 0;
+      const dy = yWorldTarget < regionY
+        ? regionY - yWorldTarget
+        : yWorldTarget > regionY + size
+          ? yWorldTarget - (regionY + size)
+          : 0;
+      return Math.max(Math.hypot(dx, dy), camDist);
+    };
+
+    const getSelectionDistForLod = (lod: number): number => {
+      const unloadDist = getUnloadDistForLod(lod, voxelThresholds);
+      return Number.isFinite(unloadDist) ? unloadDist : fallbackMaxDist;
+    };
+
+    const noteVoxelRequest = (
+      requestMap: Map<string, PendingVoxelFetchRequest>,
+      lod: number,
+      regionX: number,
+      regionY: number,
+      effectiveDist: number,
+    ) => {
+      const key = voxelTileKey(lod, regionX, regionY);
+      const request: PendingVoxelFetchRequest = {
+        key,
+        lod,
+        regionX,
+        regionY,
+        priority: LOD_LEVELS.indexOf(lod) * 100_000 + Math.round(effectiveDist),
+        generation: requestGeneration,
+      };
+      const existing = requestMap.get(key);
+      if (!existing || compareVoxelFetchRequests(request, existing) < 0) {
+        requestMap.set(key, request);
+      }
+    };
+
+    const mergeVoxelRequest = (requestMap: Map<string, PendingVoxelFetchRequest>, request: PendingVoxelFetchRequest) => {
+      const existing = requestMap.get(request.key);
+      if (!existing || compareVoxelFetchRequests(request, existing) < 0) {
+        requestMap.set(request.key, request);
+      }
+    };
+
+    const selectVisibleTile = (entry: ChunkIndexEntry, hasLoadedFallback: boolean): boolean => {
+      const key = voxelTileKey(entry.lod, entry.regionX, entry.regionY);
+      const effectiveDist = getTileEffectiveDist(entry.lod, entry.regionX, entry.regionY);
+      if (effectiveDist > getSelectionDistForLod(entry.lod)) return false;
+
+      const desiredLod = getLodForDistanceWithHysteresis(effectiveDist, focusLod, voxelThresholds);
+      const selfLoaded = loadedVoxelsRef.current.has(key);
+      let hasSelectedCoverage = false;
+      let needsSelfFallback = false;
+
+      if (entry.lod > desiredLod) {
+        const children = getImmediateFinerVoxelChildren(entry.lod, entry.regionX, entry.regionY);
+        for (let quadrant = 0; quadrant < children.length; quadrant++) {
+          const child = children[quadrant]!;
+          const childKey = voxelTileKey(child.lod, child.regionX, child.regionY);
+          const childAvailable = availableVoxelKeysRef.current.has(childKey);
+
+          if (childAvailable && selectVisibleTile(child, hasLoadedFallback || selfLoaded)) {
+              hasSelectedCoverage = true;
+              continue;
+          }
+
+          needsSelfFallback = true;
+          if (selfLoaded) {
+            addVisibleQuadrant(key, quadrant);
+            hasSelectedCoverage = true;
+          }
+        }
+      } else {
+        needsSelfFallback = true;
+        if (selfLoaded) {
+          visibleQuadrantMasks.set(key, FULL_VOXEL_QUADRANT_MASK);
+          hasSelectedCoverage = true;
+        }
+      }
+
+      if (needsSelfFallback) {
+        if (!selfLoaded) {
+          noteVoxelRequest(hasLoadedFallback ? detailVoxelRequests : coverageVoxelRequests, entry.lod, entry.regionX, entry.regionY, effectiveDist);
+        }
+      }
+
+      return hasSelectedCoverage;
+    };
+
+    for (const root of roots) {
+      selectVisibleTile(root, false);
     }
 
-    const desiredKeyForPoint = (worldX: number, worldY: number): string => {
-      const yWorldTarget = -target.y;
-      const xyDist = Math.hypot(worldX - target.x, worldY - yWorldTarget);
-      const effectiveDist = Math.max(xyDist, camDist);
-      const desiredLod = getLodForDistanceWithHysteresis(effectiveDist, focusLod);
-      const desiredSize = regionWorldSize(desiredLod);
-      const desiredRegionX = Math.floor(worldX / desiredSize) * desiredSize;
-      const desiredRegionY = Math.floor(worldY / desiredSize) * desiredSize;
-      return voxelTileKey(desiredLod, desiredRegionX, desiredRegionY);
-    };
+    pendingVoxelDetailRequestsRef.current = detailVoxelRequests;
+    committedVoxelDetailRequestsRef.current = stableForDetail ? detailVoxelRequests : new Map();
 
-    const hasAllImmediateFinerChildrenLoaded = (tile: LoadedVoxelTile): boolean => {
-      if (tile.lod <= 1) return false;
-      const finerLod = tile.lod / 2;
-      const childSize = regionWorldSize(finerLod);
-      for (let ox = 0; ox <= childSize; ox += childSize) {
-        for (let oy = 0; oy <= childSize; oy += childSize) {
-          const childKey = voxelTileKey(finerLod, tile.regionX + ox, tile.regionY + oy);
-          if (!loadedVoxelsRef.current.has(childKey)) return false;
-        }
-      }
-      return true;
-    };
+    const requestedVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
+    for (const request of coverageVoxelRequests.values()) {
+      mergeVoxelRequest(requestedVoxelRequests, request);
+    }
+    for (const request of committedVoxelDetailRequestsRef.current.values()) {
+      mergeVoxelRequest(requestedVoxelRequests, request);
+    }
 
-    const hasAnyImmediateFinerChildLoaded = (tile: LoadedVoxelTile): boolean => {
-      if (tile.lod <= 1) return false;
-      const finerLod = tile.lod / 2;
-      const childSize = regionWorldSize(finerLod);
-      for (let ox = 0; ox <= childSize; ox += childSize) {
-        for (let oy = 0; oy <= childSize; oy += childSize) {
-          const childKey = voxelTileKey(finerLod, tile.regionX + ox, tile.regionY + oy);
-          if (loadedVoxelsRef.current.has(childKey)) return true;
-        }
-      }
-      return false;
-    };
-
-    const hasChildAt = (finerLod: number, worldX: number, worldY: number): boolean => {
-      return loadedVoxelsRef.current.has(voxelTileKeyAtWorld(finerLod, worldX, worldY));
-    };
+    syncVoxelRequests(requestedVoxelRequests);
 
     let changed = false;
     for (const [key, tile] of loadedVoxelsRef.current) {
-      const regSize = regionWorldSize(tile.lod);
-      const centerWorldX = tile.regionX + regSize / 2;
-      const centerWorldY = tile.regionY + regSize / 2;
-      const centerSceneY = -centerWorldY;
+      const quadrantMask = visibleQuadrantMasks.get(key) ?? 0;
+      const visible = quadrantMask !== 0;
+      const effectiveDist = getTileEffectiveDist(tile.lod, tile.regionX, tile.regionY);
+      const unloadDist = getSelectionDistForLod(tile.lod) * 1.1;
+      const keepLoaded = visible || coverageVoxelRequests.has(key) || detailVoxelRequests.has(key);
 
-      const dx = centerWorldX - target.x;
-      const dy = centerSceneY - target.y;
-      const xyDist = Math.sqrt(dx * dx + dy * dy);
-      const dist = Math.max(xyDist, camDist);
-      const unloadDist = getUnloadDistForLod(tile.lod) * 1.1;
+      if (keepLoaded) {
+        voxelUnloadGraceUntilRef.current.set(key, now + VOXEL_UNLOAD_GRACE_MS);
+      }
 
-      const isDesiredNow = desiredLodByCell.has(key);
-      const desiredCenterKey = desiredKeyForPoint(centerWorldX, centerWorldY);
-      const desiredCenter = parseVoxelKey(desiredCenterKey);
-      const desiredCenterLoaded = loadedVoxelsRef.current.has(desiredCenterKey);
+      if (tile.borderLines.visible !== visible) {
+        tile.borderLines.visible = visible;
+        changed = true;
+      }
 
-      let replacedByPriority = false;
-      let visible = true;
-
-      // Partial occlusion: hide only 32x32 sub-cells of this tile that are
-      // already covered by finer loaded tiles.
-      const chunkSizeWorld = chunkWorldSize(tile.lod);
-      let anyVisibleSubMesh = false;
       for (const sm of tile.subMeshes) {
-        let smVisible = true;
-        for (const finerLod of LOD_LEVELS) {
-          if (finerLod >= tile.lod) continue;
-          if (hasChildAt(finerLod, sm.worldX + chunkSizeWorld / 2, sm.worldY + chunkSizeWorld / 2)) {
-            smVisible = false;
-            break;
-          }
-        }
+        const smVisible = (quadrantMask & voxelQuadrantBit(voxelSubMeshQuadrant(sm.colIndex))) !== 0;
         if (sm.mesh.visible !== smVisible) {
           sm.mesh.visible = smVisible;
           changed = true;
         }
-        if (smVisible) anyVisibleSubMesh = true;
       }
 
-      visible = anyVisibleSubMesh;
+      const graceUntil = voxelUnloadGraceUntilRef.current.get(key) ?? 0;
+      const inGrace = now < graceUntil;
 
-      if (!isDesiredNow && desiredCenter) {
-        if (desiredCenter.lod > tile.lod) {
-          // Zoomed out: a coarser region is preferred for this area.
-          replacedByPriority = desiredCenterLoaded;
-          visible = !replacedByPriority && anyVisibleSubMesh;
-        } else if (desiredCenter.lod < tile.lod) {
-          // Zoomed in: as soon as any immediate finer child is loaded, hide the
-          // coarse tile to avoid visible overlap. Keep it in memory until all
-          // immediate finer children are ready, then unload.
-          const anyFinerLoaded = hasAnyImmediateFinerChildLoaded(tile);
-          if (anyFinerLoaded) {
-            visible = false && anyVisibleSubMesh;
-          }
-          replacedByPriority = hasAllImmediateFinerChildrenLoaded(tile);
-          if (replacedByPriority) {
-            visible = false && anyVisibleSubMesh;
-          }
-        }
-      }
-
-      tile.borderLines.visible = visible;
-      if (!visible) {
-        for (const sm of tile.subMeshes) {
-          if (sm.mesh.visible) {
-            sm.mesh.visible = false;
-            changed = true;
-          }
-        }
-      }
-
-      if (tile.borderLines.visible !== visible) {
-        changed = true;
-      }
-
-      if (replacedByPriority && !isDesiredNow) {
+      if (!visible && !requestedVoxelRequests.has(key) && !inGrace) {
         unloadVoxelTile(key);
         changed = true;
         continue;
       }
 
-      if (dist > unloadDist) {
-        // Hard cutoff to guarantee old chunks eventually unload even if no
-        // replacement exists for sparse/missing data at this location.
-        if (dist > unloadDist * 1.35) {
-          unloadVoxelTile(key);
-          changed = true;
-          continue;
-        }
-
-        const replacementLod = getLodForDistanceWithHysteresis(dist, focusLod);
-        if (
-          replacementLod !== tile.lod
-          && !hasLoadedVoxelTileAtWorld(replacementLod, centerWorldX, centerWorldY)
-        ) {
-          continue;
-        }
+      if (!requestedVoxelRequests.has(key) && !inGrace && effectiveDist > unloadDist) {
         unloadVoxelTile(key);
         changed = true;
       }
@@ -1178,19 +1456,12 @@ export function Map3D({
     for (const key of [...loadingVoxelsRef.current]) {
       const parsed = parseVoxelKey(key);
       if (!parsed) continue;
-      const regSize = regionWorldSize(parsed.lod);
-      const centerWorldX = parsed.regionX + regSize / 2;
-      const centerWorldY = parsed.regionY + regSize / 2;
-      const centerSceneY = -centerWorldY;
-      const dx = centerWorldX - target.x;
-      const dy = centerSceneY - target.y;
-      const xyDist = Math.sqrt(dx * dx + dy * dy);
-      const dist = Math.max(xyDist, camDist);
-        if (dist > getUnloadDistForLod(parsed.lod) * 1.1) {
-          loadingVoxelsRef.current.delete(key);
-          pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter((q) => q.key !== key);
-        }
+      const effectiveDist = getTileEffectiveDist(parsed.lod, parsed.regionX, parsed.regionY);
+      if (!requestedVoxelRequests.has(key) && effectiveDist > getSelectionDistForLod(parsed.lod) * 1.1) {
+        loadingVoxelsRef.current.delete(key);
+        pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter((q) => q.key !== key);
       }
+    }
 
     if (changed) {
       debugLabelsDirtyRef.current = true;
@@ -1242,14 +1513,14 @@ export function Map3D({
           const tileWorldSize = 256 * entry.lod;
           const centerX = entry.worldX + tileWorldSize / 2;
           const centerY = entry.worldY + tileWorldSize / 2;
-            const xyDist = Math.hypot(centerX - target.x, -centerY - target.y);
-            const dist = Math.max(xyDist, camDist);
-            return {
-              entry,
-              dist,
-              desiredLod: getLodForDistance(dist),
-            };
-          })
+          const xyDist = Math.hypot(centerX - target.x, -centerY - target.y);
+          const dist = Math.max(xyDist, camDist);
+          return {
+            entry,
+            dist,
+            desiredLod: getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS),
+          };
+        })
         .filter((item) => item.entry.lod === item.desiredLod)
         .sort((a, b) => a.dist - b.dist)
         .slice(0, 14);
@@ -1510,14 +1781,22 @@ export function Map3D({
 
     const key = terrainTileKey(lod, tileX, tileY);
     const existing = loadedTerrainRef.current.get(key);
+    const shouldRenderTerrain = shouldRenderTerrainForMode(
+      modeRef.current,
+      showTerrainRef.current,
+      showVoxelTerrainRef.current,
+    );
     if (existing) {
-      disposeTerrainTile(existing);
-      loadedTerrainRef.current.delete(key);
-      if (modeRef.current === "terrain") {
-        void loadTerrainTile(lod, tileX, tileY);
+      if (shouldRenderTerrain) {
+        void loadTerrainTile(lod, tileX, tileY, { replaceExisting: true });
+      } else {
+        disposeTerrainTile(existing);
+        loadedTerrainRef.current.delete(key);
+        debugLabelsDirtyRef.current = true;
+        biomeLabelsDirtyRef.current = true;
       }
-      debugLabelsDirtyRef.current = true;
-      biomeLabelsDirtyRef.current = true;
+    } else if (shouldRenderTerrain) {
+      void loadTerrainTile(lod, tileX, tileY);
     }
   }
 
@@ -1527,8 +1806,8 @@ export function Map3D({
     failedVoxelsRef.current.delete(key);
     if (loadedVoxelsRef.current.has(key)) {
       unloadVoxelTile(key);
-      if (modeRef.current === "voxel") {
-        requestVoxelRegion(lod, regionX, regionY);
+      if (modeRef.current === "voxel" && sceneRef.current) {
+        checkAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
       }
       debugLabelsDirtyRef.current = true;
     }
@@ -1563,7 +1842,7 @@ export function Map3D({
 
     if (!hadRayHit && state.initialized && now - state.lastHitAt <= VOXEL_FOCUS_STICKY_MS) {
       rawPoint = state.point.clone();
-      rawZoomDist = clampDistanceToLodRange(state.zoomDist, activeFocusLodRef.current);
+      rawZoomDist = clampDistanceToLodRange(state.zoomDist, activeFocusLodRef.current, voxelLodThresholdsRef.current);
     }
 
     if (!state.initialized) {
@@ -1585,66 +1864,101 @@ export function Map3D({
     };
   }
 
+  function syncTerrainLod(target: THREE.Vector3, camDist: number) {
+    const index = surfaceIndexRef.current;
+    if (index.length > 0) {
+      for (const entry of index) {
+        const tileWorldSize = 256 * entry.lod;
+        const centerX = entry.worldX + tileWorldSize / 2;
+        const centerY = -(entry.worldY + tileWorldSize / 2);
+        const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
+        const dist = Math.max(xyDist, camDist);
+        const desiredLod = getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
+        if (entry.lod !== desiredLod) continue;
+        const key = terrainTileKey(entry.lod, entry.tileX, entry.tileY);
+        if (loadedTerrainRef.current.has(key) || loadingTerrainRef.current.has(key)) continue;
+        void loadTerrainTile(entry.lod, entry.tileX, entry.tileY);
+      }
+    }
+
+    for (const [key, tile] of loadedTerrainRef.current) {
+      const tileWorldSize = 256 * tile.lod;
+      const centerWorldX = tile.worldX + tileWorldSize / 2;
+      const centerWorldY = tile.worldY + tileWorldSize / 2;
+      const centerSceneY = -centerWorldY;
+      const xyDist = Math.hypot(centerWorldX - target.x, centerSceneY - target.y);
+      const dist = Math.max(xyDist, camDist);
+      const desiredLod = getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
+
+      let replacedByPriority = false;
+      if (desiredLod > tile.lod) {
+        replacedByPriority = hasLoadedTerrainTileAtWorld(desiredLod, centerWorldX, centerWorldY);
+      } else if (desiredLod < tile.lod) {
+        replacedByPriority = hasAllImmediateFinerTerrainChildrenLoaded(tile);
+      }
+
+      if (replacedByPriority) {
+        disposeTerrainTile(tile);
+        loadedTerrainRef.current.delete(key);
+        debugLabelsDirtyRef.current = true;
+        biomeLabelsDirtyRef.current = true;
+        continue;
+      }
+    }
+
+    updateTerrainVisibility(target, camDist);
+    terrainVisibilityDirtyRef.current = false;
+  }
+
   function checkAndUpdateLOD(camera: THREE.PerspectiveCamera, controls: OrbitControls) {
     const target = controls.target;
     const camDist = camera.position.distanceTo(target);
+    const now = performance.now();
+
+    const lastCameraSample = voxelLastCameraSampleRef.current;
+    if (
+      !lastCameraSample
+      || lastCameraSample.camera.distanceToSquared(camera.position) > 1
+      || lastCameraSample.target.distanceToSquared(target) > 1
+    ) {
+      voxelLastMotionAtRef.current = now;
+      if (lastCameraSample) {
+        lastCameraSample.camera.copy(camera.position);
+        lastCameraSample.target.copy(target);
+      } else {
+        voxelLastCameraSampleRef.current = {
+          camera: camera.position.clone(),
+          target: target.clone(),
+        };
+      }
+    }
+
+    const shouldRenderTerrain = shouldRenderTerrainForMode(
+      modeRef.current,
+      showTerrainRef.current,
+      showVoxelTerrainRef.current,
+    );
 
     if (modeRef.current === "terrain") {
-      activeFocusLodRef.current = getLodForDistance(camDist);
-      const index = surfaceIndexRef.current;
-      if (index.length > 0) {
-        for (const entry of index) {
-          const tileWorldSize = 256 * entry.lod;
-          const centerX = entry.worldX + tileWorldSize / 2;
-          const centerY = -(entry.worldY + tileWorldSize / 2);
-          const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
-          const dist = Math.max(xyDist, camDist);
-          const desiredLod = getLodForDistance(dist);
-          if (entry.lod !== desiredLod) continue;
-          const key = terrainTileKey(entry.lod, entry.tileX, entry.tileY);
-          if (loadedTerrainRef.current.has(key) || loadingTerrainRef.current.has(key)) continue;
-          void loadTerrainTile(entry.lod, entry.tileX, entry.tileY);
-        }
-      }
-
-      for (const [key, tile] of loadedTerrainRef.current) {
-        const tileWorldSize = 256 * tile.lod;
-        const centerWorldX = tile.worldX + tileWorldSize / 2;
-        const centerWorldY = tile.worldY + tileWorldSize / 2;
-        const centerSceneY = -centerWorldY;
-        const xyDist = Math.hypot(centerWorldX - target.x, centerSceneY - target.y);
-        const dist = Math.max(xyDist, camDist);
-        const unloadDist = getUnloadDistForLod(tile.lod);
-        if (dist > unloadDist) {
-          // Guarantee eventual eviction for far-away terrain even when no
-          // replacement LOD tile exists at this location.
-          if (dist > unloadDist * 1.35) {
-            disposeTerrainTile(tile);
-            loadedTerrainRef.current.delete(key);
-            debugLabelsDirtyRef.current = true;
-            biomeLabelsDirtyRef.current = true;
-            continue;
-          }
-
-          const replacementLod = getLodForDistance(dist);
-          if (
-            replacementLod !== tile.lod
-            && !hasLoadedTerrainTileAtWorld(replacementLod, centerWorldX, centerWorldY)
-          ) {
-            continue;
-          }
-          disposeTerrainTile(tile);
-          loadedTerrainRef.current.delete(key);
-          debugLabelsDirtyRef.current = true;
-          biomeLabelsDirtyRef.current = true;
-        }
-      }
-
-      updateTerrainVisibility(target, camDist);
-      terrainVisibilityDirtyRef.current = false;
+      pendingVoxelDetailRequestsRef.current.clear();
+      committedVoxelDetailRequestsRef.current.clear();
+      syncVoxelRequests(new Map());
+      activeFocusLodRef.current = getLodForDistance(camDist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
+      syncTerrainLod(target, camDist);
     } else {
+      if (shouldRenderTerrain) {
+        syncTerrainLod(target, camDist);
+      } else if (terrainVisibilityDirtyRef.current) {
+        updateTerrainVisibility(target, camDist);
+        terrainVisibilityDirtyRef.current = false;
+      }
+
       const focus = resolveVoxelLodFocus(camera, controls);
-      const focusLod = getLodForDistanceWithHysteresis(focus.zoomDist, activeFocusLodRef.current);
+      const focusLod = getLodForDistanceWithHysteresis(
+        focus.zoomDist,
+        activeFocusLodRef.current,
+        voxelLodThresholdsRef.current,
+      );
       activeFocusLodRef.current = focusLod;
       updateVoxelLod(focus.point, focus.zoomDist, focusLod);
     }
@@ -1762,8 +2076,17 @@ export function Map3D({
       const resolvedLod = lod ?? 1;
       const key = voxelTileKey(resolvedLod, regionX, regionY);
       if (error || !positions || !normals || !colors || !indices) {
+        if (!activeVoxelRequestKeysRef.current.has(key)) {
+          loadingVoxelsRef.current.delete(key);
+          return;
+        }
         loadingVoxelsRef.current.delete(key);
         failedVoxelsRef.current.set(key, (failedVoxelsRef.current.get(key) ?? 0) + 1);
+        return;
+      }
+
+      if (!activeVoxelRequestKeysRef.current.has(key) && !loadedVoxelsRef.current.has(key)) {
+        loadingVoxelsRef.current.delete(key);
         return;
       }
 
@@ -1899,7 +2222,7 @@ export function Map3D({
     let fpsFrameCounter = 0;
     let fpsLastTs = performance.now();
     let fpsValue = 0;
-    const LOD_CHECK_INTERVAL = 60;
+    const LOD_CHECK_INTERVAL = 8;
 
     function animate() {
       animFrameId = requestAnimationFrame(animate);
@@ -1958,6 +2281,9 @@ export function Map3D({
 
       if (pendingVoxelMeshQueueRef.current.length > 0) {
         const item = pendingVoxelMeshQueueRef.current.shift()!;
+        if (!activeVoxelRequestKeysRef.current.has(item.key) && !loadedVoxelsRef.current.has(item.key)) {
+          loadingVoxelsRef.current.delete(item.key);
+        } else {
         loadingVoxelsRef.current.delete(item.key);
         if (!loadedVoxelsRef.current.has(item.key) && voxelGroupRef.current && modeRef.current === "voxel") {
           const built = buildVoxelColumnSubMeshes(item);
@@ -1973,8 +2299,10 @@ export function Map3D({
             }
 
             const borderLines = buildVoxelBorderLines(item.regionX, item.regionY, item.lod, built.minZ, built.maxZ);
+            borderLines.visible = false;
 
             for (const sm of built.subMeshes) {
+              sm.mesh.visible = false;
               voxelGroupRef.current.add(sm.mesh);
             }
             chunkBorderGroupRef.current?.add(borderLines);
@@ -1993,11 +2321,16 @@ export function Map3D({
             });
             failedVoxelsRef.current.delete(item.key);
             debugLabelsDirtyRef.current = true;
+            checkAndUpdateLOD(camera, controls);
           }
+        }
         }
       }
 
-      if (terrainVisibilityDirtyRef.current && modeRef.current === "terrain") {
+      if (
+        terrainVisibilityDirtyRef.current
+        && shouldRenderTerrainForMode(modeRef.current, showTerrainRef.current, showVoxelTerrainRef.current)
+      ) {
         const camDist = camera.position.distanceTo(controls.target);
         updateTerrainVisibility(controls.target, camDist);
         terrainVisibilityDirtyRef.current = false;
@@ -2037,19 +2370,47 @@ export function Map3D({
         ? loadedTerrainRef.current.size
         : loadedVoxelsRef.current.size;
       const loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
-      if (modeRef.current === "terrain") {
-        for (const tile of loadedTerrainRef.current.values()) {
-          const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+      const memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
+      let terrainMemoryBytes = 0;
+      let voxelMemoryBytes = 0;
+      let queuedMemoryBytes = 0;
+
+      for (const tile of loadedTerrainRef.current.values()) {
+        const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+        const tileBytes = estimateGeometryBytes(tile.mesh.geometry) + estimateGeometryBytes(tile.borderLines.geometry);
+        if (modeRef.current === "terrain") {
           loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
         }
-      } else {
-        for (const tile of loadedVoxelsRef.current.values()) {
-          const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
-          loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
-        }
+        terrainMemoryBytes += tileBytes;
+        addMemoryToLod(memoryByLod, lod, tileBytes);
       }
 
-      const statsPayload = {
+      for (const tile of loadedVoxelsRef.current.values()) {
+        const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+        let tileBytes = tile.chunkTopHeights.byteLength + estimateGeometryBytes(tile.borderLines.geometry);
+        for (const sm of tile.subMeshes) {
+          tileBytes += estimateGeometryBytes(sm.mesh.geometry);
+        }
+        if (modeRef.current === "voxel") {
+          loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
+        }
+        voxelMemoryBytes += tileBytes;
+        addMemoryToLod(memoryByLod, lod, tileBytes);
+      }
+
+      for (const item of pendingVoxelMeshQueueRef.current) {
+        queuedMemoryBytes += item.positions.byteLength;
+        queuedMemoryBytes += item.normals.byteLength;
+        queuedMemoryBytes += item.colors.byteLength;
+        queuedMemoryBytes += item.indices.byteLength;
+        queuedMemoryBytes += item.chunkTopHeights.byteLength;
+      }
+
+      const memoryBytes = terrainMemoryBytes + voxelMemoryBytes + queuedMemoryBytes;
+      const perfWithMemory = performance as Performance & { memory?: PerformanceMemoryInfo };
+      const jsHeapBytes = perfWithMemory.memory?.usedJSHeapSize ?? null;
+
+      const statsPayload: ChunkStatsPayload = {
         loading: loadingCount,
         loaded: loadedCount,
         fps: fpsValue,
@@ -2066,6 +2427,14 @@ export function Map3D({
           failed: failedVoxelsRef.current.size,
         },
         loadedByLod,
+        memoryBytes,
+        memoryBreakdown: {
+          terrain: terrainMemoryBytes,
+          voxels: voxelMemoryBytes,
+          queued: queuedMemoryBytes,
+        },
+        memoryByLod,
+        jsHeapBytes,
       };
       const statsKey = JSON.stringify(statsPayload);
       if (lastChunkStatsRef.current !== statsKey) {
@@ -2183,6 +2552,7 @@ export function Map3D({
     initializedRef.current = true;
     surfaceIndexRef.current = worldData.surfaceIndex;
     chunkIndexRef.current = worldData.chunkIndex;
+    rebuildVoxelIndexCache(worldData.chunkIndex);
 
     const { camera, controls } = sceneRef.current;
 
@@ -2240,19 +2610,28 @@ export function Map3D({
           failed: 0,
         },
         loadedByLod: {},
+        memoryBytes: 0,
+        memoryBreakdown: {
+          terrain: 0,
+          voxels: 0,
+          queued: 0,
+        },
+        memoryByLod: {},
+        jsHeapBytes: null,
       });
     };
   }, []);
 
   useEffect(() => {
     surfaceIndexRef.current = worldData.surfaceIndex;
-    if (mode === "terrain" && sceneRef.current) {
+    if (shouldRenderTerrainForMode(mode, showTerrain, showVoxelTerrain) && sceneRef.current) {
       checkAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
     }
-  }, [worldData.surfaceIndex, mode]);
+  }, [worldData.surfaceIndex, mode, showTerrain, showVoxelTerrain]);
 
   useEffect(() => {
     chunkIndexRef.current = worldData.chunkIndex;
+    rebuildVoxelIndexCache(worldData.chunkIndex);
     if (mode === "voxel") {
       missingVoxelsRef.current.clear();
       failedVoxelsRef.current.clear();
@@ -2261,6 +2640,11 @@ export function Map3D({
       }
     }
   }, [worldData.chunkIndex, mode]);
+
+  useEffect(() => {
+    if (mode !== "voxel" || !sceneRef.current) return;
+    checkAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
+  }, [mode, voxelLod1MaxDist]);
 
   useEffect(() => {
     updatePlayerMarkers();
@@ -2279,8 +2663,10 @@ export function Map3D({
   }, [showChunkBorders]);
 
   useEffect(() => {
+    const renderTerrain = shouldRenderTerrainForMode(mode, showTerrain, showVoxelTerrain);
     if (terrainGroupRef.current) {
-      terrainGroupRef.current.visible = mode === "terrain" && showTerrain;
+      terrainGroupRef.current.visible = renderTerrain;
+      terrainGroupRef.current.position.z = mode === "voxel" ? TERRAIN_UNDERLAY_OFFSET_Z : 0;
     }
     if (voxelGroupRef.current) {
       voxelGroupRef.current.visible = mode === "voxel";
@@ -2288,7 +2674,7 @@ export function Map3D({
     terrainVisibilityDirtyRef.current = true;
     debugLabelsDirtyRef.current = true;
     biomeLabelsDirtyRef.current = true;
-  }, [mode, showTerrain]);
+  }, [mode, showTerrain, showVoxelTerrain]);
 
   useEffect(() => {
     const group = debugLabelGroupRef.current;
@@ -2322,14 +2708,14 @@ export function Map3D({
       clearVoxelTiles();
       debugLabelsDirtyRef.current = true;
       biomeLabelsDirtyRef.current = true;
-    } else {
+    } else if (!showVoxelTerrain) {
       clearTerrainTiles();
       debugLabelsDirtyRef.current = true;
       biomeLabelsDirtyRef.current = true;
     }
 
     checkAndUpdateLOD(scene.camera, scene.controls);
-  }, [mode]);
+  }, [mode, showVoxelTerrain]);
 
   useEffect(() => {
     const unsubTile = subscribe("tile-updated", (event) => {
