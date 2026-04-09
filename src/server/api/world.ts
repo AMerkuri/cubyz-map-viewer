@@ -27,7 +27,7 @@ export interface ChunkIndexEntry {
 
 export function createWorldRouter(
   savePath: string,
-  worldMeta: WorldMetadata
+  worldMeta: WorldMetadata,
 ): Router {
   const router = Router();
 

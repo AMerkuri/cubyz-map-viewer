@@ -39,13 +39,21 @@ interface PendingVoxelMeshItem {
   lod: number;
   regionX: number;
   regionY: number;
+  version: number;
+  quadrantMeshes: WorkerQuadrantMesh[];
+  chunkCoverage: number;
+  chunkTopHeights: Float32Array;
+  voxelSize: number;
+  minZ: number;
+  maxZ: number;
+}
+
+interface WorkerQuadrantMesh {
+  quadrantIndex: number;
   positions: Float32Array;
   normals: Float32Array;
   colors: Float32Array;
   indices: Uint32Array;
-  chunkCoverage: number;
-  chunkTopHeights: Float32Array;
-  voxelSize: number;
 }
 
 interface PendingVoxelFetchRequest {
@@ -55,19 +63,20 @@ interface PendingVoxelFetchRequest {
   regionY: number;
   priority: number;
   generation: number;
+  version: number;
 }
 
 interface WorkerOut {
   lod?: number;
   regionX: number;
   regionY: number;
-  positions?: Float32Array;
-  normals?: Float32Array;
-  colors?: Float32Array;
-  indices?: Uint32Array;
+  version?: number;
+  quadrantMeshes?: WorkerQuadrantMesh[];
   chunkCoverage?: number;
   chunkTopHeights?: Float32Array;
   voxelSize?: number;
+  minZ?: number;
+  maxZ?: number;
   error?: string;
 }
 
@@ -90,9 +99,7 @@ interface LoadedVoxelTile {
   regionY: number;
   voxelSize: number;
   subMeshes: {
-    colIndex: number;
-    worldX: number;
-    worldY: number;
+    quadrantIndex: number;
     mesh: THREE.Mesh;
   }[];
   minZ: number;
@@ -123,10 +130,22 @@ interface ChunkStatsPayload {
   memoryBreakdown: {
     terrain: number;
     voxels: number;
+    cached: number;
     queued: number;
   };
   memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
   jsHeapBytes: number | null;
+  warmCacheCount: number;
+}
+
+interface WarmCachedVoxelTile {
+  tile: LoadedVoxelTile;
+  bytes: number;
+}
+
+interface VoxelRefreshState {
+  version: number;
+  stale: boolean;
 }
 
 interface PerformanceMemoryInfo {
@@ -196,6 +215,9 @@ const VOXEL_FOCUS_SMOOTH_ALPHA = 0.6;
 const VOXEL_LOD_HYSTERESIS_RATIO = 0.12;
 const VOXEL_DETAIL_REQUEST_DEBOUNCE_MS = 180;
 const VOXEL_UNLOAD_GRACE_MS = 750;
+const VOXEL_MESH_BUILD_BUDGET_MS = 5;
+const MAX_VOXEL_MESHES_PER_FRAME = 8;
+const WARM_VOXEL_CACHE_MAX_BYTES = 512 * 1024 * 1024;
 const INITIAL_CAMERA_ZOOM = 1500;
 const DEFAULT_START_OFFSET_Y = 400;
 const DEFAULT_START_OFFSET_Z = 300;
@@ -380,6 +402,14 @@ function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
     total += geometry.index.array.byteLength;
   }
 
+  return total;
+}
+
+function estimateLoadedVoxelTileBytes(tile: LoadedVoxelTile): number {
+  let total = tile.chunkTopHeights.byteLength + estimateGeometryBytes(tile.borderLines.geometry);
+  for (const sm of tile.subMeshes) {
+    total += estimateGeometryBytes(sm.mesh.geometry);
+  }
   return total;
 }
 
@@ -573,122 +603,37 @@ function buildVoxelBorderLines(regionX: number, regionY: number, lod: number, mi
   return new THREE.LineSegments(geom, mat);
 }
 
-function buildVoxelColumnSubMeshes(item: PendingVoxelMeshItem): {
+function buildVoxelQuadrantSubMeshes(item: PendingVoxelMeshItem): {
   subMeshes: {
-    colIndex: number;
-    worldX: number;
-    worldY: number;
+    quadrantIndex: number;
     mesh: THREE.Mesh;
   }[];
   minZ: number;
   maxZ: number;
 } {
-  const { positions, normals, colors, indices, lod, regionX, regionY } = item;
-  const chunkSize = chunkWorldSize(lod);
-
-  // The server greedy mesher preserves 32x32 internal chunk-column boundaries,
-  // so assigning triangles by centroid keeps each submesh aligned to one column.
-
-  let minZ = Number.POSITIVE_INFINITY;
-  let maxZ = Number.NEGATIVE_INFINITY;
-  for (let i = 2; i < positions.length; i += 3) {
-    const z = positions[i];
-    if (z < minZ) minZ = z;
-    if (z > maxZ) maxZ = z;
-  }
-  if (!Number.isFinite(minZ)) minZ = 0;
-  if (!Number.isFinite(maxZ)) maxZ = 0;
-
-  const trisByCol: number[][] = Array.from({ length: 16 }, () => []);
-
-  for (let i = 0; i < indices.length; i += 3) {
-    const ia = indices[i];
-    const ib = indices[i + 1];
-    const ic = indices[i + 2];
-
-    const ax = positions[ia * 3];
-    const ay = positions[ia * 3 + 1];
-    const bx = positions[ib * 3];
-    const by = positions[ib * 3 + 1];
-    const cx = positions[ic * 3];
-    const cy = positions[ic * 3 + 1];
-
-    const centerX = (ax + bx + cx) / 3;
-    const centerYWorld = (-(ay + by + cy)) / 3;
-
-    const localX = centerX - regionX;
-    const localY = centerYWorld - regionY;
-
-    const colX = Math.floor(localX / chunkSize);
-    const colY = Math.floor(localY / chunkSize);
-    if (colX < 0 || colX > 3 || colY < 0 || colY > 3) continue;
-
-    const colIndex = colX * 4 + colY;
-    trisByCol[colIndex].push(ia, ib, ic);
-  }
-
   const subMeshes: {
-    colIndex: number;
-    worldX: number;
-    worldY: number;
+    quadrantIndex: number;
     mesh: THREE.Mesh;
   }[] = [];
 
-  for (let colIndex = 0; colIndex < 16; colIndex++) {
-    const tri = trisByCol[colIndex];
-    if (tri.length === 0) continue;
-
-    const indexMap = new Map<number, number>();
-    const localPos: number[] = [];
-    const localNorm: number[] = [];
-    const localCol: number[] = [];
-    const localIdx: number[] = [];
-
-    for (let j = 0; j < tri.length; j++) {
-      const src = tri[j];
-      let dst = indexMap.get(src);
-      if (dst === undefined) {
-        dst = indexMap.size;
-        indexMap.set(src, dst);
-        localPos.push(
-          positions[src * 3],
-          positions[src * 3 + 1],
-          positions[src * 3 + 2],
-        );
-        localNorm.push(
-          normals[src * 3],
-          normals[src * 3 + 1],
-          normals[src * 3 + 2],
-        );
-        localCol.push(
-          colors[src * 3],
-          colors[src * 3 + 1],
-          colors[src * 3 + 2],
-        );
-      }
-      localIdx.push(dst);
-    }
-
+  for (const quadrant of item.quadrantMeshes) {
+    if (quadrant.indices.length === 0) continue;
     const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(localPos), 3));
-    geom.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(localNorm), 3));
-    geom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(localCol), 3));
-    geom.setIndex(new THREE.BufferAttribute(new Uint32Array(localIdx), 1));
+    geom.setAttribute("position", new THREE.BufferAttribute(quadrant.positions, 3));
+    geom.setAttribute("normal", new THREE.BufferAttribute(quadrant.normals, 3));
+    geom.setAttribute("color", new THREE.BufferAttribute(quadrant.colors, 3));
+    geom.setIndex(new THREE.BufferAttribute(quadrant.indices, 1));
     geom.computeBoundingBox();
     geom.computeBoundingSphere();
 
     const mesh = new THREE.Mesh(geom, voxelMaterial);
-    const colX = Math.floor(colIndex / 4);
-    const colY = colIndex % 4;
     subMeshes.push({
-      colIndex,
-      worldX: regionX + colX * chunkSize,
-      worldY: regionY + colY * chunkSize,
+      quadrantIndex: quadrant.quadrantIndex,
       mesh,
     });
   }
 
-  return { subMeshes, minZ, maxZ };
+  return { subMeshes, minZ: item.minZ, maxZ: item.maxZ };
 }
 
 function parseVoxelKey(key: string): { lod: number; regionX: number; regionY: number } | null {
@@ -703,12 +648,6 @@ function parseVoxelKey(key: string): { lod: number; regionX: number; regionY: nu
 
 function voxelQuadrantBit(quadrant: number): number {
   return 1 << quadrant;
-}
-
-function voxelSubMeshQuadrant(colIndex: number): number {
-  const colX = Math.floor(colIndex / 4);
-  const colY = colIndex % 4;
-  return (colX >= 2 ? 1 : 0) + (colY >= 2 ? 2 : 0);
 }
 
 export function Map3D({
@@ -763,12 +702,15 @@ export function Map3D({
   const loadingTerrainRef = useRef<Set<string>>(new Set());
 
   const loadedVoxelsRef = useRef<Map<string, LoadedVoxelTile>>(new Map());
+  const warmCachedVoxelsRef = useRef<Map<string, WarmCachedVoxelTile>>(new Map());
+  const warmCachedVoxelBytesRef = useRef(0);
   const loadingVoxelsRef = useRef<Set<string>>(new Set());
   const missingVoxelsRef = useRef<Set<string>>(new Set());
   const failedVoxelsRef = useRef<Map<string, number>>(new Map());
   const pendingVoxelFetchQueueRef = useRef<PendingVoxelFetchRequest[]>([]);
   const activeVoxelFetchCountRef = useRef(0);
   const voxelFetchControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const voxelRefreshStatesRef = useRef<Map<string, VoxelRefreshState>>(new Map());
   const activeVoxelRequestKeysRef = useRef<Set<string>>(new Set());
   const activeVoxelRequestGenerationRef = useRef(0);
   const pendingVoxelDetailRequestsRef = useRef<Map<string, PendingVoxelFetchRequest>>(new Map());
@@ -945,24 +887,94 @@ export function Map3D({
     loadingTerrainRef.current.clear();
   }
 
-  function unloadVoxelTile(key: string) {
-    const vt = loadedVoxelsRef.current.get(key);
-    if (!vt) return;
-    for (const sm of vt.subMeshes) {
+  function detachVoxelTileFromScene(tile: LoadedVoxelTile) {
+    for (const sm of tile.subMeshes) {
       voxelGroupRef.current?.remove(sm.mesh);
+      sm.mesh.visible = false;
+    }
+    chunkBorderGroupRef.current?.remove(tile.borderLines);
+    tile.borderLines.visible = false;
+  }
+
+  function attachVoxelTileToScene(tile: LoadedVoxelTile) {
+    for (const sm of tile.subMeshes) {
+      sm.mesh.visible = false;
+      voxelGroupRef.current?.add(sm.mesh);
+    }
+    tile.borderLines.visible = false;
+    chunkBorderGroupRef.current?.add(tile.borderLines);
+  }
+
+  function disposeVoxelTileResources(tile: LoadedVoxelTile) {
+    detachVoxelTileFromScene(tile);
+    for (const sm of tile.subMeshes) {
       sm.mesh.geometry.dispose();
     }
-    chunkBorderGroupRef.current?.remove(vt.borderLines);
-    vt.borderLines.geometry.dispose();
-    (vt.borderLines.material as THREE.Material).dispose();
+    tile.borderLines.geometry.dispose();
+    (tile.borderLines.material as THREE.Material).dispose();
+  }
+
+  function evictWarmCachedVoxelTile(key: string) {
+    const cached = warmCachedVoxelsRef.current.get(key);
+    if (!cached) return;
+    warmCachedVoxelsRef.current.delete(key);
+    warmCachedVoxelBytesRef.current = Math.max(0, warmCachedVoxelBytesRef.current - cached.bytes);
+    disposeVoxelTileResources(cached.tile);
+  }
+
+  function trimWarmVoxelCache() {
+    while (warmCachedVoxelBytesRef.current > WARM_VOXEL_CACHE_MAX_BYTES) {
+      const oldest = warmCachedVoxelsRef.current.keys().next().value;
+      if (!oldest) break;
+      evictWarmCachedVoxelTile(oldest);
+    }
+  }
+
+  function moveVoxelTileToWarmCache(tile: LoadedVoxelTile) {
+    const bytes = estimateLoadedVoxelTileBytes(tile);
+    detachVoxelTileFromScene(tile);
+
+    const existing = warmCachedVoxelsRef.current.get(tile.key);
+    if (existing) {
+      warmCachedVoxelBytesRef.current = Math.max(0, warmCachedVoxelBytesRef.current - existing.bytes);
+      disposeVoxelTileResources(existing.tile);
+      warmCachedVoxelsRef.current.delete(tile.key);
+    }
+
+    warmCachedVoxelsRef.current.set(tile.key, { tile, bytes });
+    warmCachedVoxelBytesRef.current += bytes;
+    trimWarmVoxelCache();
+  }
+
+  function restoreVoxelTileFromWarmCache(key: string): LoadedVoxelTile | null {
+    if (isVoxelTileStale(key)) return null;
+    const cached = warmCachedVoxelsRef.current.get(key);
+    if (!cached) return null;
+
+    warmCachedVoxelsRef.current.delete(key);
+    warmCachedVoxelBytesRef.current = Math.max(0, warmCachedVoxelBytesRef.current - cached.bytes);
+    attachVoxelTileToScene(cached.tile);
+    return cached.tile;
+  }
+
+  function unloadVoxelTile(key: string, preserveWarmCache = true) {
+    const vt = loadedVoxelsRef.current.get(key);
+    if (!vt) return;
     loadedVoxelsRef.current.delete(key);
     loadingVoxelsRef.current.delete(key);
     voxelUnloadGraceUntilRef.current.delete(key);
+
+    if (preserveWarmCache) {
+      moveVoxelTileToWarmCache(vt);
+      return;
+    }
+
+    disposeVoxelTileResources(vt);
   }
 
-  function clearVoxelTiles() {
+  function clearVoxelTiles(preserveWarmCache = false) {
     for (const key of loadedVoxelsRef.current.keys()) {
-      unloadVoxelTile(key);
+      unloadVoxelTile(key, preserveWarmCache);
     }
     for (const controller of voxelFetchControllersRef.current.values()) {
       controller.abort();
@@ -973,6 +985,7 @@ export function Map3D({
     missingVoxelsRef.current.clear();
     failedVoxelsRef.current.clear();
     activeVoxelRequestKeysRef.current.clear();
+    voxelRefreshStatesRef.current.clear();
     pendingVoxelDetailRequestsRef.current.clear();
     committedVoxelDetailRequestsRef.current.clear();
     voxelUnloadGraceUntilRef.current.clear();
@@ -981,6 +994,14 @@ export function Map3D({
     pendingVoxelFetchQueueRef.current = [];
     pendingVoxelMeshQueueRef.current = [];
     activeVoxelFetchCountRef.current = 0;
+
+    if (!preserveWarmCache) {
+      for (const key of [...warmCachedVoxelsRef.current.keys()]) {
+        evictWarmCachedVoxelTile(key);
+      }
+      warmCachedVoxelsRef.current.clear();
+      warmCachedVoxelBytesRef.current = 0;
+    }
   }
 
   async function fetchTerrain(lod: number, tileX: number, tileY: number): Promise<TerrainMeshData | null> {
@@ -1136,15 +1157,75 @@ export function Map3D({
     pendingVoxelFetchQueueRef.current.sort(compareVoxelFetchRequests);
   }
 
+  function getVoxelRefreshVersion(key: string): number {
+    return voxelRefreshStatesRef.current.get(key)?.version ?? 0;
+  }
+
+  function markVoxelTileStale(key: string): number {
+    const nextVersion = getVoxelRefreshVersion(key) + 1;
+    voxelRefreshStatesRef.current.set(key, { version: nextVersion, stale: true });
+    return nextVersion;
+  }
+
+  function markVoxelTileFresh(key: string, version: number) {
+    const current = voxelRefreshStatesRef.current.get(key);
+    if (!current || version >= current.version) {
+      voxelRefreshStatesRef.current.set(key, { version, stale: false });
+    }
+  }
+
+  function isVoxelTileStale(key: string): boolean {
+    return voxelRefreshStatesRef.current.get(key)?.stale === true;
+  }
+
   function finishVoxelFetch(key: string) {
     voxelFetchControllersRef.current.delete(key);
     activeVoxelFetchCountRef.current = Math.max(0, activeVoxelFetchCountRef.current - 1);
     drainVoxelFetchQueue();
   }
 
+  function requestDirectVoxelRefresh(lod: number, regionX: number, regionY: number, version: number) {
+    const key = voxelTileKey(lod, regionX, regionY);
+    if (!workerRef.current) return;
+
+    const retries = failedVoxelsRef.current.get(key);
+    if (retries !== undefined && retries >= MAX_VOXEL_RETRIES) return;
+
+    voxelFetchControllersRef.current.get(key)?.abort();
+    if (voxelFetchControllersRef.current.has(key)) return;
+
+    activeVoxelFetchCountRef.current++;
+    loadingVoxelsRef.current.add(key);
+    const controller = new AbortController();
+    voxelFetchControllersRef.current.set(key, controller);
+
+    void fetchVoxelRegion(
+      {
+        key,
+        lod,
+        regionX,
+        regionY,
+        priority: Number.NEGATIVE_INFINITY,
+        generation: activeVoxelRequestGenerationRef.current,
+        version,
+      },
+      controller,
+    );
+  }
+
   function requestVoxelRegion(request: PendingVoxelFetchRequest) {
     const { key } = request;
-    if (loadedVoxelsRef.current.has(key)) return;
+    if (loadedVoxelsRef.current.has(key) && !isVoxelTileStale(key)) return;
+
+    const restored = restoreVoxelTileFromWarmCache(key);
+    if (restored) {
+      loadedVoxelsRef.current.set(key, restored);
+      voxelUnloadGraceUntilRef.current.set(key, performance.now() + VOXEL_UNLOAD_GRACE_MS);
+      markVoxelTileFresh(key, request.version);
+      debugLabelsDirtyRef.current = true;
+      return;
+    }
+
     if (missingVoxelsRef.current.has(key)) return;
 
     const retries = failedVoxelsRef.current.get(key);
@@ -1175,7 +1256,7 @@ export function Map3D({
         loadingVoxelsRef.current.delete(next.key);
         continue;
       }
-      if (loadedVoxelsRef.current.has(next.key) || missingVoxelsRef.current.has(next.key)) {
+      if ((loadedVoxelsRef.current.has(next.key) && !isVoxelTileStale(next.key)) || missingVoxelsRef.current.has(next.key)) {
         loadingVoxelsRef.current.delete(next.key);
         continue;
       }
@@ -1204,17 +1285,21 @@ export function Map3D({
 
     pendingVoxelFetchQueueRef.current = pendingVoxelFetchQueueRef.current.filter((item) => {
       const updated = requests.get(item.key);
-      if (!updated || loadedVoxelsRef.current.has(item.key)) {
+      if (!updated || (loadedVoxelsRef.current.has(item.key) && !isVoxelTileStale(item.key))) {
         loadingVoxelsRef.current.delete(item.key);
         return false;
       }
       item.priority = updated.priority;
       item.generation = updated.generation;
+      item.version = updated.version;
       return true;
     });
     pendingVoxelFetchQueueRef.current.sort(compareVoxelFetchRequests);
 
     pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter((item) => {
+      if (item.version < getVoxelRefreshVersion(item.key)) {
+        return false;
+      }
       if (activeVoxelRequestKeysRef.current.has(item.key) || loadedVoxelsRef.current.has(item.key)) {
         return true;
       }
@@ -1236,11 +1321,11 @@ export function Map3D({
   }
 
   async function fetchVoxelRegion(request: PendingVoxelFetchRequest, controller: AbortController) {
-    const { key, lod, regionX, regionY } = request;
+    const { key, lod, regionX, regionY, version } = request;
 
     try {
       const res = await fetch(`/api/voxels/${lod}/${regionX}/${regionY}`, { signal: controller.signal });
-      if (!activeVoxelRequestKeysRef.current.has(key) && !loadedVoxelsRef.current.has(key)) {
+      if (!activeVoxelRequestKeysRef.current.has(key) && !(loadedVoxelsRef.current.has(key) && isVoxelTileStale(key))) {
         loadingVoxelsRef.current.delete(key);
         return;
       }
@@ -1256,12 +1341,12 @@ export function Map3D({
       }
 
       const buffer = await res.arrayBuffer();
-      if (!workerRef.current || (!activeVoxelRequestKeysRef.current.has(key) && !loadedVoxelsRef.current.has(key))) {
+      if (!workerRef.current || (!activeVoxelRequestKeysRef.current.has(key) && !(loadedVoxelsRef.current.has(key) && isVoxelTileStale(key)))) {
         loadingVoxelsRef.current.delete(key);
         return;
       }
 
-      workerRef.current.postMessage({ buffer, lod, regionX, regionY }, [buffer]);
+      workerRef.current.postMessage({ buffer, lod, regionX, regionY, version }, [buffer]);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
         loadingVoxelsRef.current.delete(key);
@@ -1337,6 +1422,7 @@ export function Map3D({
         regionY,
         priority: LOD_LEVELS.indexOf(lod) * 100_000 + Math.round(effectiveDist),
         generation: requestGeneration,
+        version: getVoxelRefreshVersion(key),
       };
       const existing = requestMap.get(key);
       if (!existing || compareVoxelFetchRequests(request, existing) < 0) {
@@ -1358,6 +1444,7 @@ export function Map3D({
 
       const desiredLod = getLodForDistanceWithHysteresis(effectiveDist, focusLod, voxelThresholds);
       const selfLoaded = loadedVoxelsRef.current.has(key);
+      const selfStale = isVoxelTileStale(key);
       let hasSelectedCoverage = false;
       let needsSelfFallback = false;
 
@@ -1388,7 +1475,7 @@ export function Map3D({
       }
 
       if (needsSelfFallback) {
-        if (!selfLoaded) {
+        if (!selfLoaded || selfStale) {
           noteVoxelRequest(hasLoadedFallback ? detailVoxelRequests : coverageVoxelRequests, entry.lod, entry.regionX, entry.regionY, effectiveDist);
         }
       }
@@ -1431,7 +1518,7 @@ export function Map3D({
       }
 
       for (const sm of tile.subMeshes) {
-        const smVisible = (quadrantMask & voxelQuadrantBit(voxelSubMeshQuadrant(sm.colIndex))) !== 0;
+        const smVisible = (quadrantMask & voxelQuadrantBit(sm.quadrantIndex)) !== 0;
         if (sm.mesh.visible !== smVisible) {
           sm.mesh.visible = smVisible;
           changed = true;
@@ -1802,15 +1889,23 @@ export function Map3D({
 
   function handleRegionUpdate(lod: number, regionX: number, regionY: number) {
     const key = voxelTileKey(lod, regionX, regionY);
+    const version = markVoxelTileStale(key);
     missingVoxelsRef.current.delete(key);
     failedVoxelsRef.current.delete(key);
-    if (loadedVoxelsRef.current.has(key)) {
-      unloadVoxelTile(key);
-      if (modeRef.current === "voxel" && sceneRef.current) {
-        checkAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
-      }
-      debugLabelsDirtyRef.current = true;
+    evictWarmCachedVoxelTile(key);
+    voxelFetchControllersRef.current.get(key)?.abort();
+    pendingVoxelFetchQueueRef.current = pendingVoxelFetchQueueRef.current.filter((item) => item.key !== key);
+    pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter(
+      (item) => item.key !== key || item.version >= getVoxelRefreshVersion(key)
+    );
+    loadingVoxelsRef.current.delete(key);
+    if (modeRef.current === "voxel" && sceneRef.current) {
+      checkAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
     }
+    if (loadedVoxelsRef.current.has(key) || availableVoxelKeysRef.current.has(key)) {
+      requestDirectVoxelRefresh(lod, regionX, regionY, version);
+    }
+    debugLabelsDirtyRef.current = true;
   }
 
   function resolveVoxelLodFocus(camera: THREE.PerspectiveCamera, controls: OrbitControls): {
@@ -2063,19 +2158,24 @@ export function Map3D({
         lod,
         regionX,
         regionY,
-        positions,
-        normals,
-        colors,
-        indices,
+        version,
+        quadrantMeshes,
         chunkCoverage,
         chunkTopHeights,
         voxelSize,
+        minZ,
+        maxZ,
         error,
       } = e.data as WorkerOut;
 
       const resolvedLod = lod ?? 1;
       const key = voxelTileKey(resolvedLod, regionX, regionY);
-      if (error || !positions || !normals || !colors || !indices) {
+      const resolvedVersion = version ?? 0;
+      if (error || !quadrantMeshes) {
+        if (resolvedVersion < getVoxelRefreshVersion(key)) {
+          loadingVoxelsRef.current.delete(key);
+          return;
+        }
         if (!activeVoxelRequestKeysRef.current.has(key)) {
           loadingVoxelsRef.current.delete(key);
           return;
@@ -2085,10 +2185,19 @@ export function Map3D({
         return;
       }
 
-      if (!activeVoxelRequestKeysRef.current.has(key) && !loadedVoxelsRef.current.has(key)) {
+      if (!activeVoxelRequestKeysRef.current.has(key) && !(loadedVoxelsRef.current.has(key) && isVoxelTileStale(key))) {
         loadingVoxelsRef.current.delete(key);
         return;
       }
+
+      if (resolvedVersion < getVoxelRefreshVersion(key)) {
+        loadingVoxelsRef.current.delete(key);
+        return;
+      }
+
+      pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter(
+        (item) => item.key !== key || item.version >= resolvedVersion
+      );
 
       const topHeights = chunkTopHeights && chunkTopHeights.length === 16
         ? chunkTopHeights
@@ -2099,13 +2208,13 @@ export function Map3D({
         lod: resolvedLod,
         regionX,
         regionY,
-        positions,
-        normals,
-        colors,
-        indices,
+        quadrantMeshes,
         chunkCoverage: chunkCoverage ?? 0,
         chunkTopHeights: topHeights,
         voxelSize: voxelSize ?? resolvedLod,
+        minZ: Number.isFinite(minZ) ? minZ : 0,
+        maxZ: Number.isFinite(maxZ) ? maxZ : 0,
+        version: resolvedVersion,
       });
     };
 
@@ -2279,52 +2388,78 @@ export function Map3D({
       controls.update();
       updateMarkerScales(camera, controls);
 
+      let builtVoxelTile = false;
       if (pendingVoxelMeshQueueRef.current.length > 0) {
-        const item = pendingVoxelMeshQueueRef.current.shift()!;
-        if (!activeVoxelRequestKeysRef.current.has(item.key) && !loadedVoxelsRef.current.has(item.key)) {
+        const voxelMeshBuildStart = performance.now();
+        let processedVoxelMeshes = 0;
+        while (
+          pendingVoxelMeshQueueRef.current.length > 0
+          && processedVoxelMeshes < MAX_VOXEL_MESHES_PER_FRAME
+          && performance.now() - voxelMeshBuildStart < VOXEL_MESH_BUILD_BUDGET_MS
+        ) {
+          const item = pendingVoxelMeshQueueRef.current.shift()!;
+          processedVoxelMeshes++;
+          if (item.version < getVoxelRefreshVersion(item.key)) {
+            loadingVoxelsRef.current.delete(item.key);
+            continue;
+          }
+          if (!activeVoxelRequestKeysRef.current.has(item.key) && !(loadedVoxelsRef.current.has(item.key) && isVoxelTileStale(item.key))) {
+            loadingVoxelsRef.current.delete(item.key);
+            continue;
+          }
+
+          const existingTile = loadedVoxelsRef.current.get(item.key);
+          const canReplaceExisting = existingTile ? isVoxelTileStale(item.key) : false;
           loadingVoxelsRef.current.delete(item.key);
-        } else {
-        loadingVoxelsRef.current.delete(item.key);
-        if (!loadedVoxelsRef.current.has(item.key) && voxelGroupRef.current && modeRef.current === "voxel") {
-          const built = buildVoxelColumnSubMeshes(item);
-          if (built.subMeshes.length > 0) {
-            for (const sm of built.subMeshes) {
-              preUploadScene.add(sm.mesh);
-            }
-            renderer.setRenderTarget(preUploadTarget);
-            renderer.render(preUploadScene, preUploadCamera);
-            renderer.setRenderTarget(null);
-            for (const sm of built.subMeshes) {
-              preUploadScene.remove(sm.mesh);
-            }
+          if ((!existingTile || canReplaceExisting) && voxelGroupRef.current && modeRef.current === "voxel") {
+            const built = buildVoxelQuadrantSubMeshes(item);
+            if (built.subMeshes.length > 0) {
+              for (const sm of built.subMeshes) {
+                preUploadScene.add(sm.mesh);
+              }
+              renderer.setRenderTarget(preUploadTarget);
+              renderer.render(preUploadScene, preUploadCamera);
+              renderer.setRenderTarget(null);
+              for (const sm of built.subMeshes) {
+                preUploadScene.remove(sm.mesh);
+              }
 
-            const borderLines = buildVoxelBorderLines(item.regionX, item.regionY, item.lod, built.minZ, built.maxZ);
-            borderLines.visible = false;
+              const borderLines = buildVoxelBorderLines(item.regionX, item.regionY, item.lod, built.minZ, built.maxZ);
+              borderLines.visible = false;
 
-            for (const sm of built.subMeshes) {
-              sm.mesh.visible = false;
-              voxelGroupRef.current.add(sm.mesh);
+              for (const sm of built.subMeshes) {
+                sm.mesh.visible = false;
+                voxelGroupRef.current.add(sm.mesh);
+              }
+              chunkBorderGroupRef.current?.add(borderLines);
+              const nextTile: LoadedVoxelTile = {
+                key: item.key,
+                lod: item.lod,
+                regionX: item.regionX,
+                regionY: item.regionY,
+                voxelSize: item.voxelSize,
+                subMeshes: built.subMeshes,
+                minZ: built.minZ,
+                maxZ: built.maxZ,
+                chunkCoverage: item.chunkCoverage,
+                chunkTopHeights: item.chunkTopHeights,
+                borderLines,
+              };
+              loadedVoxelsRef.current.set(item.key, nextTile);
+              if (existingTile && canReplaceExisting) {
+                disposeVoxelTileResources(existingTile);
+              }
+              markVoxelTileFresh(item.key, item.version);
+              failedVoxelsRef.current.delete(item.key);
+              debugLabelsDirtyRef.current = true;
+              builtVoxelTile = true;
             }
-            chunkBorderGroupRef.current?.add(borderLines);
-            loadedVoxelsRef.current.set(item.key, {
-              key: item.key,
-              lod: item.lod,
-              regionX: item.regionX,
-              regionY: item.regionY,
-              voxelSize: item.voxelSize,
-              subMeshes: built.subMeshes,
-              minZ: built.minZ,
-              maxZ: built.maxZ,
-              chunkCoverage: item.chunkCoverage,
-              chunkTopHeights: item.chunkTopHeights,
-              borderLines,
-            });
-            failedVoxelsRef.current.delete(item.key);
-            debugLabelsDirtyRef.current = true;
-            checkAndUpdateLOD(camera, controls);
           }
         }
-        }
+      }
+
+      if (builtVoxelTile) {
+        checkAndUpdateLOD(camera, controls);
       }
 
       if (
@@ -2373,6 +2508,7 @@ export function Map3D({
       const memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
       let terrainMemoryBytes = 0;
       let voxelMemoryBytes = 0;
+      let cachedVoxelMemoryBytes = 0;
       let queuedMemoryBytes = 0;
 
       for (const tile of loadedTerrainRef.current.values()) {
@@ -2387,10 +2523,7 @@ export function Map3D({
 
       for (const tile of loadedVoxelsRef.current.values()) {
         const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
-        let tileBytes = tile.chunkTopHeights.byteLength + estimateGeometryBytes(tile.borderLines.geometry);
-        for (const sm of tile.subMeshes) {
-          tileBytes += estimateGeometryBytes(sm.mesh.geometry);
-        }
+        const tileBytes = estimateLoadedVoxelTileBytes(tile);
         if (modeRef.current === "voxel") {
           loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
         }
@@ -2398,15 +2531,23 @@ export function Map3D({
         addMemoryToLod(memoryByLod, lod, tileBytes);
       }
 
+      for (const cached of warmCachedVoxelsRef.current.values()) {
+        const lod = cached.tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+        cachedVoxelMemoryBytes += cached.bytes;
+        addMemoryToLod(memoryByLod, lod, cached.bytes);
+      }
+
       for (const item of pendingVoxelMeshQueueRef.current) {
-        queuedMemoryBytes += item.positions.byteLength;
-        queuedMemoryBytes += item.normals.byteLength;
-        queuedMemoryBytes += item.colors.byteLength;
-        queuedMemoryBytes += item.indices.byteLength;
+        for (const quadrant of item.quadrantMeshes) {
+          queuedMemoryBytes += quadrant.positions.byteLength;
+          queuedMemoryBytes += quadrant.normals.byteLength;
+          queuedMemoryBytes += quadrant.colors.byteLength;
+          queuedMemoryBytes += quadrant.indices.byteLength;
+        }
         queuedMemoryBytes += item.chunkTopHeights.byteLength;
       }
 
-      const memoryBytes = terrainMemoryBytes + voxelMemoryBytes + queuedMemoryBytes;
+      const memoryBytes = terrainMemoryBytes + voxelMemoryBytes + cachedVoxelMemoryBytes + queuedMemoryBytes;
       const perfWithMemory = performance as Performance & { memory?: PerformanceMemoryInfo };
       const jsHeapBytes = perfWithMemory.memory?.usedJSHeapSize ?? null;
 
@@ -2431,10 +2572,12 @@ export function Map3D({
         memoryBreakdown: {
           terrain: terrainMemoryBytes,
           voxels: voxelMemoryBytes,
+          cached: cachedVoxelMemoryBytes,
           queued: queuedMemoryBytes,
         },
         memoryByLod,
         jsHeapBytes,
+        warmCacheCount: warmCachedVoxelsRef.current.size,
       };
       const statsKey = JSON.stringify(statsPayload);
       if (lastChunkStatsRef.current !== statsKey) {
@@ -2614,10 +2757,12 @@ export function Map3D({
         memoryBreakdown: {
           terrain: 0,
           voxels: 0,
+          cached: 0,
           queued: 0,
         },
         memoryByLod: {},
         jsHeapBytes: null,
+        warmCacheCount: 0,
       });
     };
   }, []);
@@ -2705,7 +2850,7 @@ export function Map3D({
     if (!scene) return;
 
     if (mode === "terrain") {
-      clearVoxelTiles();
+      clearVoxelTiles(true);
       debugLabelsDirtyRef.current = true;
       biomeLabelsDirtyRef.current = true;
     } else if (!showVoxelTerrain) {
@@ -2718,22 +2863,6 @@ export function Map3D({
   }, [mode, showVoxelTerrain]);
 
   useEffect(() => {
-    const unsubTile = subscribe("tile-updated", (event) => {
-      if (!event.data) return;
-      const { lod, tileX, tileY } = event.data as { lod: number; tileX: number; tileY: number };
-      handleTileUpdate(lod, tileX, tileY);
-    });
-
-    const unsubRegion = subscribe("region-updated", (event) => {
-      if (!event.data) return;
-      const {
-        lod,
-        regionX,
-        regionY,
-      } = event.data as { lod?: number; regionX: number; regionY: number };
-      handleRegionUpdate(lod ?? 1, regionX, regionY);
-    });
-
     const unsubBatch = subscribe("terrain-updates-batch", (event) => {
       if (event.type !== "terrain-updates-batch") return;
       const batch = event as TerrainUpdatesBatchEvent;
@@ -2746,8 +2875,6 @@ export function Map3D({
     });
 
     return () => {
-      unsubTile();
-      unsubRegion();
       unsubBatch();
     };
   }, [subscribe]);

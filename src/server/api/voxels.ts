@@ -57,8 +57,10 @@ interface CachedVoxelMesh {
 }
 
 const voxelMeshCache = new LRUCache<string, CachedVoxelMesh>(256);
+const VOXEL_CACHE_CONTROL = "public, max-age=0, must-revalidate";
+const VOXEL_MISS_CACHE_CONTROL = "no-store";
 
-/** Remove a single entry from the voxel mesh cache (called on region-updated events). */
+/** Remove a single entry from the voxel mesh cache when a region changes. */
 export function clearVoxelCache(key: string): void {
   voxelMeshCache.delete(key);
 }
@@ -99,7 +101,7 @@ export function createVoxelsRouter(
       // Serve from cache if available
       const cached = voxelMeshCache.get(cacheKey);
       if (cached) {
-        res.set("Cache-Control", "public, max-age=0, must-revalidate");
+        res.set("Cache-Control", VOXEL_CACHE_CONTROL);
         res.set("ETag", cached.etag);
         if (etagMatches(ifNoneMatch, cached.etag)) {
           res.status(304).end();
@@ -114,7 +116,7 @@ export function createVoxelsRouter(
       const colDir = join(savePath, "chunks", String(lod), String(regionX), String(regionY));
 
       if (!existsSync(colDir)) {
-        res.set("Cache-Control", "no-store");
+        res.set("Cache-Control", VOXEL_MISS_CACHE_CONTROL);
         res.status(204).end();
         return;
       }
@@ -124,7 +126,7 @@ export function createVoxelsRouter(
       try {
         zEntries = await readdir(colDir);
       } catch {
-        res.set("Cache-Control", "no-store");
+        res.set("Cache-Control", VOXEL_MISS_CACHE_CONTROL);
         res.status(204).end();
         return;
       }
@@ -137,7 +139,7 @@ export function createVoxelsRouter(
         .sort((a, b) => b - a); // descending — topmost first
 
       if (allZValues.length === 0) {
-        res.set("Cache-Control", "no-store");
+        res.set("Cache-Control", VOXEL_MISS_CACHE_CONTROL);
         res.status(204).end();
         return;
       }
@@ -149,7 +151,7 @@ export function createVoxelsRouter(
       if (!surfaceCutoff.hasSurface) {
         // This XY column has no surface data — it was explored from underground
         // only. Rendering it would produce floating underground islands.
-        res.set("Cache-Control", "no-store");
+        res.set("Cache-Control", VOXEL_MISS_CACHE_CONTROL);
         res.status(204).end();
         return;
       }
@@ -161,7 +163,7 @@ export function createVoxelsRouter(
         .slice(0, MAX_Z_SLICES);
 
       if (zValues.length === 0) {
-        res.set("Cache-Control", "no-store");
+        res.set("Cache-Control", VOXEL_MISS_CACHE_CONTROL);
         res.status(204).end();
         return;
       }
@@ -235,7 +237,7 @@ export function createVoxelsRouter(
       const etag = `"voxels-${cacheKey}-${createHash("sha1").update(responseBuffer).digest("hex")}"`;
       voxelMeshCache.set(cacheKey, { buf: responseBuffer, etag });
 
-      res.set("Cache-Control", "public, max-age=0, must-revalidate");
+      res.set("Cache-Control", VOXEL_CACHE_CONTROL);
       res.set("ETag", etag);
       if (etagMatches(ifNoneMatch, etag)) {
         res.status(304).end();
@@ -243,7 +245,6 @@ export function createVoxelsRouter(
       }
 
       res.set("Content-Type", "application/octet-stream");
-      res.set("Cache-Control", "public, max-age=0, must-revalidate");
       res.send(responseBuffer);
     } catch (e) {
       console.error(`Voxels API error: ${e}`);

@@ -33,6 +33,12 @@ const PORT = parseInt(process.env.PORT ?? "3001");
 const HOST = process.env.HOST ?? "0.0.0.0";
 const CACHE_SIZE = parseInt(process.env.CACHE_SIZE ?? "500");
 const VOXEL_FULL_CLEAR_THROTTLE_MS = parseInt(process.env.VOXEL_FULL_CLEAR_THROTTLE_MS ?? "1000");
+const TERRAIN_UPDATE_BATCH_MS = parseInt(process.env.TERRAIN_UPDATE_BATCH_MS ?? "15000");
+
+interface TerrainUpdatesBatchData {
+  tiles: { lod: number; tileX: number; tileY: number }[];
+  regions: { lod: number; regionX: number; regionY: number }[];
+}
 
 async function findSavePath(): Promise<string> {
   // Check env var first
@@ -188,6 +194,10 @@ async function main() {
   wss.on("connection", (ws) => {
     wsClients.add(ws);
     console.log(`WebSocket client connected (${wsClients.size} total)`);
+    ws.send(JSON.stringify({
+      type: "viewer-ws-connected",
+      sentAt: Date.now(),
+    }));
 
     ws.on("close", () => {
       wsClients.delete(ws);
@@ -201,6 +211,7 @@ async function main() {
   });
 
   function broadcast(event: WatchEvent): void {
+    console.log("Watch event broadcast:", event.type, event.data ?? "");
     const msg = JSON.stringify({
       ...event,
       sentAt: Date.now(),
@@ -213,28 +224,29 @@ async function main() {
   }
 
   // File watcher for live updates
-  const watcher = new SaveWatcher(savePath);
+  const watcher = new SaveWatcher(savePath, { terrainUpdateBatchMs: TERRAIN_UPDATE_BATCH_MS });
   let voxelFullClearCooldownUntil = 0;
 
   watcher.on("watch-event", (event: WatchEvent) => {
-    // Invalidate tile cache when a surface file changes
-    if (event.type === "tile-updated" && event.data) {
-      const { lod, tileX, tileY } = event.data as { lod: number; tileX: number; tileY: number };
-      tileCache.delete(`${lod}/${tileX}/${tileY}`);
+    if (event.type === "terrain-updates-batch" && event.data) {
+      const { tiles, regions } = event.data as TerrainUpdatesBatchData;
 
-      const now = Date.now();
-      if (now >= voxelFullClearCooldownUntil) {
-        clearAllVoxelCache();
-        voxelFullClearCooldownUntil = now + VOXEL_FULL_CLEAR_THROTTLE_MS;
+      for (const tile of tiles) {
+        tileCache.delete(`${tile.lod}/${tile.tileX}/${tile.tileY}`);
+      }
+
+      if (tiles.length > 0) {
+        const now = Date.now();
+        if (now >= voxelFullClearCooldownUntil) {
+          clearAllVoxelCache();
+          voxelFullClearCooldownUntil = now + VOXEL_FULL_CLEAR_THROTTLE_MS;
+        }
+      }
+
+      for (const region of regions) {
+        clearVoxelCache(`${region.lod}/${region.regionX}/${region.regionY}`);
       }
     }
-
-    // Invalidate voxel mesh cache when a region file changes
-    if (event.type === "region-updated" && event.data) {
-      const { lod, regionX, regionY } = event.data as { lod: number; regionX: number; regionY: number };
-      clearVoxelCache(`${lod}/${regionX}/${regionY}`);
-    }
-
     // Broadcast to all connected WebSocket clients
     broadcast(event);
   });

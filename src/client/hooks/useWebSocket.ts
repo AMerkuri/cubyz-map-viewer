@@ -1,11 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 
 export type WatchEventType =
-  | "tile-updated"
   | "players-updated"
   | "world-updated"
   | "surface-index-changed"
-  | "region-updated"
   | "terrain-updates-batch";
 
 interface TerrainTileUpdate {
@@ -34,6 +32,9 @@ export interface TerrainUpdatesBatchEvent {
   };
   sentAt?: number;
 }
+
+export type TerrainTileBatchUpdate = TerrainTileUpdate;
+export type TerrainRegionBatchUpdate = TerrainRegionUpdate;
 
 type EventHandler = (event: WatchEvent | TerrainUpdatesBatchEvent) => void;
 

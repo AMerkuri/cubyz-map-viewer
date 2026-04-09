@@ -25,43 +25,53 @@ interface WorkerIn {
   lod: number;
   regionX: number;
   regionY: number;
+  version?: number;
 }
 
 interface WorkerOut {
   lod?: number;
   regionX: number;
   regionY: number;
-  positions?: Float32Array;
-  normals?: Float32Array;
-  colors?: Float32Array;
-  indices?: Uint32Array;
+  version?: number;
+  quadrantMeshes?: {
+    quadrantIndex: number;
+    positions: Float32Array;
+    normals: Float32Array;
+    colors: Float32Array;
+    indices: Uint32Array;
+  }[];
   /** 16-bit bitmask: bit (cx*4+cy) set ↔ chunk column (cx,cy) has ≥1 non-air block. */
   chunkCoverage?: number;
   /** Max visible voxel Z per 32×32 chunk column; -Infinity means no exposed faces. */
   chunkTopHeights?: Float32Array;
   voxelSize?: number;
+  minZ?: number;
+  maxZ?: number;
   error?: string;
 }
 
 self.onmessage = (e: MessageEvent<WorkerIn>) => {
-  const { buffer, lod, regionX, regionY } = e.data;
+  const { buffer, lod, regionX, regionY, version } = e.data;
 
   try {
     const result = buildMeshArrays(buffer);
-    const transferables: Transferable[] = [
-      result.positions.buffer,
-      result.normals.buffer,
-      result.colors.buffer,
-      result.indices.buffer,
-      result.chunkTopHeights.buffer,
-    ];
-    const out: WorkerOut = { lod, regionX, regionY, ...result };
+    const transferables: Transferable[] = [result.chunkTopHeights.buffer];
+    for (const quadrant of result.quadrantMeshes) {
+      transferables.push(
+        quadrant.positions.buffer,
+        quadrant.normals.buffer,
+        quadrant.colors.buffer,
+        quadrant.indices.buffer,
+      );
+    }
+    const out: WorkerOut = { lod, regionX, regionY, version, ...result };
     (self as unknown as DedicatedWorkerGlobalScope).postMessage(out, transferables);
   } catch (err) {
     const out: WorkerOut = {
       regionX,
       regionY,
       lod,
+      version,
       error: err instanceof Error ? err.message : String(err),
     };
     (self as unknown as DedicatedWorkerGlobalScope).postMessage(out);
@@ -69,13 +79,18 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
 };
 
 function buildMeshArrays(buf: ArrayBuffer): {
-  positions: Float32Array;
-  normals: Float32Array;
-  colors: Float32Array;
-  indices: Uint32Array;
+  quadrantMeshes: {
+    quadrantIndex: number;
+    positions: Float32Array;
+    normals: Float32Array;
+    colors: Float32Array;
+    indices: Uint32Array;
+  }[];
   chunkCoverage: number;
   chunkTopHeights: Float32Array;
   voxelSize: number;
+  minZ: number;
+  maxZ: number;
 } {
   if (buf.byteLength < 24) throw new Error("buffer too small for header");
 
@@ -105,6 +120,8 @@ function buildMeshArrays(buf: ArrayBuffer): {
   // --- Positions (with Y-negation for Three.js coordinate system) ---
   // sceneY = -worldY so that increasing world Y moves toward -Y in scene space.
   const positions = new Float32Array(vertexCount * 3);
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
   let off = 24 + colorPadded;
   for (let vi = 0; vi < vertexCount; vi++) {
     const rx = view.getUint8(off++);
@@ -114,7 +131,11 @@ function buildMeshArrays(buf: ArrayBuffer): {
     positions[vi * 3]     = worldX + rx * voxelSize;
     positions[vi * 3 + 1] = -(worldY + ry * voxelSize); // Y-negation
     positions[vi * 3 + 2] = worldZ + rz * voxelSize;
+    if (positions[vi * 3 + 2] < minZ) minZ = positions[vi * 3 + 2];
+    if (positions[vi * 3 + 2] > maxZ) maxZ = positions[vi * 3 + 2];
   }
+  if (!Number.isFinite(minZ)) minZ = 0;
+  if (!Number.isFinite(maxZ)) maxZ = 0;
 
   // --- Colors (per-quad → per-vertex, normalized 0–1) ---
   const colors = new Float32Array(vertexCount * 3);
@@ -226,5 +247,67 @@ function buildMeshArrays(buf: ArrayBuffer): {
     }
   }
 
-  return { positions, normals, colors, indices, chunkCoverage, chunkTopHeights, voxelSize };
+  const quadrantTris: number[][] = Array.from({ length: 4 }, () => []);
+  for (let i = 0; i < indexCount; i += 3) {
+    const ia = indices[i];
+    const ib = indices[i + 1];
+    const ic = indices[i + 2];
+
+    const ax = positions[ia * 3];
+    const ay = positions[ia * 3 + 1];
+    const bx = positions[ib * 3];
+    const by = positions[ib * 3 + 1];
+    const cx = positions[ic * 3];
+    const cy = positions[ic * 3 + 1];
+
+    const centerX = (ax + bx + cx) / 3;
+    const centerYWorld = (-(ay + by + cy)) / 3;
+    const localX = centerX - worldX;
+    const localY = centerYWorld - worldY;
+    const quadrantIndex = (localX >= regionWorldSize / 2 ? 1 : 0) + (localY >= regionWorldSize / 2 ? 2 : 0);
+    quadrantTris[quadrantIndex].push(ia, ib, ic);
+  }
+
+  const quadrantMeshes = quadrantTris.map((tri, quadrantIndex) => {
+    const indexMap = new Map<number, number>();
+    const localPos: number[] = [];
+    const localNorm: number[] = [];
+    const localCol: number[] = [];
+    const localIdx: number[] = [];
+
+    for (let i = 0; i < tri.length; i++) {
+      const src = tri[i]!;
+      let dst = indexMap.get(src);
+      if (dst === undefined) {
+        dst = indexMap.size;
+        indexMap.set(src, dst);
+        localPos.push(
+          positions[src * 3],
+          positions[src * 3 + 1],
+          positions[src * 3 + 2],
+        );
+        localNorm.push(
+          normals[src * 3],
+          normals[src * 3 + 1],
+          normals[src * 3 + 2],
+        );
+        localCol.push(
+          colors[src * 3],
+          colors[src * 3 + 1],
+          colors[src * 3 + 2],
+        );
+      }
+      localIdx.push(dst);
+    }
+
+    return {
+      quadrantIndex,
+      positions: new Float32Array(localPos),
+      normals: new Float32Array(localNorm),
+      colors: new Float32Array(localCol),
+      indices: new Uint32Array(localIdx),
+    };
+  });
+
+  return { quadrantMeshes, chunkCoverage, chunkTopHeights, voxelSize, minZ, maxZ };
 }

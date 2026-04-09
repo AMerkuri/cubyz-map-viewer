@@ -9,16 +9,34 @@ import { join, relative, sep } from "path";
 import { EventEmitter } from "events";
 
 export type WatchEventType =
-  | "tile-updated"
   | "players-updated"
   | "world-updated"
   | "surface-index-changed"
-  | "region-updated";
+  | "terrain-updates-batch";
+
+export interface TerrainTileUpdate {
+  lod: number;
+  tileX: number;
+  tileY: number;
+}
+
+export interface TerrainRegionUpdate {
+  lod: number;
+  regionX: number;
+  regionY: number;
+}
+
+interface SaveWatcherOptions {
+  terrainUpdateBatchMs?: number;
+}
 
 export interface WatchEvent {
   type: WatchEventType;
-  /** For tile-updated: { lod, tileX, tileY } */
-  data?: Record<string, unknown>;
+  /** Batch payloads for terrain and voxel region changes. */
+  data?: Record<string, unknown> | {
+    tiles: TerrainTileUpdate[];
+    regions: TerrainRegionUpdate[];
+  };
   /** Unix timestamp (ms) when the server broadcast this event. */
   sentAt?: number;
 }
@@ -31,20 +49,25 @@ export class SaveWatcher extends EventEmitter {
   private watcher: FSWatcher | null = null;
   private savePath: string;
   private debounceTimers = new Map<string, NodeJS.Timeout>();
+  private terrainUpdateBatchMs: number;
+  private terrainBatchTimer: NodeJS.Timeout | null = null;
+  private pendingTileUpdates = new Map<string, TerrainTileUpdate>();
+  private pendingRegionUpdates = new Map<string, TerrainRegionUpdate>();
   private static readonly DEBOUNCE_MS = 300;
 
-  constructor(savePath: string) {
+  constructor(savePath: string, options: SaveWatcherOptions = {}) {
     super();
     this.savePath = savePath;
+    this.terrainUpdateBatchMs = Math.max(0, options.terrainUpdateBatchMs ?? 15_000);
   }
 
   start(): void {
-    const mapsGlob = join(this.savePath, "maps", "**", "*.surface");
-    const playersGlob = join(this.savePath, "players", "*.zon");
+    const mapsDir = join(this.savePath, "maps");
+    const playersDir = join(this.savePath, "players");
     const worldFile = join(this.savePath, "world.zig.zon");
-    const chunksGlob = join(this.savePath, "chunks", "**", "*.region");
+    const chunksDir = join(this.savePath, "chunks");
 
-    this.watcher = watch([mapsGlob, playersGlob, worldFile, chunksGlob], {
+    this.watcher = watch([mapsDir, playersDir, worldFile, chunksDir], {
       ignoreInitial: true,
       awaitWriteFinish: {
         stabilityThreshold: 200,
@@ -55,6 +78,9 @@ export class SaveWatcher extends EventEmitter {
     this.watcher.on("change", (filePath: string) => this.handleChange(filePath));
     this.watcher.on("add", (filePath: string) => this.handleAdd(filePath));
     this.watcher.on("unlink", (filePath: string) => this.handleRemove(filePath));
+    this.watcher.on("error", (err) => {
+      console.error("SaveWatcher error:", err);
+    });
 
     console.log("SaveWatcher: watching for file changes...");
   }
@@ -68,6 +94,12 @@ export class SaveWatcher extends EventEmitter {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+    if (this.terrainBatchTimer) {
+      clearTimeout(this.terrainBatchTimer);
+      this.terrainBatchTimer = null;
+    }
+    this.pendingTileUpdates.clear();
+    this.pendingRegionUpdates.clear();
   }
 
   private debounce(key: string, fn: () => void): void {
@@ -80,6 +112,43 @@ export class SaveWatcher extends EventEmitter {
         fn();
       }, SaveWatcher.DEBOUNCE_MS)
     );
+  }
+
+  private queueTileUpdate(tileInfo: TerrainTileUpdate): void {
+    this.pendingTileUpdates.set(`${tileInfo.lod}/${tileInfo.tileX}/${tileInfo.tileY}`, tileInfo);
+    this.scheduleTerrainUpdatesBatch();
+  }
+
+  private queueRegionUpdate(regionInfo: TerrainRegionUpdate): void {
+    this.pendingRegionUpdates.set(`${regionInfo.lod}/${regionInfo.regionX}/${regionInfo.regionY}`, regionInfo);
+    this.scheduleTerrainUpdatesBatch();
+  }
+
+  private scheduleTerrainUpdatesBatch(): void {
+    if (this.terrainBatchTimer) {
+      clearTimeout(this.terrainBatchTimer);
+    }
+    this.terrainBatchTimer = setTimeout(() => {
+      this.terrainBatchTimer = null;
+      this.flushTerrainUpdatesBatch();
+    }, this.terrainUpdateBatchMs);
+  }
+
+  private flushTerrainUpdatesBatch(): void {
+    if (this.pendingTileUpdates.size === 0 && this.pendingRegionUpdates.size === 0) return;
+
+    const tiles = [...this.pendingTileUpdates.values()];
+    const regions = [...this.pendingRegionUpdates.values()];
+    this.pendingTileUpdates.clear();
+    this.pendingRegionUpdates.clear();
+
+    this.emit("watch-event", {
+      type: "terrain-updates-batch",
+      data: {
+        tiles,
+        regions,
+      },
+    } as WatchEvent);
   }
 
   private handleChange(filePath: string): void {
@@ -101,25 +170,13 @@ export class SaveWatcher extends EventEmitter {
 
     const tileInfo = this.parseSurfacePath(rel);
     if (tileInfo) {
-      const key = `tile-${tileInfo.lod}-${tileInfo.tileX}-${tileInfo.tileY}`;
-      this.debounce(key, () => {
-        this.emit("watch-event", {
-          type: "tile-updated",
-          data: tileInfo,
-        } as WatchEvent);
-      });
+      this.queueTileUpdate(tileInfo);
       return;
     }
 
     const regionInfo = this.parseRegionPath(rel);
     if (regionInfo) {
-      const key = `region-${regionInfo.regionX}-${regionInfo.regionY}`;
-      this.debounce(key, () => {
-        this.emit("watch-event", {
-          type: "region-updated",
-          data: regionInfo,
-        } as WatchEvent);
-      });
+      this.queueRegionUpdate(regionInfo);
     }
   }
 
@@ -135,26 +192,14 @@ export class SaveWatcher extends EventEmitter {
             type: "surface-index-changed",
           } as WatchEvent);
         });
-        // Also notify about this specific tile
-        this.debounce(`tile-${tileInfo.lod}-${tileInfo.tileX}-${tileInfo.tileY}`, () => {
-          this.emit("watch-event", {
-            type: "tile-updated",
-            data: tileInfo,
-          } as WatchEvent);
-        });
+        this.queueTileUpdate(tileInfo);
       }
     }
 
     if (rel.endsWith(".region")) {
       const regionInfo = this.parseRegionPath(rel);
       if (regionInfo) {
-        const key = `region-${regionInfo.regionX}-${regionInfo.regionY}`;
-        this.debounce(key, () => {
-          this.emit("watch-event", {
-            type: "region-updated",
-            data: regionInfo,
-          } as WatchEvent);
-        });
+        this.queueRegionUpdate(regionInfo);
       }
     }
 
@@ -183,7 +228,7 @@ export class SaveWatcher extends EventEmitter {
    */
   private parseSurfacePath(
     rel: string
-  ): { lod: number; tileX: number; tileY: number } | null {
+  ): TerrainTileUpdate | null {
     // Expected: maps/{lod}/{worldX}/{worldY}.surface
     const match = rel.match(
       /^maps\/(\d+)\/(\d+)\/(\d+)\.surface$/
@@ -208,7 +253,7 @@ export class SaveWatcher extends EventEmitter {
    */
   private parseRegionPath(
     rel: string
-  ): { lod: number; regionX: number; regionY: number } | null {
+  ): TerrainRegionUpdate | null {
     // Expected: chunks/{lod}/{worldX}/{worldY}/{worldZ}.region
     const match = rel.match(/^chunks\/(\d+)\/(-?\d+)\/(-?\d+)\/-?\d+\.region$/);
     if (!match) return null;

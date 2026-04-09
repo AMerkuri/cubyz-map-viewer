@@ -34,10 +34,12 @@ type ChunkStats = {
   memoryBreakdown: {
     terrain: number;
     voxels: number;
+    cached: number;
     queued: number;
   };
   memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
   jsHeapBytes: number | null;
+  warmCacheCount: number;
 };
 
 function formatMemoryBytes(bytes: number): string {
@@ -93,10 +95,12 @@ export function App() {
     memoryBreakdown: {
       terrain: 0,
       voxels: 0,
+      cached: 0,
       queued: 0,
     },
     memoryByLod: {},
     jsHeapBytes: null,
+    warmCacheCount: 0,
   });
   const worldData = useWorldData();
 
@@ -252,8 +256,14 @@ export function App() {
     );
 
     unsubs.push(
-      subscribe("region-updated", () => {
-        worldData.refreshChunkIndex();
+      subscribe("terrain-updates-batch", (event) => {
+        if (event.type !== "terrain-updates-batch") return;
+        if (event.data.tiles.length > 0) {
+          worldData.refreshSurfaceIndex();
+        }
+        if (event.data.regions.length > 0) {
+          worldData.refreshChunkIndex();
+        }
       })
     );
 
@@ -386,6 +396,7 @@ export function App() {
             <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
             <div>Terrain: {formatMemoryBytes(chunkStats.memoryBreakdown.terrain)}</div>
             <div>Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}</div>
+            <div>Warm cache: {formatMemoryBytes(chunkStats.memoryBreakdown.cached)} ({chunkStats.warmCacheCount})</div>
             <div>Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}</div>
             <div>JS heap: {chunkStats.jsHeapBytes === null ? "n/a" : formatMemoryBytes(chunkStats.jsHeapBytes)}</div>
 
