@@ -46,7 +46,7 @@ async function fetchChunkIndex(): Promise<ChunkIndexEntry[]> {
   return res.json();
 }
 
-export function useWorldData() {
+export function useWorldData(loadChunkIndex = true) {
   const queryClient = useQueryClient();
 
   const worldQuery = useQuery({
@@ -62,6 +62,7 @@ export function useWorldData() {
   const chunkIndexQuery = useQuery({
     queryKey: ["chunk-index"],
     queryFn: fetchChunkIndex,
+    enabled: loadChunkIndex,
   });
 
   const refresh = useCallback(() => {
@@ -76,12 +77,12 @@ export function useWorldData() {
     void queryClient.invalidateQueries({ queryKey: ["chunk-index"] });
   }, [queryClient]);
 
-  const loading = worldQuery.isLoading || indexQuery.isLoading || chunkIndexQuery.isLoading;
+  const loading = worldQuery.isLoading || indexQuery.isLoading || (loadChunkIndex && chunkIndexQuery.isLoading);
   const error = worldQuery.error
     ? (worldQuery.error instanceof Error ? worldQuery.error.message : "Unknown error")
     : indexQuery.error
       ? (indexQuery.error instanceof Error ? indexQuery.error.message : "Unknown error")
-      : chunkIndexQuery.error
+      : loadChunkIndex && chunkIndexQuery.error
         ? (chunkIndexQuery.error instanceof Error ? chunkIndexQuery.error.message : "Unknown error")
       : null;
 

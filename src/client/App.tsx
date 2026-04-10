@@ -4,43 +4,21 @@ import { ViewToggle } from "./components/ViewToggle.js";
 import { LayerControls, type LayerVisibility } from "./components/LayerControls.js";
 import { InfoPanel } from "./components/InfoPanel.js";
 import { OverlayPanel } from "./components/OverlayPanel.js";
+import { MapDebugParameters } from "./components/MapDebugParameters.js";
 import { useWorldData } from "./hooks/useWorldData.js";
 import { usePlayers } from "./hooks/usePlayers.js";
 import { useWebSocket } from "./hooks/useWebSocket.js";
 import type { PlayerData } from "./hooks/usePlayers.js";
+import {
+  DEFAULT_MAP_DEBUG_SETTINGS,
+  createEmptyChunkStats,
+  type ChunkStats,
+  type MapDebugSettings,
+} from "./mapDebug.js";
 
 type ShareLocationState =
   | { mode: "terrain"; pos: [number, number, number]; zoom: number; theta: number; phi: number }
   | { mode: "voxel"; pos: [number, number, number]; zoom: number; theta: number; phi: number };
-
-type ChunkStats = {
-  loading: number;
-  loaded: number;
-  fps: number;
-  focusLod: number;
-  mode: "terrain" | "voxel";
-  loadingBreakdown: {
-    terrain: number;
-    voxels: number;
-    fetchQueue: number;
-    meshQueue: number;
-  };
-  voxelHealth: {
-    missing: number;
-    failed: number;
-  };
-  loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
-  memoryBytes: number;
-  memoryBreakdown: {
-    terrain: number;
-    voxels: number;
-    cached: number;
-    queued: number;
-  };
-  memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
-  jsHeapBytes: number | null;
-  warmCacheCount: number;
-};
 
 function formatMemoryBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -74,35 +52,10 @@ export function App() {
   const [flyToRequest, setFlyToRequest] = useState<{ pos: [number, number, number]; key: number } | null>(null);
   const [shareCopied, setShareCopied] = useState(false);
   const [currentZoom, setCurrentZoom] = useState<number | null>(null);
-  const [chunkStats, setChunkStats] = useState<ChunkStats>({
-    loading: 0,
-    loaded: 0,
-    fps: 0,
-    focusLod: 1,
-    mode: initialMode,
-    loadingBreakdown: {
-      terrain: 0,
-      voxels: 0,
-      fetchQueue: 0,
-      meshQueue: 0,
-    },
-    voxelHealth: {
-      missing: 0,
-      failed: 0,
-    },
-    loadedByLod: {},
-    memoryBytes: 0,
-    memoryBreakdown: {
-      terrain: 0,
-      voxels: 0,
-      cached: 0,
-      queued: 0,
-    },
-    memoryByLod: {},
-    jsHeapBytes: null,
-    warmCacheCount: 0,
-  });
-  const worldData = useWorldData();
+  const [chunkStats, setChunkStats] = useState<ChunkStats>(() => createEmptyChunkStats(initialMode));
+  const [chunkIndexEnabled, setChunkIndexEnabled] = useState(initialMode === "voxel");
+  const [mapDebugSettings, setMapDebugSettings] = useState<MapDebugSettings>(DEFAULT_MAP_DEBUG_SETTINGS);
+  const worldData = useWorldData(chunkIndexEnabled);
 
   // HUD element updated directly — no React state, no re-renders on mouse move.
   const cursorHudRef = useRef<HTMLDivElement>(null);
@@ -141,6 +94,9 @@ export function App() {
         biomeLabels: nextBiomeLabels,
       };
     });
+    if (next === "voxel") {
+      setChunkIndexEnabled(true);
+    }
     setView(next);
   }, []);
 
@@ -210,6 +166,7 @@ export function App() {
     biomeLabels: initialMode === "terrain",
     players: true,
     spawn: true,
+    debug: false,
     chunkBorders: false,
     showTerrain: true,
     showVoxelTerrain: false,
@@ -218,9 +175,24 @@ export function App() {
   const [voxelLod1MaxDist, setVoxelLod1MaxDist] = useState(600);
 
   const handleLayerVisibilityChange = useCallback((next: LayerVisibility) => {
-    setLayerVisibility(next);
-    biomeLabelsByModeRef.current[viewRef.current] = next.biomeLabels;
+    const normalized = next.debug
+      ? next
+      : {
+          ...next,
+          chunkBorders: false,
+          voxelHeightLabels: false,
+        };
+    setLayerVisibility(normalized);
+    if (!normalized.debug) {
+      setChunkStats(createEmptyChunkStats(viewRef.current));
+    }
+    biomeLabelsByModeRef.current[viewRef.current] = normalized.biomeLabels;
   }, []);
+
+  useEffect(() => {
+    if (layerVisibility.debug) return;
+    setChunkStats(createEmptyChunkStats(view));
+  }, [layerVisibility.debug, view]);
 
   const players = usePlayers();
   const { lastUpdateAt, subscribe } = useWebSocket();
@@ -251,7 +223,9 @@ export function App() {
     unsubs.push(
       subscribe("surface-index-changed", () => {
         worldData.refreshSurfaceIndex();
-        worldData.refreshChunkIndex();
+        if (chunkIndexEnabled) {
+          worldData.refreshChunkIndex();
+        }
       })
     );
 
@@ -262,7 +236,9 @@ export function App() {
           worldData.refreshSurfaceIndex();
         }
         if (event.data.regions.length > 0) {
-          worldData.refreshChunkIndex();
+          if (chunkIndexEnabled) {
+            worldData.refreshChunkIndex();
+          }
         }
       })
     );
@@ -270,7 +246,7 @@ export function App() {
     return () => {
       for (const unsub of unsubs) unsub();
     };
-  }, [subscribe, players.refresh, worldData.refresh, worldData.refreshSurfaceIndex, worldData.refreshChunkIndex]);
+  }, [subscribe, players.refresh, worldData.refresh, worldData.refreshSurfaceIndex, worldData.refreshChunkIndex, chunkIndexEnabled]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -286,6 +262,8 @@ export function App() {
         showVoxelHeightLabels={layerVisibility.voxelHeightLabels}
         showBiomeLabels={layerVisibility.biomeLabels}
         voxelLod1MaxDist={voxelLod1MaxDist}
+        debugEnabled={layerVisibility.debug}
+        debugSettings={mapDebugSettings}
         mode={view}
         onCursorMove={handleCursorMove}
         onChunkStatsChange={handleChunkStatsChange}
@@ -302,6 +280,7 @@ export function App() {
           zIndex: 1000,
           display: "flex",
           alignItems: "center",
+          justifyContent: "flex-end",
           gap: 10,
         }}
       >
@@ -324,91 +303,102 @@ export function App() {
         <ViewToggle view={view} onViewChange={handleViewChange} />
       </div>
 
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          left: 12,
-          zIndex: 1000,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
+      {layerVisibility.debug && (
+        <>
+          <OverlayPanel
+            title="Stats"
+            position={{ top: 54, right: 12 }}
+            minWidth={280}
+            maxWidth={360}
+            collapsible={true}
+            defaultCollapsed={true}
+            contentStyle={{ fontSize: 12, lineHeight: 1.55, color: "#d6d9ea" }}
+          >
+            <div style={{ display: "grid", gap: 6 }}>
+              <div>Mode: {chunkStats.mode === "terrain" ? "Terrain" : "Voxel"}</div>
+              <div>Focus LOD: {chunkStats.focusLod}</div>
+              <div>FPS: {chunkStats.fps}</div>
+              <div>WS age: {updateAge}</div>
+              <div>Loading chunks: {chunkStats.loading}</div>
+              <div>Loaded chunks: {chunkStats.loaded}</div>
+
+              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Loading breakdown</div>
+              <div>Terrain loading: {chunkStats.loadingBreakdown.terrain}</div>
+              <div>Voxel loading: {chunkStats.loadingBreakdown.voxels}</div>
+              <div>Fetch queue: {chunkStats.loadingBreakdown.fetchQueue}</div>
+              <div>Mesh queue: {chunkStats.loadingBreakdown.meshQueue}</div>
+
+              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Voxel health</div>
+              <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
+              <div>Failed regions: {chunkStats.voxelHealth.failed}</div>
+
+              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Loaded by LOD</div>
+              <div>
+                {([1, 2, 4, 8, 16, 32] as const)
+                  .map((lod) => `L${lod}:${chunkStats.loadedByLod[lod] ?? 0}`)
+                  .join("  ")}
+              </div>
+
+              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Estimated Memory</div>
+              <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
+              <div>Terrain: {formatMemoryBytes(chunkStats.memoryBreakdown.terrain)}</div>
+              <div>Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}</div>
+              <div>Warm cache: {formatMemoryBytes(chunkStats.memoryBreakdown.cached)} ({chunkStats.warmCacheCount})</div>
+              <div>Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}</div>
+              <div>JS heap: {chunkStats.jsHeapBytes === null ? "n/a" : formatMemoryBytes(chunkStats.jsHeapBytes)}</div>
+
+              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Memory by LOD</div>
+              <div>
+                {([1, 2, 4, 8, 16, 32] as const)
+                  .map((lod) => `L${lod}:${formatMemoryBytes(chunkStats.memoryByLod[lod] ?? 0)}`)
+                  .join("  ")}
+              </div>
+            </div>
+          </OverlayPanel>
+
+          <OverlayPanel
+            title="Parameters"
+            position={{ top: 108, right: 12 }}
+            minWidth={280}
+            maxWidth={360}
+            collapsible={true}
+            defaultCollapsed={true}
+            contentStyle={{ fontSize: 12, lineHeight: 1.55, color: "#d6d9ea" }}
+          >
+            <MapDebugParameters
+              settings={mapDebugSettings}
+              onChange={setMapDebugSettings}
+              chunkBorders={layerVisibility.chunkBorders}
+              voxelHeights={layerVisibility.voxelHeightLabels}
+              onChunkBordersChange={(active) => setLayerVisibility((prev) => ({ ...prev, chunkBorders: active }))}
+              onVoxelHeightsChange={(active) => setLayerVisibility((prev) => ({ ...prev, voxelHeightLabels: active }))}
+            />
+          </OverlayPanel>
+        </>
+      )}
+
+      <OverlayPanel
+        title="Controls"
+        position={{ top: 12, left: 12 }}
+        minWidth={250}
+        maxWidth={350}
+        collapsible={true}
       >
-        <OverlayPanel
-          title="Controls"
-          absolute={false}
-          minWidth={250}
-          maxWidth={350}
-          collapsible={true}
-        >
-          <div style={{ fontSize: 12, lineHeight: 1.55, color: "#d6d9ea", display: "grid", gap: 8 }}>
-            <div>
-              <div style={{ color: "#8fa4e8", fontWeight: 700, marginBottom: 2 }}>Mouse</div>
-              <div>Left drag: pan</div>
-              <div>Right drag: orbit</div>
-              <div>Wheel / middle drag: zoom</div>
-            </div>
-            <div>
-              <div style={{ color: "#8fa4e8", fontWeight: 700, marginBottom: 2 }}>Keyboard</div>
-              <div>W/A/S/D or arrows: move camera target</div>
-              <div>Q / E: rotate around center</div>
-              <div>Space: focus spawn</div>
-            </div>
+        <div style={{ fontSize: 12, lineHeight: 1.55, color: "#d6d9ea", display: "grid", gap: 8 }}>
+          <div>
+            <div style={{ color: "#8fa4e8", fontWeight: 700, marginBottom: 2 }}>Mouse</div>
+            <div>Left drag: pan</div>
+            <div>Right drag: orbit</div>
+            <div>Wheel / middle drag: zoom</div>
           </div>
-        </OverlayPanel>
-
-        <OverlayPanel
-          title="Map Stats"
-          absolute={false}
-          minWidth={250}
-          maxWidth={350}
-          collapsible={true}
-          defaultCollapsed={true}
-          contentStyle={{ fontSize: 12, lineHeight: 1.55, color: "#d6d9ea" }}
-        >
-          <div style={{ display: "grid", gap: 6 }}>
-            <div>Mode: {chunkStats.mode === "terrain" ? "Terrain" : "Voxel"}</div>
-            <div>Focus LOD: {chunkStats.focusLod}</div>
-            <div>FPS: {chunkStats.fps}</div>
-            <div>WS age: {updateAge}</div>
-            <div>Loading chunks: {chunkStats.loading}</div>
-            <div>Loaded chunks: {chunkStats.loaded}</div>
-
-            <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Loading breakdown</div>
-            <div>Terrain loading: {chunkStats.loadingBreakdown.terrain}</div>
-            <div>Voxel loading: {chunkStats.loadingBreakdown.voxels}</div>
-            <div>Fetch queue: {chunkStats.loadingBreakdown.fetchQueue}</div>
-            <div>Mesh queue: {chunkStats.loadingBreakdown.meshQueue}</div>
-
-            <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Voxel health</div>
-            <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
-            <div>Failed regions: {chunkStats.voxelHealth.failed}</div>
-
-            <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Loaded by LOD</div>
-            <div>
-              {([1, 2, 4, 8, 16, 32] as const)
-                .map((lod) => `L${lod}:${chunkStats.loadedByLod[lod] ?? 0}`)
-                .join("  ")}
-            </div>
-
-            <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Estimated Memory</div>
-            <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
-            <div>Terrain: {formatMemoryBytes(chunkStats.memoryBreakdown.terrain)}</div>
-            <div>Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}</div>
-            <div>Warm cache: {formatMemoryBytes(chunkStats.memoryBreakdown.cached)} ({chunkStats.warmCacheCount})</div>
-            <div>Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}</div>
-            <div>JS heap: {chunkStats.jsHeapBytes === null ? "n/a" : formatMemoryBytes(chunkStats.jsHeapBytes)}</div>
-
-            <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>Memory by LOD</div>
-            <div>
-              {([1, 2, 4, 8, 16, 32] as const)
-                .map((lod) => `L${lod}:${formatMemoryBytes(chunkStats.memoryByLod[lod] ?? 0)}`)
-                .join("  ")}
-            </div>
+          <div>
+            <div style={{ color: "#8fa4e8", fontWeight: 700, marginBottom: 2 }}>Keyboard</div>
+            <div>W/A/S/D or arrows: move camera target</div>
+            <div>Q / E: rotate around center</div>
+            <div>Space: focus spawn</div>
           </div>
-        </OverlayPanel>
-      </div>
+        </div>
+      </OverlayPanel>
 
       {/* Always mounted; shown/hidden via style.display to avoid re-renders on mouse move */}
       <div

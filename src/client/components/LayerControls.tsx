@@ -2,6 +2,7 @@ export interface LayerVisibility {
   biomeLabels: boolean;
   players: boolean;
   spawn: boolean;
+  debug: boolean;
   chunkBorders: boolean;
   showTerrain: boolean;
   showVoxelTerrain: boolean;
@@ -87,15 +88,6 @@ export function LayerControls({
         active={visibility.spawn}
         onToggle={() => toggle("spawn")}
       />
-      {view === "terrain" && (
-        <>
-          <ToggleButton
-            label="Chunk Borders"
-            active={visibility.chunkBorders}
-            onToggle={() => toggle("chunkBorders")}
-          />
-        </>
-      )}
       {view === "voxel" && (
         <>
           <ToggleButton
@@ -104,14 +96,9 @@ export function LayerControls({
             onToggle={() => toggle("showVoxelTerrain")}
           />
           <ToggleButton
-            label="Chunk Borders"
-            active={visibility.chunkBorders}
-            onToggle={() => toggle("chunkBorders")}
-          />
-          <ToggleButton
-            label="Voxel Heights"
-            active={visibility.voxelHeightLabels}
-            onToggle={() => toggle("voxelHeightLabels")}
+            label="Debug"
+            active={visibility.debug}
+            onToggle={() => toggle("debug")}
           />
           <div style={{ padding: "6px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, color: "#aaa", fontSize: 11 }}>
@@ -128,6 +115,13 @@ export function LayerControls({
             />
           </div>
         </>
+      )}
+      {view === "terrain" && (
+        <ToggleButton
+          label="Debug"
+          active={visibility.debug}
+          onToggle={() => toggle("debug")}
+        />
       )}
     </div>
   );

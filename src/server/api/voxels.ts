@@ -157,9 +157,11 @@ export function createVoxelsRouter(
       }
       const cutoffZ = surfaceCutoff.cutoffZ;
 
-      // Keep only the MAX_Z_SLICES topmost slices that start at or above cutoffZ.
+      // Keep only the MAX_Z_SLICES topmost slices whose vertical span intersects
+      // the above-cutoff band. A slice may start below cutoffZ and still contain
+      // visible geometry above it, especially around floating structures.
       const zValues = allZValues
-        .filter((z) => z >= cutoffZ)
+        .filter((z) => z + regionSpanWorld > cutoffZ)
         .slice(0, MAX_Z_SLICES);
 
       if (zValues.length === 0) {
@@ -232,6 +234,14 @@ export function createVoxelsRouter(
         lod,
         colorMap,
       );
+
+      const meshView = new DataView(meshBuffer);
+      const quadCount = meshView.getUint32(12, true);
+      if (quadCount === 0) {
+        res.set("Cache-Control", VOXEL_MISS_CACHE_CONTROL);
+        res.status(204).end();
+        return;
+      }
 
       const responseBuffer = Buffer.from(meshBuffer);
       const etag = `"voxels-${cacheKey}-${createHash("sha1").update(responseBuffer).digest("hex")}"`;

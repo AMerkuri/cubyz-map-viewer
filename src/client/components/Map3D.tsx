@@ -9,6 +9,7 @@ import type { useWorldData } from "../hooks/useWorldData.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { TerrainUpdatesBatchEvent, WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
 import type { ChunkIndexEntry, SurfaceIndexEntry } from "../hooks/useWorldData.js";
+import { createEmptyChunkStats, type ChunkStats, type MapDebugSettings } from "../mapDebug.js";
 
 interface TerrainMeshData {
   width: number;
@@ -109,35 +110,6 @@ interface LoadedVoxelTile {
   borderLines: THREE.LineSegments;
 }
 
-interface ChunkStatsPayload {
-  loading: number;
-  loaded: number;
-  fps: number;
-  focusLod: number;
-  mode: "terrain" | "voxel";
-  loadingBreakdown: {
-    terrain: number;
-    voxels: number;
-    fetchQueue: number;
-    meshQueue: number;
-  };
-  voxelHealth: {
-    missing: number;
-    failed: number;
-  };
-  loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
-  memoryBytes: number;
-  memoryBreakdown: {
-    terrain: number;
-    voxels: number;
-    cached: number;
-    queued: number;
-  };
-  memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
-  jsHeapBytes: number | null;
-  warmCacheCount: number;
-}
-
 interface WarmCachedVoxelTile {
   tile: LoadedVoxelTile;
   bytes: number;
@@ -179,8 +151,10 @@ interface Map3DProps {
   showBiomeLabels: boolean;
   showVoxelHeightLabels: boolean;
   voxelLod1MaxDist: number;
+  debugEnabled: boolean;
+  debugSettings: MapDebugSettings;
   onCursorMove: (pos: [number, number, number] | null) => void;
-  onChunkStatsChange: (stats: ChunkStatsPayload) => void;
+  onChunkStatsChange: (stats: ChunkStats) => void;
   initialCameraState: InitialCameraState | null;
   onShareStateChange: (state: { mode: "terrain" | "voxel"; pos: [number, number, number]; zoom: number; theta: number; phi: number }) => void;
   flyToRequest: { pos: [number, number, number]; key: number } | null;
@@ -207,25 +181,14 @@ const TERRAIN_LOD_DISTANCE_THRESHOLDS = [
   { maxDist: Infinity, lod: 32 },
 ];
 
-const LOD_UNLOAD_HYSTERESIS = 1.5;
-const MAX_CONCURRENT_VOXEL_FETCHES = 8;
-const MAX_VOXEL_RETRIES = 2;
-const VOXEL_FOCUS_STICKY_MS = 1500;
-const VOXEL_FOCUS_SMOOTH_ALPHA = 0.6;
-const VOXEL_LOD_HYSTERESIS_RATIO = 0.12;
-const VOXEL_DETAIL_REQUEST_DEBOUNCE_MS = 180;
-const VOXEL_UNLOAD_GRACE_MS = 750;
-const VOXEL_MESH_BUILD_BUDGET_MS = 5;
-const MAX_VOXEL_MESHES_PER_FRAME = 8;
-const WARM_VOXEL_CACHE_MAX_BYTES = 512 * 1024 * 1024;
-const INITIAL_CAMERA_ZOOM = 1500;
-const DEFAULT_START_OFFSET_Y = 400;
-const DEFAULT_START_OFFSET_Z = 300;
-
 const VOXEL_REGION_CELLS = 128;
 const VOXEL_CHUNK_CELLS = 32;
 const TERRAIN_SKIRT_DEPTH = 32;
 const TERRAIN_UNDERLAY_OFFSET_Z = -6;
+const MAX_VOXEL_RETRIES = 2;
+const INITIAL_CAMERA_ZOOM = 1500;
+const DEFAULT_START_OFFSET_Y = 400;
+const DEFAULT_START_OFFSET_Z = 300;
 const MAX_BIOME_LABELS = 120;
 
 const terrainMaterial = new THREE.MeshLambertMaterial({
@@ -271,16 +234,21 @@ function getLodForDistance(dist: number, thresholds: { maxDist: number; lod: num
   return 32;
 }
 
-function getUnloadDistForLod(lod: number, thresholds: { maxDist: number; lod: number }[]): number {
+function getUnloadDistForLod(
+  lod: number,
+  thresholds: { maxDist: number; lod: number }[],
+  unloadHysteresisRatio: number,
+): number {
   const entry = thresholds.find((t) => t.lod === lod);
   if (!entry || entry.maxDist === Infinity) return Infinity;
-  return entry.maxDist * LOD_UNLOAD_HYSTERESIS;
+  return entry.maxDist * unloadHysteresisRatio;
 }
 
 function getLodForDistanceWithHysteresis(
   dist: number,
   previousLod: number,
   thresholds: { maxDist: number; lod: number }[],
+  hysteresisRatio: number,
 ): number {
   const previousIndex = LOD_LEVELS.indexOf(previousLod);
   if (previousIndex === -1) return getLodForDistance(dist, thresholds);
@@ -289,9 +257,9 @@ function getLodForDistanceWithHysteresis(
     ? (thresholds[previousIndex - 1]?.maxDist ?? 0)
     : 0;
   const previousMax = thresholds[previousIndex]?.maxDist ?? Infinity;
-  const stickMin = previousMinBase * (1 - VOXEL_LOD_HYSTERESIS_RATIO);
+  const stickMin = previousMinBase * (1 - hysteresisRatio);
   const stickMax = Number.isFinite(previousMax)
-    ? previousMax * (1 + VOXEL_LOD_HYSTERESIS_RATIO)
+    ? previousMax * (1 + hysteresisRatio)
     : Infinity;
 
   if (dist >= stickMin && dist <= stickMax) {
@@ -663,6 +631,8 @@ export function Map3D({
   showBiomeLabels,
   showVoxelHeightLabels,
   voxelLod1MaxDist,
+  debugEnabled,
+  debugSettings,
   onCursorMove,
   onChunkStatsChange,
   initialCameraState,
@@ -735,6 +705,10 @@ export function Map3D({
   onCursorMoveRef.current = onCursorMove;
   const onChunkStatsChangeRef = useRef(onChunkStatsChange);
   onChunkStatsChangeRef.current = onChunkStatsChange;
+  const debugEnabledRef = useRef(debugEnabled);
+  debugEnabledRef.current = debugEnabled;
+  const debugSettingsRef = useRef(debugSettings);
+  debugSettingsRef.current = debugSettings;
   const onShareStateChangeRef = useRef(onShareStateChange);
   onShareStateChangeRef.current = onShareStateChange;
 
@@ -923,7 +897,7 @@ export function Map3D({
   }
 
   function trimWarmVoxelCache() {
-    while (warmCachedVoxelBytesRef.current > WARM_VOXEL_CACHE_MAX_BYTES) {
+    while (warmCachedVoxelBytesRef.current > debugSettingsRef.current.warmVoxelCacheMaxBytes) {
       const oldest = warmCachedVoxelsRef.current.keys().next().value;
       if (!oldest) break;
       evictWarmCachedVoxelTile(oldest);
@@ -1220,7 +1194,7 @@ export function Map3D({
     const restored = restoreVoxelTileFromWarmCache(key);
     if (restored) {
       loadedVoxelsRef.current.set(key, restored);
-      voxelUnloadGraceUntilRef.current.set(key, performance.now() + VOXEL_UNLOAD_GRACE_MS);
+      voxelUnloadGraceUntilRef.current.set(key, performance.now() + debugSettingsRef.current.voxelUnloadGraceMs);
       markVoxelTileFresh(key, request.version);
       debugLabelsDirtyRef.current = true;
       return;
@@ -1248,7 +1222,7 @@ export function Map3D({
     pendingVoxelFetchQueueRef.current.sort(compareVoxelFetchRequests);
 
     while (
-      activeVoxelFetchCountRef.current < MAX_CONCURRENT_VOXEL_FETCHES
+      activeVoxelFetchCountRef.current < debugSettingsRef.current.maxConcurrentVoxelFetches
       && pendingVoxelFetchQueueRef.current.length > 0
     ) {
       const next = pendingVoxelFetchQueueRef.current.shift()!;
@@ -1363,7 +1337,13 @@ export function Map3D({
     }
   }
 
-  function updateVoxelLod(target: THREE.Vector3, camDist: number, focusLod: number) {
+  function updateVoxelLod(
+    target: THREE.Vector3,
+    camDist: number,
+    focusLod: number,
+    cameraPosition: THREE.Vector3,
+    cameraForward: THREE.Vector3,
+  ) {
     const roots = voxelRootEntriesRef.current;
     if (roots.length === 0) {
       pendingVoxelDetailRequestsRef.current.clear();
@@ -1381,7 +1361,7 @@ export function Map3D({
     const visibleQuadrantMasks = new Map<string, number>();
     const coverageVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
     const detailVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
-    const stableForDetail = now - voxelLastMotionAtRef.current >= VOXEL_DETAIL_REQUEST_DEBOUNCE_MS;
+    const stableForDetail = now - voxelLastMotionAtRef.current >= debugSettingsRef.current.voxelDetailRequestDebounceMs;
 
     const addVisibleQuadrant = (key: string, quadrant: number) => {
       visibleQuadrantMasks.set(key, (visibleQuadrantMasks.get(key) ?? 0) | voxelQuadrantBit(quadrant));
@@ -1402,8 +1382,31 @@ export function Map3D({
       return Math.max(Math.hypot(dx, dy), camDist);
     };
 
+    const getTileLodSelectionDist = (lod: number, regionX: number, regionY: number): number => {
+      const effectiveDist = getTileEffectiveDist(lod, regionX, regionY);
+      const forwardLenSq = cameraForward.x * cameraForward.x + cameraForward.y * cameraForward.y;
+      if (forwardLenSq <= 1e-6) return effectiveDist;
+
+      const size = regionWorldSize(lod);
+      const toCenterX = regionX + size / 2 - cameraPosition.x;
+      const toCenterY = -(regionY + size / 2) - cameraPosition.y;
+      const toCenterLen = Math.hypot(toCenterX, toCenterY);
+      if (toCenterLen <= 1e-6) return effectiveDist;
+
+      const dot = (cameraForward.x * toCenterX + cameraForward.y * toCenterY) / toCenterLen;
+      if (dot >= debugSettingsRef.current.voxelBehindCameraDotStart) return effectiveDist;
+
+      const blend = THREE.MathUtils.clamp(
+        (-dot + debugSettingsRef.current.voxelBehindCameraDotStart) / (1 + debugSettingsRef.current.voxelBehindCameraDotStart),
+        0,
+        1,
+      );
+      const multiplier = THREE.MathUtils.lerp(1, debugSettingsRef.current.voxelBehindCameraMaxMultiplier, blend);
+      return effectiveDist * multiplier;
+    };
+
     const getSelectionDistForLod = (lod: number): number => {
-      const unloadDist = getUnloadDistForLod(lod, voxelThresholds);
+      const unloadDist = getUnloadDistForLod(lod, voxelThresholds, debugSettingsRef.current.lodUnloadHysteresis);
       return Number.isFinite(unloadDist) ? unloadDist : fallbackMaxDist;
     };
 
@@ -1442,7 +1445,13 @@ export function Map3D({
       const effectiveDist = getTileEffectiveDist(entry.lod, entry.regionX, entry.regionY);
       if (effectiveDist > getSelectionDistForLod(entry.lod)) return false;
 
-      const desiredLod = getLodForDistanceWithHysteresis(effectiveDist, focusLod, voxelThresholds);
+      const lodSelectionDist = getTileLodSelectionDist(entry.lod, entry.regionX, entry.regionY);
+      const desiredLod = getLodForDistanceWithHysteresis(
+        lodSelectionDist,
+        focusLod,
+        voxelThresholds,
+        debugSettingsRef.current.voxelLodHysteresisRatio,
+      );
       const selfLoaded = loadedVoxelsRef.current.has(key);
       const selfStale = isVoxelTileStale(key);
       let hasSelectedCoverage = false;
@@ -1509,7 +1518,7 @@ export function Map3D({
       const keepLoaded = visible || coverageVoxelRequests.has(key) || detailVoxelRequests.has(key);
 
       if (keepLoaded) {
-        voxelUnloadGraceUntilRef.current.set(key, now + VOXEL_UNLOAD_GRACE_MS);
+        voxelUnloadGraceUntilRef.current.set(key, now + debugSettingsRef.current.voxelUnloadGraceMs);
       }
 
       if (tile.borderLines.visible !== visible) {
@@ -1609,8 +1618,7 @@ export function Map3D({
           };
         })
         .filter((item) => item.entry.lod === item.desiredLod)
-        .sort((a, b) => a.dist - b.dist)
-        .slice(0, 14);
+        .sort((a, b) => a.dist - b.dist);
 
       for (const item of indexedTiles) {
         const tileSize = 256 * item.entry.lod;
@@ -1636,10 +1644,6 @@ export function Map3D({
           z: labelZ,
         });
       }
-    }
-
-    if (visibleTiles.length > 14) {
-      visibleTiles.length = 14;
     }
 
     if (visibleTiles.length === 0) {
@@ -1716,6 +1720,10 @@ export function Map3D({
   function refreshDebugLabels() {
     const group = debugLabelGroupRef.current;
     if (!group) return;
+    if (!debugEnabledRef.current) {
+      clearDebugLabels();
+      return;
+    }
 
     const showTiles = showChunkBordersRef.current;
     const showHeights = showVoxelHeightLabelsRef.current && modeRef.current === "voxel";
@@ -1935,7 +1943,7 @@ export function Map3D({
       }
     }
 
-    if (!hadRayHit && state.initialized && now - state.lastHitAt <= VOXEL_FOCUS_STICKY_MS) {
+    if (!hadRayHit && state.initialized && now - state.lastHitAt <= debugSettingsRef.current.voxelFocusStickyMs) {
       rawPoint = state.point.clone();
       rawZoomDist = clampDistanceToLodRange(state.zoomDist, activeFocusLodRef.current, voxelLodThresholdsRef.current);
     }
@@ -1950,8 +1958,8 @@ export function Map3D({
       };
     }
 
-    state.point.lerp(rawPoint, VOXEL_FOCUS_SMOOTH_ALPHA);
-    state.zoomDist = THREE.MathUtils.lerp(state.zoomDist, rawZoomDist, VOXEL_FOCUS_SMOOTH_ALPHA);
+    state.point.lerp(rawPoint, debugSettingsRef.current.voxelFocusSmoothAlpha);
+    state.zoomDist = THREE.MathUtils.lerp(state.zoomDist, rawZoomDist, debugSettingsRef.current.voxelFocusSmoothAlpha);
 
     return {
       point: state.point.clone(),
@@ -1959,7 +1967,10 @@ export function Map3D({
     };
   }
 
-  function syncTerrainLod(target: THREE.Vector3, camDist: number) {
+  function syncTerrainLod(
+    target: THREE.Vector3,
+    camDist: number,
+  ) {
     const index = surfaceIndexRef.current;
     if (index.length > 0) {
       for (const entry of index) {
@@ -2048,14 +2059,24 @@ export function Map3D({
         terrainVisibilityDirtyRef.current = false;
       }
 
+      const cameraForward = target.clone().sub(camera.position);
+      cameraForward.z = 0;
+      const forwardLenSq = cameraForward.lengthSq();
+      if (forwardLenSq > 1e-6) {
+        cameraForward.multiplyScalar(1 / Math.sqrt(forwardLenSq));
+      } else {
+        cameraForward.set(0, 0, 0);
+      }
+
       const focus = resolveVoxelLodFocus(camera, controls);
       const focusLod = getLodForDistanceWithHysteresis(
         focus.zoomDist,
         activeFocusLodRef.current,
         voxelLodThresholdsRef.current,
+        debugSettingsRef.current.voxelLodHysteresisRatio,
       );
       activeFocusLodRef.current = focusLod;
-      updateVoxelLod(focus.point, focus.zoomDist, focusLod);
+      updateVoxelLod(focus.point, focus.zoomDist, focusLod, camera.position, cameraForward);
     }
 
     if (debugLabelsDirtyRef.current) {
@@ -2394,8 +2415,8 @@ export function Map3D({
         let processedVoxelMeshes = 0;
         while (
           pendingVoxelMeshQueueRef.current.length > 0
-          && processedVoxelMeshes < MAX_VOXEL_MESHES_PER_FRAME
-          && performance.now() - voxelMeshBuildStart < VOXEL_MESH_BUILD_BUDGET_MS
+          && processedVoxelMeshes < debugSettingsRef.current.maxVoxelMeshesPerFrame
+          && performance.now() - voxelMeshBuildStart < debugSettingsRef.current.voxelMeshBuildBudgetMs
         ) {
           const item = pendingVoxelMeshQueueRef.current.shift()!;
           processedVoxelMeshes++;
@@ -2453,6 +2474,9 @@ export function Map3D({
               failedVoxelsRef.current.delete(item.key);
               debugLabelsDirtyRef.current = true;
               builtVoxelTile = true;
+            } else {
+              missingVoxelsRef.current.add(item.key);
+              markVoxelTileFresh(item.key, item.version);
             }
           }
         }
@@ -2471,9 +2495,12 @@ export function Map3D({
         terrainVisibilityDirtyRef.current = false;
       }
 
-      if (debugLabelsDirtyRef.current) {
+      if (debugEnabledRef.current && debugLabelsDirtyRef.current) {
         debugLabelsDirtyRef.current = false;
         refreshDebugLabels();
+      } else if (!debugEnabledRef.current && debugLabelsDirtyRef.current) {
+        debugLabelsDirtyRef.current = false;
+        clearDebugLabels();
       }
 
       if (showBiomeLabelsRef.current && biomeLabelsDirtyRef.current) {
@@ -2488,101 +2515,103 @@ export function Map3D({
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
 
-      fpsFrameCounter++;
-      const fpsNow = performance.now();
-      if (fpsNow - fpsLastTs >= 500) {
-        fpsValue = Math.round((fpsFrameCounter * 1000) / (fpsNow - fpsLastTs));
-        fpsFrameCounter = 0;
-        fpsLastTs = fpsNow;
-      }
-
-      const loadingTerrainCount = loadingTerrainRef.current.size;
-      const loadingVoxelCount = loadingVoxelsRef.current.size;
-      const fetchQueueCount = pendingVoxelFetchQueueRef.current.length;
-      const meshQueueCount = pendingVoxelMeshQueueRef.current.length;
-      const loadingCount = loadingTerrainCount + loadingVoxelCount + fetchQueueCount + meshQueueCount;
-      const loadedCount = modeRef.current === "terrain"
-        ? loadedTerrainRef.current.size
-        : loadedVoxelsRef.current.size;
-      const loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
-      const memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
-      let terrainMemoryBytes = 0;
-      let voxelMemoryBytes = 0;
-      let cachedVoxelMemoryBytes = 0;
-      let queuedMemoryBytes = 0;
-
-      for (const tile of loadedTerrainRef.current.values()) {
-        const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
-        const tileBytes = estimateGeometryBytes(tile.mesh.geometry) + estimateGeometryBytes(tile.borderLines.geometry);
-        if (modeRef.current === "terrain") {
-          loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
+      if (debugEnabledRef.current) {
+        fpsFrameCounter++;
+        const fpsNow = performance.now();
+        if (fpsNow - fpsLastTs >= 500) {
+          fpsValue = Math.round((fpsFrameCounter * 1000) / (fpsNow - fpsLastTs));
+          fpsFrameCounter = 0;
+          fpsLastTs = fpsNow;
         }
-        terrainMemoryBytes += tileBytes;
-        addMemoryToLod(memoryByLod, lod, tileBytes);
-      }
 
-      for (const tile of loadedVoxelsRef.current.values()) {
-        const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
-        const tileBytes = estimateLoadedVoxelTileBytes(tile);
-        if (modeRef.current === "voxel") {
-          loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
+        const loadingTerrainCount = loadingTerrainRef.current.size;
+        const loadingVoxelCount = loadingVoxelsRef.current.size;
+        const fetchQueueCount = pendingVoxelFetchQueueRef.current.length;
+        const meshQueueCount = pendingVoxelMeshQueueRef.current.length;
+        const loadingCount = loadingTerrainCount + loadingVoxelCount + fetchQueueCount + meshQueueCount;
+        const loadedCount = modeRef.current === "terrain"
+          ? loadedTerrainRef.current.size
+          : loadedVoxelsRef.current.size;
+        const loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
+        const memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
+        let terrainMemoryBytes = 0;
+        let voxelMemoryBytes = 0;
+        let cachedVoxelMemoryBytes = 0;
+        let queuedMemoryBytes = 0;
+
+        for (const tile of loadedTerrainRef.current.values()) {
+          const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+          const tileBytes = estimateGeometryBytes(tile.mesh.geometry) + estimateGeometryBytes(tile.borderLines.geometry);
+          if (modeRef.current === "terrain") {
+            loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
+          }
+          terrainMemoryBytes += tileBytes;
+          addMemoryToLod(memoryByLod, lod, tileBytes);
         }
-        voxelMemoryBytes += tileBytes;
-        addMemoryToLod(memoryByLod, lod, tileBytes);
-      }
 
-      for (const cached of warmCachedVoxelsRef.current.values()) {
-        const lod = cached.tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
-        cachedVoxelMemoryBytes += cached.bytes;
-        addMemoryToLod(memoryByLod, lod, cached.bytes);
-      }
-
-      for (const item of pendingVoxelMeshQueueRef.current) {
-        for (const quadrant of item.quadrantMeshes) {
-          queuedMemoryBytes += quadrant.positions.byteLength;
-          queuedMemoryBytes += quadrant.normals.byteLength;
-          queuedMemoryBytes += quadrant.colors.byteLength;
-          queuedMemoryBytes += quadrant.indices.byteLength;
+        for (const tile of loadedVoxelsRef.current.values()) {
+          const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+          const tileBytes = estimateLoadedVoxelTileBytes(tile);
+          if (modeRef.current === "voxel") {
+            loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
+          }
+          voxelMemoryBytes += tileBytes;
+          addMemoryToLod(memoryByLod, lod, tileBytes);
         }
-        queuedMemoryBytes += item.chunkTopHeights.byteLength;
-      }
 
-      const memoryBytes = terrainMemoryBytes + voxelMemoryBytes + cachedVoxelMemoryBytes + queuedMemoryBytes;
-      const perfWithMemory = performance as Performance & { memory?: PerformanceMemoryInfo };
-      const jsHeapBytes = perfWithMemory.memory?.usedJSHeapSize ?? null;
+        for (const cached of warmCachedVoxelsRef.current.values()) {
+          const lod = cached.tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+          cachedVoxelMemoryBytes += cached.bytes;
+          addMemoryToLod(memoryByLod, lod, cached.bytes);
+        }
 
-      const statsPayload: ChunkStatsPayload = {
-        loading: loadingCount,
-        loaded: loadedCount,
-        fps: fpsValue,
-        focusLod: activeFocusLodRef.current,
-        mode: modeRef.current,
-        loadingBreakdown: {
-          terrain: loadingTerrainCount,
-          voxels: loadingVoxelCount,
-          fetchQueue: fetchQueueCount,
-          meshQueue: meshQueueCount,
-        },
-        voxelHealth: {
-          missing: missingVoxelsRef.current.size,
-          failed: failedVoxelsRef.current.size,
-        },
-        loadedByLod,
-        memoryBytes,
-        memoryBreakdown: {
-          terrain: terrainMemoryBytes,
-          voxels: voxelMemoryBytes,
-          cached: cachedVoxelMemoryBytes,
-          queued: queuedMemoryBytes,
-        },
-        memoryByLod,
-        jsHeapBytes,
-        warmCacheCount: warmCachedVoxelsRef.current.size,
-      };
-      const statsKey = JSON.stringify(statsPayload);
-      if (lastChunkStatsRef.current !== statsKey) {
-        lastChunkStatsRef.current = statsKey;
-        onChunkStatsChangeRef.current(statsPayload);
+        for (const item of pendingVoxelMeshQueueRef.current) {
+          for (const quadrant of item.quadrantMeshes) {
+            queuedMemoryBytes += quadrant.positions.byteLength;
+            queuedMemoryBytes += quadrant.normals.byteLength;
+            queuedMemoryBytes += quadrant.colors.byteLength;
+            queuedMemoryBytes += quadrant.indices.byteLength;
+          }
+          queuedMemoryBytes += item.chunkTopHeights.byteLength;
+        }
+
+        const memoryBytes = terrainMemoryBytes + voxelMemoryBytes + cachedVoxelMemoryBytes + queuedMemoryBytes;
+        const perfWithMemory = performance as Performance & { memory?: PerformanceMemoryInfo };
+        const jsHeapBytes = perfWithMemory.memory?.usedJSHeapSize ?? null;
+
+        const statsPayload: ChunkStats = {
+          loading: loadingCount,
+          loaded: loadedCount,
+          fps: fpsValue,
+          focusLod: activeFocusLodRef.current,
+          mode: modeRef.current,
+          loadingBreakdown: {
+            terrain: loadingTerrainCount,
+            voxels: loadingVoxelCount,
+            fetchQueue: fetchQueueCount,
+            meshQueue: meshQueueCount,
+          },
+          voxelHealth: {
+            missing: missingVoxelsRef.current.size,
+            failed: failedVoxelsRef.current.size,
+          },
+          loadedByLod,
+          memoryBytes,
+          memoryBreakdown: {
+            terrain: terrainMemoryBytes,
+            voxels: voxelMemoryBytes,
+            cached: cachedVoxelMemoryBytes,
+            queued: queuedMemoryBytes,
+          },
+          memoryByLod,
+          jsHeapBytes,
+          warmCacheCount: warmCachedVoxelsRef.current.size,
+        };
+        const statsKey = JSON.stringify(statsPayload);
+        if (lastChunkStatsRef.current !== statsKey) {
+          lastChunkStatsRef.current = statsKey;
+          onChunkStatsChangeRef.current(statsPayload);
+        }
       }
 
       lodCheckCounter++;
@@ -2736,34 +2765,7 @@ export function Map3D({
 
   useEffect(() => {
     return () => {
-      onChunkStatsChangeRef.current({
-        loading: 0,
-        loaded: 0,
-        fps: 0,
-        focusLod: 1,
-        mode: modeRef.current,
-        loadingBreakdown: {
-          terrain: 0,
-          voxels: 0,
-          fetchQueue: 0,
-          meshQueue: 0,
-        },
-        voxelHealth: {
-          missing: 0,
-          failed: 0,
-        },
-        loadedByLod: {},
-        memoryBytes: 0,
-        memoryBreakdown: {
-          terrain: 0,
-          voxels: 0,
-          cached: 0,
-          queued: 0,
-        },
-        memoryByLod: {},
-        jsHeapBytes: null,
-        warmCacheCount: 0,
-      });
+      onChunkStatsChangeRef.current(createEmptyChunkStats(modeRef.current));
     };
   }, []);
 
@@ -2824,13 +2826,13 @@ export function Map3D({
   useEffect(() => {
     const group = debugLabelGroupRef.current;
     if (group) {
-      group.visible = showChunkBorders || (showVoxelHeightLabels && mode === "voxel");
+      group.visible = debugEnabled && (showChunkBorders || (showVoxelHeightLabels && mode === "voxel"));
     }
     debugLabelsDirtyRef.current = true;
     if (sceneRef.current) {
       refreshDebugLabels();
     }
-  }, [showChunkBorders, showVoxelHeightLabels, mode]);
+  }, [debugEnabled, showChunkBorders, showVoxelHeightLabels, mode]);
 
   useEffect(() => {
     const group = biomeLabelGroupRef.current;
