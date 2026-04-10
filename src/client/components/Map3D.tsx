@@ -399,6 +399,10 @@ function countBits16(v: number): number {
   return c;
 }
 
+function isVoxelTileComplete(chunkCoverage: number): boolean {
+  return (chunkCoverage & 0xffff) === 0xffff;
+}
+
 function formatBiomeName(biomeId: string): string {
   const name = biomeId.includes(":") ? biomeId.split(":")[1] : biomeId;
   const parts = name.split(/[/_]/).filter(Boolean);
@@ -1361,6 +1365,7 @@ export function Map3D({
     const visibleQuadrantMasks = new Map<string, number>();
     const coverageVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
     const detailVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
+    const retainedLoadedVoxelKeys = new Set<string>();
     const stableForDetail = now - voxelLastMotionAtRef.current >= debugSettingsRef.current.voxelDetailRequestDebounceMs;
 
     const addVisibleQuadrant = (key: string, quadrant: number) => {
@@ -1452,7 +1457,9 @@ export function Map3D({
         voxelThresholds,
         debugSettingsRef.current.voxelLodHysteresisRatio,
       );
-      const selfLoaded = loadedVoxelsRef.current.has(key);
+      const loadedTile = loadedVoxelsRef.current.get(key);
+      const selfLoaded = !!loadedTile;
+      const selfComplete = loadedTile ? isVoxelTileComplete(loadedTile.chunkCoverage) : false;
       const selfStale = isVoxelTileStale(key);
       let hasSelectedCoverage = false;
       let needsSelfFallback = false;
@@ -1477,9 +1484,14 @@ export function Map3D({
         }
       } else {
         needsSelfFallback = true;
-        if (selfLoaded) {
+        if (selfLoaded && selfComplete) {
           visibleQuadrantMasks.set(key, FULL_VOXEL_QUADRANT_MASK);
           hasSelectedCoverage = true;
+        } else if (selfLoaded) {
+          retainedLoadedVoxelKeys.add(key);
+          if (!hasLoadedFallback) {
+            visibleQuadrantMasks.set(key, FULL_VOXEL_QUADRANT_MASK);
+          }
         }
       }
 
@@ -1515,7 +1527,7 @@ export function Map3D({
       const visible = quadrantMask !== 0;
       const effectiveDist = getTileEffectiveDist(tile.lod, tile.regionX, tile.regionY);
       const unloadDist = getSelectionDistForLod(tile.lod) * 1.1;
-      const keepLoaded = visible || coverageVoxelRequests.has(key) || detailVoxelRequests.has(key);
+      const keepLoaded = visible || coverageVoxelRequests.has(key) || detailVoxelRequests.has(key) || retainedLoadedVoxelKeys.has(key);
 
       if (keepLoaded) {
         voxelUnloadGraceUntilRef.current.set(key, now + debugSettingsRef.current.voxelUnloadGraceMs);

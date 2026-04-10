@@ -39,7 +39,24 @@
  *                        always zero.  0xFFFF = all 16 columns covered.
  */
 
-import type { ColorMapService } from "./color-map.js";
+import type { BlockColorTable } from "./block-color-table.js";
+
+export interface BinaryQuad {
+  v0x: number;
+  v0y: number;
+  v0z: number;
+  v1x: number;
+  v1y: number;
+  v1z: number;
+  v2x: number;
+  v2y: number;
+  v2z: number;
+  v3x: number;
+  v3y: number;
+  v3z: number;
+  typ: number;
+  dir: number;
+}
 
 export interface VoxelMeshData {
   /** Flat array of vertex positions: [x0,y0,z0, x1,y1,z1, ...] */
@@ -79,7 +96,7 @@ export function greedyMesh(
   worldX: number,
   worldY: number,
   worldZ: number,
-  colorMap: ColorMapService,
+  blockColors: BlockColorTable,
 ): VoxelMeshData {
   const positions: number[] = [];
   const colors: number[] = [];
@@ -183,7 +200,7 @@ export function greedyMesh(
             }
           }
 
-          const rgb = colorMap.getBlockColor(typ);
+          const rgb = getBlockColor(blockColors, typ);
           // Face at x + (dir===1 ? 1 : 0) in world space
           const fx = dir === 1 ? x + 1 : x;
 
@@ -248,7 +265,7 @@ export function greedyMesh(
             }
           }
 
-          const rgb = colorMap.getBlockColor(typ);
+          const rgb = getBlockColor(blockColors, typ);
           const fy = dir === 1 ? y + 1 : y;
 
           // Y-faces: all vertices share the same Y, so client-side Y-negation
@@ -314,7 +331,7 @@ export function greedyMesh(
             }
           }
 
-          const rgb = colorMap.getBlockColor(typ);
+          const rgb = getBlockColor(blockColors, typ);
           const fz = dir === 1 ? z + 1 : z;
 
           addQuad(
@@ -353,7 +370,9 @@ export function greedyMeshBinary(
   worldY: number,
   worldZ: number,
   voxelSize: number,
-  colorMap: ColorMapService,
+  blockColors: BlockColorTable,
+  exteriorAirMask?: Uint32Array,
+  surfaceHeights?: Int32Array,
 ): ArrayBuffer {
   // Accumulate quads into typed arrays, doubling capacity as needed.
   // Each quad: 3 color bytes + 4 vertices × (u8 x, u8 y, u16 z) = 3 + 16 = 19 bytes
@@ -397,6 +416,30 @@ export function greedyMeshBinary(
 
   function isOpaque(x: number, y: number, z: number): boolean {
     return getBlock(x, y, z) !== 0;
+  }
+
+  function isExteriorAir(x: number, y: number, z: number): boolean {
+    if (z >= height) {
+      return x >= 0 && x < width && y >= 0 && y < depth;
+    }
+    if (x < 0 || x >= width || y < 0 || y >= depth || z < 0) {
+      return false;
+    }
+    const flatIndex = x * depth * height + y * height + z;
+    if (blockTypes[flatIndex] !== 0) return false;
+    if (!exteriorAirMask) return true;
+    return (exteriorAirMask[flatIndex >>> 5] & (1 << (flatIndex & 31))) !== 0;
+  }
+
+  function shouldIncludeBlock(x: number, y: number, z: number): boolean {
+    if (!isOpaque(x, y, z)) return false;
+    if (!surfaceHeights) return true;
+    const worldCellTopZ = worldZ + (z + 1) * voxelSize;
+    return worldCellTopZ > surfaceHeights[x * depth + y];
+  }
+
+  function isVisibleSolid(x: number, y: number, z: number): boolean {
+    return shouldIncludeBlock(x, y, z);
   }
 
   function cellsUntilChunkBoundary(coord: number): number {
@@ -456,7 +499,7 @@ export function greedyMeshBinary(
     for (let x = 0; x < width; x++) {
       for (let y = 0; y < depth; y++) {
         for (let z = 0; z < height; z++) {
-          if (isOpaque(x, y, z) && !isOpaque(x + dir, y, z)) {
+          if (isVisibleSolid(x, y, z) && isExteriorAir(x + dir, y, z)) {
             mask[y * height + z] = getBlock(x, y, z);
           } else {
             mask[y * height + z] = 0;
@@ -479,7 +522,7 @@ export function greedyMeshBinary(
             dy++;
           }
           for (let py = 0; py < dy; py++) for (let pz = 0; pz < dz; pz++) used[(y + py) * height + z + pz] = 1;
-          const rgb = colorMap.getBlockColor(typ);
+          const rgb = getBlockColor(blockColors, typ);
           const fx = dir === 1 ? x + 1 : x;
           addQuad(fx, y, z,  fx, y + dy, z,  fx, y + dy, z + dz,  fx, y, z + dz,  rgb.r, rgb.g, rgb.b, dir);
         }
@@ -493,7 +536,7 @@ export function greedyMeshBinary(
     for (let y = 0; y < depth; y++) {
       for (let x = 0; x < width; x++) {
         for (let z = 0; z < height; z++) {
-          if (isOpaque(x, y, z) && !isOpaque(x, y + dir, z)) {
+          if (isVisibleSolid(x, y, z) && isExteriorAir(x, y + dir, z)) {
             mask[x * height + z] = getBlock(x, y, z);
           } else {
             mask[x * height + z] = 0;
@@ -516,7 +559,7 @@ export function greedyMeshBinary(
             dx++;
           }
           for (let px = 0; px < dx; px++) for (let pz = 0; pz < dz; pz++) used[(x + px) * height + z + pz] = 1;
-          const rgb = colorMap.getBlockColor(typ);
+          const rgb = getBlockColor(blockColors, typ);
           const fy = dir === 1 ? y + 1 : y;
           // Pre-invert winding to cancel the client-side unconditional b↔c swap for Y-faces
           addQuad(x, fy, z,  x + dx, fy, z,  x + dx, fy, z + dz,  x, fy, z + dz,  rgb.r, rgb.g, rgb.b, -dir);
@@ -531,7 +574,7 @@ export function greedyMeshBinary(
     for (let z = 0; z < height; z++) {
       for (let x = 0; x < width; x++) {
         for (let y = 0; y < depth; y++) {
-          if (isOpaque(x, y, z) && !isOpaque(x, y, z + dir)) {
+          if (isVisibleSolid(x, y, z) && isExteriorAir(x, y, z + dir)) {
             mask[x * depth + y] = getBlock(x, y, z);
           } else {
             mask[x * depth + y] = 0;
@@ -555,7 +598,7 @@ export function greedyMeshBinary(
             dx++;
           }
           for (let px = 0; px < dx; px++) for (let py = 0; py < dy; py++) used[(x + px) * depth + y + py] = 1;
-          const rgb = colorMap.getBlockColor(typ);
+          const rgb = getBlockColor(blockColors, typ);
           const fz = z + 1; // dir is always +1 here
           addQuad(x, y, fz,  x + dx, y, fz,  x + dx, y + dy, fz,  x, y + dy, fz,  rgb.r, rgb.g, rgb.b, 1);
         }
@@ -576,7 +619,7 @@ export function greedyMeshBinary(
       outer: for (let lx = x0; lx < x0 + CHUNK_COLUMN_SIZE; lx++) {
         for (let ly = y0; ly < y0 + CHUNK_COLUMN_SIZE; ly++) {
           for (let lz = 0; lz < height; lz++) {
-            if (blockTypes[lx * depth * height + ly * height + lz] !== 0) {
+            if (shouldIncludeBlock(lx, ly, lz)) {
               chunkCoverage |= 1 << (cx * 4 + cy);
               break outer;
             }
@@ -636,4 +679,128 @@ export function greedyMeshBinary(
   view.setUint32(off, chunkCoverage, true);
 
   return buf;
+}
+
+export function encodeBinaryQuads(
+  quads: BinaryQuad[],
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  voxelSize: number,
+  blockColors: BlockColorTable,
+  chunkCoverage: number,
+): ArrayBuffer {
+  let capacity = Math.max(4096, quads.length || 1);
+  let quadCount = 0;
+  let quadColors = new Uint8Array(capacity * 3);
+  let vertPosX = new Uint8Array(capacity * 4);
+  let vertPosY = new Uint8Array(capacity * 4);
+  let vertPosZ = new Uint16Array(capacity * 4);
+  let indexBuf = new Uint32Array(capacity * 6);
+
+  function ensureCapacity() {
+    if (quadCount < capacity) return;
+    capacity *= 2;
+    const qc2 = new Uint8Array(capacity * 3);
+    qc2.set(quadColors);
+    quadColors = qc2;
+    const vx2 = new Uint8Array(capacity * 4);
+    vx2.set(vertPosX);
+    vertPosX = vx2;
+    const vy2 = new Uint8Array(capacity * 4);
+    vy2.set(vertPosY);
+    vertPosY = vy2;
+    const vz2 = new Uint16Array(capacity * 4);
+    vz2.set(vertPosZ);
+    vertPosZ = vz2;
+    const ib2 = new Uint32Array(capacity * 6);
+    ib2.set(indexBuf);
+    indexBuf = ib2;
+  }
+
+  for (const quad of quads) {
+    ensureCapacity();
+    const qi = quadCount;
+    const vi = qi * 4;
+    const ii = qi * 6;
+    const rgb = getBlockColor(blockColors, quad.typ);
+    quadColors[qi * 3] = rgb.r;
+    quadColors[qi * 3 + 1] = rgb.g;
+    quadColors[qi * 3 + 2] = rgb.b;
+
+    vertPosX[vi] = quad.v0x; vertPosY[vi] = quad.v0y; vertPosZ[vi] = quad.v0z;
+    vertPosX[vi + 1] = quad.v1x; vertPosY[vi + 1] = quad.v1y; vertPosZ[vi + 1] = quad.v1z;
+    vertPosX[vi + 2] = quad.v2x; vertPosY[vi + 2] = quad.v2y; vertPosZ[vi + 2] = quad.v2z;
+    vertPosX[vi + 3] = quad.v3x; vertPosY[vi + 3] = quad.v3y; vertPosZ[vi + 3] = quad.v3z;
+
+    if (quad.dir === 1) {
+      indexBuf[ii] = vi;
+      indexBuf[ii + 1] = vi + 1;
+      indexBuf[ii + 2] = vi + 2;
+      indexBuf[ii + 3] = vi;
+      indexBuf[ii + 4] = vi + 2;
+      indexBuf[ii + 5] = vi + 3;
+    } else {
+      indexBuf[ii] = vi;
+      indexBuf[ii + 1] = vi + 2;
+      indexBuf[ii + 2] = vi + 1;
+      indexBuf[ii + 3] = vi;
+      indexBuf[ii + 4] = vi + 3;
+      indexBuf[ii + 5] = vi + 2;
+    }
+
+    quadCount++;
+  }
+
+  const vertexCount = quadCount * 4;
+  const indexCount = quadCount * 6;
+  const colorBytes = quadCount * 3;
+  const colorPadded = (colorBytes + 3) & ~3;
+  const posBytes = vertexCount * 4;
+  const idxBytes = indexCount * 4;
+  const totalBytes = 24 + colorPadded + posBytes + idxBytes + 4;
+  const buf = new ArrayBuffer(totalBytes);
+  const view = new DataView(buf);
+
+  view.setInt32(0, worldX, true);
+  view.setInt32(4, worldY, true);
+  view.setInt32(8, worldZ, true);
+  view.setUint32(12, quadCount, true);
+  view.setUint32(16, indexCount, true);
+  view.setUint32(20, voxelSize, true);
+
+  let off = 24;
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadColors[qi * 3]);
+    view.setUint8(off++, quadColors[qi * 3 + 1]);
+    view.setUint8(off++, quadColors[qi * 3 + 2]);
+  }
+  off = 24 + colorPadded;
+
+  for (let vi = 0; vi < vertexCount; vi++) {
+    view.setUint8(off++, vertPosX[vi]);
+    view.setUint8(off++, vertPosY[vi]);
+    view.setUint16(off, vertPosZ[vi], true);
+    off += 2;
+  }
+
+  for (let ii = 0; ii < indexCount; ii++) {
+    view.setUint32(off, indexBuf[ii], true);
+    off += 4;
+  }
+
+  view.setUint32(off, chunkCoverage, true);
+  return buf;
+}
+
+function getBlockColor(blockColors: BlockColorTable, paletteIndex: number): { r: number; g: number; b: number } {
+  const off = paletteIndex * 3;
+  if (off + 2 >= blockColors.rgb.length) {
+    return { r: 128, g: 128, b: 128 };
+  }
+  return {
+    r: blockColors.rgb[off],
+    g: blockColors.rgb[off + 1],
+    b: blockColors.rgb[off + 2],
+  };
 }

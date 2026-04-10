@@ -9,6 +9,7 @@ import { existsSync, statSync } from "fs";
 import { parseSurfaceFile, MAP_SIZE } from "../parsers/surface.js";
 import { buildTerrainData } from "../services/terrain-data.js";
 import type { ColorMapService } from "../services/color-map.js";
+import { logger } from "../services/logger.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 
@@ -72,7 +73,7 @@ export function createTerrainRouter(
       res.set("ETag", etag);
       res.json(terrainData);
     } catch (e) {
-      console.error(`Terrain data error: ${e}`);
+      logger.error("Terrain data error", { error: e instanceof Error ? e.message : String(e) });
       res.status(500).json({ error: "Failed to generate terrain data" });
     }
   });

@@ -10,6 +10,7 @@ import sharp from "sharp";
 import { parseZon, type ZonValue } from "../parsers/zon.js";
 import type { BiomeDefinition } from "../parsers/biome.js";
 import type { Palette } from "../parsers/palette.js";
+import { logger } from "./logger.js";
 
 export interface RGB {
   r: number;
@@ -79,9 +80,10 @@ export class ColorMapService {
     this.buildPaletteColors(blockPalette);
     this.buildBiomePaletteColors(biomePalette, biomeDefinitions);
 
-    console.log(
-      `ColorMap: ${this.blockColors.size} block colors, ${this.biomeColors.size} biome colors`
-    );
+    logger.info("Color map initialized", {
+      blockColors: this.blockColors.size,
+      biomeColors: this.biomeColors.size,
+    });
   }
 
   private async loadBlockTextures(blocksDir: string): Promise<void> {

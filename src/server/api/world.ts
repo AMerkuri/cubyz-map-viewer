@@ -10,6 +10,7 @@ import { join } from "path";
 import { readdir, stat } from "fs/promises";
 import type { WorldMetadata } from "../parsers/world-meta.js";
 import { MAP_SIZE } from "../parsers/surface.js";
+import { logger } from "../services/logger.js";
 
 export interface SurfaceIndex {
   lod: number;
@@ -40,7 +41,7 @@ export function createWorldRouter(
       const index = await buildSurfaceIndex(savePath);
       res.json(index);
     } catch (e) {
-      console.error(`Surface index error: ${e}`);
+      logger.error("Surface index error", { error: e instanceof Error ? e.message : String(e) });
       res.json([]);
     }
   });
@@ -50,7 +51,7 @@ export function createWorldRouter(
       const index = await buildChunkIndex(savePath);
       res.json(index);
     } catch (e) {
-      console.error(`Chunk index error: ${e}`);
+      logger.error("Chunk index error", { error: e instanceof Error ? e.message : String(e) });
       res.json([]);
     }
   });

@@ -20,12 +20,15 @@ import { loadAllBiomes } from "./parsers/biome.js";
 import { ColorMapService } from "./services/color-map.js";
 import { LRUCache } from "./services/cache.js";
 import { SaveWatcher, type WatchEvent } from "./services/watcher.js";
+import { buildBlockColorTable } from "./services/block-color-table.js";
+import { VoxelMeshService } from "./services/voxel-mesh-service.js";
+import { logger } from "./services/logger.js";
 import { createTilesRouter } from "./api/tiles.js";
 import { createWorldRouter } from "./api/world.js";
 import { createPlayersRouter } from "./api/players.js";
 import { createTerrainRouter } from "./api/terrain.js";
 import { createBiomesRouter } from "./api/biomes.js";
-import { createVoxelsRouter, clearAllVoxelCache, clearVoxelCache } from "./api/voxels.js";
+import { createVoxelsRouter } from "./api/voxels.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -72,7 +75,7 @@ async function findSavePath(): Promise<string> {
 
   // Return the first save found (could be improved to pick most recent)
   const savePath = join(savesDir, saves[0]);
-  console.log(`Auto-detected save: ${savePath}`);
+  logger.info("Auto-detected save", { savePath });
   return savePath;
 }
 
@@ -104,16 +107,14 @@ function findCubyzPath(): string {
 }
 
 async function main() {
-  console.log("Cubyz Map Viewer - Starting...");
+  logger.info("Cubyz Map Viewer - Starting...");
 
   // Resolve paths
   const savePath = await findSavePath();
   const cubyzPath = findCubyzPath();
   const assetsPath = join(cubyzPath, "assets", "cubyz");
 
-  console.log(`Save path: ${savePath}`);
-  console.log(`Cubyz path: ${cubyzPath}`);
-  console.log(`Assets path: ${assetsPath}`);
+  logger.info("Resolved paths", { savePath, cubyzPath, assetsPath });
 
   // Verify save exists
   if (!existsSync(join(savePath, "world.zig.zon"))) {
@@ -121,29 +122,36 @@ async function main() {
   }
 
   // Load world metadata
-  console.log("Loading world metadata...");
+  logger.info("Loading world metadata");
   const worldMeta = await parseWorldMeta(join(savePath, "world.zig.zon"));
-  console.log(`World: ${worldMeta.name}, Spawn: (${worldMeta.spawn.join(", ")})`);
+  logger.info("Loaded world metadata", { worldName: worldMeta.name, spawn: worldMeta.spawn });
 
   // Load palettes
-  console.log("Loading palettes...");
+  logger.info("Loading palettes");
   const blockPalette = await loadPalette(join(savePath, "palette.zig.zon"));
   const biomePalette = await loadPalette(
     join(savePath, "biome_palette.zig.zon")
   );
-  console.log(
-    `Block palette: ${blockPalette.entries.length} entries, Biome palette: ${biomePalette.entries.length} entries`
-  );
+  logger.info("Loaded palettes", {
+    blockPaletteEntries: blockPalette.entries.length,
+    biomePaletteEntries: biomePalette.entries.length,
+  });
 
   // Load biome definitions
-  console.log("Loading biome definitions...");
+  logger.info("Loading biome definitions");
   const biomeDefinitions = await loadAllBiomes(join(assetsPath, "biomes"));
-  console.log(`Loaded ${biomeDefinitions.size} biome definitions`);
+  logger.info("Loaded biome definitions", { count: biomeDefinitions.size });
 
   // Initialize color map
-  console.log("Building color map from block textures...");
+  logger.info("Building color map from block textures");
   const colorMap = new ColorMapService();
   await colorMap.initialize(assetsPath, blockPalette, biomePalette, biomeDefinitions);
+  const voxelMeshService = new VoxelMeshService(
+    savePath,
+    buildBlockColorTable(colorMap),
+    process.env.VOXEL_WORKERS ? parseInt(process.env.VOXEL_WORKERS) : undefined,
+  );
+  await voxelMeshService.start();
 
   // Create tile cache (stores rendered PNGs with source file mtime for invalidation)
   const tileCache = new LRUCache<string, { buf: Buffer; mtime: number }>(CACHE_SIZE);
@@ -162,13 +170,28 @@ async function main() {
     next();
   });
 
+  app.use((req, res, next) => {
+    const startedAt = performance.now();
+    res.on("finish", () => {
+      logger.http("request completed", {
+        method: req.method,
+        path: req.originalUrl,
+        statusCode: res.statusCode,
+        responseTimeMs: Number((performance.now() - startedAt).toFixed(3)),
+        userAgent: req.get("user-agent"),
+        ip: req.ip,
+      });
+    });
+    next();
+  });
+
   // API routes
   app.use("/api/tiles", createTilesRouter(savePath, colorMap, tileCache));
   app.use("/api/world", createWorldRouter(savePath, worldMeta));
   app.use("/api/players", createPlayersRouter(savePath));
   app.use("/api/terrain", createTerrainRouter(savePath, colorMap));
   app.use("/api/biomes", createBiomesRouter(savePath, biomePalette));
-  app.use("/api/voxels", createVoxelsRouter(savePath, colorMap));
+  app.use("/api/voxels", createVoxelsRouter(voxelMeshService));
 
   app.get("/api/blocks/colors", (_req, res) => {
     res.json(colorMap.getAllBlockColors());
@@ -193,7 +216,7 @@ async function main() {
 
   wss.on("connection", (ws) => {
     wsClients.add(ws);
-    console.log(`WebSocket client connected (${wsClients.size} total)`);
+    logger.info("WebSocket client connected", { totalClients: wsClients.size });
     ws.send(JSON.stringify({
       type: "viewer-ws-connected",
       sentAt: Date.now(),
@@ -201,17 +224,17 @@ async function main() {
 
     ws.on("close", () => {
       wsClients.delete(ws);
-      console.log(`WebSocket client disconnected (${wsClients.size} total)`);
+      logger.info("WebSocket client disconnected", { totalClients: wsClients.size });
     });
 
     ws.on("error", (err) => {
-      console.error("WebSocket error:", err);
+      logger.error("WebSocket error", { error: err instanceof Error ? err.message : String(err) });
       wsClients.delete(ws);
     });
   });
 
   function broadcast(event: WatchEvent): void {
-    console.log("Watch event broadcast:", event.type, event.data ?? "");
+    logger.info("Watch event broadcast", { eventType: event.type, eventData: event.data ?? null });
     const msg = JSON.stringify({
       ...event,
       sentAt: Date.now(),
@@ -238,13 +261,13 @@ async function main() {
       if (tiles.length > 0) {
         const now = Date.now();
         if (now >= voxelFullClearCooldownUntil) {
-          clearAllVoxelCache();
+          voxelMeshService.clearAll();
           voxelFullClearCooldownUntil = now + VOXEL_FULL_CLEAR_THROTTLE_MS;
         }
       }
 
       for (const region of regions) {
-        clearVoxelCache(`${region.lod}/${region.regionX}/${region.regionY}`);
+        voxelMeshService.clear(`${region.lod}/${region.regionX}/${region.regionY}`);
       }
     }
     // Broadcast to all connected WebSocket clients
@@ -255,32 +278,37 @@ async function main() {
 
   // Graceful shutdown
   process.on("SIGINT", () => {
-    console.log("\nShutting down...");
+    logger.info("Shutting down");
     watcher.stop();
     wss.close();
     server.close();
-    process.exit(0);
+    void voxelMeshService.destroy().finally(() => {
+      process.exit(0);
+    });
   });
 
   // Start server
   server.listen(PORT, HOST, () => {
-    console.log(`\nCubyz Map Viewer API running on http://localhost:${PORT}`);
-    console.log(`Frontend dev server: http://localhost:5173`);
-    console.log(`\nAPI endpoints:`);
-    console.log(`  GET /api/world              - World metadata`);
-    console.log(`  GET /api/world/surface-index - Available surface files`);
-    console.log(`  GET /api/world/chunk-index  - Available chunk columns`);
-    console.log(`  GET /api/players            - Player positions`);
-    console.log(`  GET /api/tiles/:lod/:x/:y.png - Map tiles`);
-    console.log(`  GET /api/terrain/:lod/:x/:y - 3D terrain data`);
-    console.log(`  GET /api/biomes/:lod/:x/:y  - Biome regions for tile`);
-    console.log(`  GET /api/voxels/:lod/:rx/:ry - Greedy-meshed voxel geometry`);
-    console.log(`  GET /api/blocks/colors      - Block color palette`);
-    console.log(`  WS  /ws                     - Real-time updates`);
+    logger.info("Server listening", {
+      url: `http://localhost:${PORT}`,
+      frontendUrl: "http://localhost:5173",
+      endpoints: [
+        "GET /api/world",
+        "GET /api/world/surface-index",
+        "GET /api/world/chunk-index",
+        "GET /api/players",
+        "GET /api/tiles/:lod/:x/:y.png",
+        "GET /api/terrain/:lod/:x/:y",
+        "GET /api/biomes/:lod/:x/:y",
+        "GET /api/voxels/:lod/:rx/:ry",
+        "GET /api/blocks/colors",
+        "WS /ws",
+      ],
+    });
   });
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  logger.error("Fatal error", { error: err instanceof Error ? err.message : String(err) });
   process.exit(1);
 });

@@ -9,6 +9,7 @@ import { join } from "path";
 import { existsSync } from "fs";
 import { parseSurfaceFile, MAP_SIZE } from "../parsers/surface.js";
 import type { Palette } from "../parsers/palette.js";
+import { logger } from "../services/logger.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 
@@ -61,7 +62,7 @@ export function createBiomesRouter(
       res.set("Cache-Control", "public, max-age=60");
       res.json({ tileX: x, tileY: y, lod, regions });
     } catch (e) {
-      console.error(`Biome data error: ${e}`);
+      logger.error("Biome data error", { error: e instanceof Error ? e.message : String(e) });
       res.status(500).json({ error: "Failed to extract biome data" });
     }
   });

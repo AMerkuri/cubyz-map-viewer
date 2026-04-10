@@ -7,6 +7,7 @@
 import { watch, type FSWatcher } from "chokidar";
 import { join, relative, sep } from "path";
 import { EventEmitter } from "events";
+import { logger } from "./logger.js";
 
 export type WatchEventType =
   | "players-updated"
@@ -79,10 +80,10 @@ export class SaveWatcher extends EventEmitter {
     this.watcher.on("add", (filePath: string) => this.handleAdd(filePath));
     this.watcher.on("unlink", (filePath: string) => this.handleRemove(filePath));
     this.watcher.on("error", (err) => {
-      console.error("SaveWatcher error:", err);
+      logger.error("SaveWatcher error", { error: err instanceof Error ? err.message : String(err) });
     });
 
-    console.log("SaveWatcher: watching for file changes...");
+    logger.info("SaveWatcher watching for file changes");
   }
 
   stop(): void {

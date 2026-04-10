@@ -14,6 +14,7 @@ import {
 import type { ColorMapService } from "../services/color-map.js";
 import { WATER_COLOR } from "../services/color-map.js";
 import type { LRUCache } from "../services/cache.js";
+import { logger } from "../services/logger.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 
@@ -96,7 +97,7 @@ export function createTilesRouter(
       res.set("Cache-Control", "public, max-age=10");
       res.send(tileBuf);
     } catch (e) {
-      console.error(`Tile render error: ${e}`);
+      logger.error("Tile render error", { error: e instanceof Error ? e.message : String(e) });
       const empty = await getEmptyTile();
       res.set("Content-Type", "image/png");
       res.send(empty);
