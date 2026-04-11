@@ -67,6 +67,7 @@ export function initializeSceneRuntime(args: {
     camDist: number,
   ) => Promise<void> | void;
   publishChunkStats: (fpsValue: number) => void;
+  publishVoxelLoading: () => void;
   clearTerrainTiles: () => void;
   clearVoxelTiles: () => void;
   clearBiomeLabels: () => void;
@@ -106,6 +107,7 @@ export function initializeSceneRuntime(args: {
     clearDebugLabels,
     refreshBiomeLabels,
     publishChunkStats,
+    publishVoxelLoading,
     clearTerrainTiles,
     clearVoxelTiles,
     clearBiomeLabels,
@@ -285,6 +287,8 @@ export function initializeSceneRuntime(args: {
 
     renderer.render(scene, camera);
     labelRenderer.render(scene, camera);
+
+    publishVoxelLoading();
 
     if (debugEnabledRef.current) {
       fpsFrameCounter++;

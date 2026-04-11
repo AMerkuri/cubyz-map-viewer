@@ -1,3 +1,5 @@
+import { uiTheme } from "../../../shared/ui/theme.js";
+
 interface ViewToggleProps {
   view: "terrain" | "voxel";
   onViewChange: (view: "terrain" | "voxel") => void;
@@ -23,8 +25,12 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 600,
-          background: view === "terrain" ? "#4a90d9" : "#2a2a3e",
-          color: view === "terrain" ? "#fff" : "#aaa",
+          background:
+            view === "terrain"
+              ? uiTheme.accent.surfaceActive
+              : uiTheme.panel.buttonBackgroundMuted,
+          color:
+            view === "terrain" ? uiTheme.text.onAccent : uiTheme.text.muted,
           transition: "all 0.2s",
         }}
       >
@@ -39,8 +45,11 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 600,
-          background: view === "voxel" ? "#4a90d9" : "#2a2a3e",
-          color: view === "voxel" ? "#fff" : "#aaa",
+          background:
+            view === "voxel"
+              ? uiTheme.accent.surfaceActive
+              : uiTheme.panel.buttonBackgroundMuted,
+          color: view === "voxel" ? uiTheme.text.onAccent : uiTheme.text.muted,
           transition: "all 0.2s",
         }}
       >

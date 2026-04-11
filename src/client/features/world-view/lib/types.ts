@@ -146,11 +146,14 @@ export interface World3DViewProps {
   showVoxelTerrain: boolean;
   showBiomeLabels: boolean;
   showVoxelHeightLabels: boolean;
+  renderDistance: number;
   voxelLod1MaxDist: number;
+  minRenderedVoxelLod: number;
   debugEnabled: boolean;
   debugSettings: MapDebugSettings;
   onCursorMove: (pos: [number, number, number] | null) => void;
   onChunkStatsChange: (stats: import("../debug.js").ChunkStats) => void;
+  onVoxelLoadingChange: (loading: boolean) => void;
   initialCameraState: InitialCameraState | null;
   onShareStateChange: (state: {
     mode: "terrain" | "voxel";

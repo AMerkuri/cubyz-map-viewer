@@ -40,6 +40,7 @@
  */
 
 import type { BlockColorTable } from "./block-color-table.js";
+import { FALLBACK_BLOCK_COLOR } from "./color-map.js";
 
 export interface BinaryQuad {
   v0x: number;
@@ -978,7 +979,7 @@ function getBlockColor(
 ): { r: number; g: number; b: number } {
   const off = paletteIndex * 3;
   if (off + 2 >= blockColors.rgb.length) {
-    return { r: 128, g: 128, b: 128 };
+    return FALLBACK_BLOCK_COLOR;
   }
   return {
     r: blockColors.rgb[off],

@@ -20,7 +20,13 @@ import type { PlayerData } from "../features/world-view/hooks/usePlayers.js";
 import { usePlayers } from "../features/world-view/hooks/usePlayers.js";
 import { useWebSocket } from "../features/world-view/hooks/useWebSocket.js";
 import { useWorldData } from "../features/world-view/hooks/useWorldData.js";
+import {
+  GRAPHICS_PRESETS,
+  type GraphicsPreset,
+  matchesGraphicsPreset,
+} from "../features/world-view/lib/graphics-presets.js";
 import { OverlayPanel } from "../shared/ui/OverlayPanel.js";
+import { uiTheme } from "../shared/ui/theme.js";
 
 type ShareLocationState =
   | {
@@ -38,10 +44,68 @@ type ShareLocationState =
       phi: number;
     };
 
+const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
+const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
+
 function formatMemoryBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function LoadingIndicator({ visible }: { visible: boolean }) {
+  const [mounted, setMounted] = useState(visible);
+  const [shown, setShown] = useState(visible);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      const frame = window.requestAnimationFrame(() => {
+        setShown(true);
+      });
+      return () => {
+        window.cancelAnimationFrame(frame);
+      };
+    }
+
+    setShown(false);
+    const timeout = window.setTimeout(() => {
+      setMounted(false);
+    }, 180);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [visible]);
+
+  if (!mounted) return null;
+
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        right: 12,
+        bottom: 12,
+        zIndex: 1000,
+        pointerEvents: "none",
+        opacity: shown ? 1 : 0,
+        transition: "opacity 180ms ease",
+        willChange: "opacity",
+      }}
+    >
+      <div
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: 999,
+          border: `3px solid color-mix(in srgb, ${uiTheme.accent.spinnerTop} 16%, transparent)`,
+          borderTopColor: uiTheme.accent.spinnerTop,
+          borderRightColor: uiTheme.accent.spinnerRight,
+          animation: "cubyz-half-spin 0.8s linear infinite",
+        }}
+      />
+    </div>
+  );
 }
 
 export function App() {
@@ -213,6 +277,39 @@ export function App() {
     voxelHeightLabels: false,
   });
   const [voxelLod1MaxDist, setVoxelLod1MaxDist] = useState(600);
+  const [renderDistance, setRenderDistance] = useState(
+    DEFAULT_VOXEL_RENDER_DISTANCE,
+  );
+  const [minRenderedVoxelLod, setMinRenderedVoxelLod] = useState(
+    DEFAULT_MIN_RENDERED_VOXEL_LOD,
+  );
+  const [voxelLoading, setVoxelLoading] = useState(false);
+
+  const applyGraphicsPreset = useCallback((preset: GraphicsPreset) => {
+    setRenderDistance(preset.renderDistance);
+    setMinRenderedVoxelLod(preset.minRenderedVoxelLod);
+    if (preset.minRenderedVoxelLod === 1) {
+      setVoxelLod1MaxDist(preset.voxelLod1MaxDist);
+    }
+    setMapDebugSettings((prev) => ({
+      ...prev,
+      ...preset.debugSettings,
+    }));
+  }, []);
+
+  const activeGraphicsPresetId = useMemo(() => {
+    return (
+      GRAPHICS_PRESETS.find((preset) =>
+        matchesGraphicsPreset({
+          preset,
+          renderDistance,
+          voxelLod1MaxDist,
+          minRenderedVoxelLod,
+          debugSettings: mapDebugSettings,
+        }),
+      )?.id ?? null
+    );
+  }, [renderDistance, voxelLod1MaxDist, minRenderedVoxelLod, mapDebugSettings]);
 
   const handleLayerVisibilityChange = useCallback((next: LayerVisibility) => {
     const normalized = next.debug
@@ -236,13 +333,6 @@ export function App() {
 
   const players = usePlayers();
   const { lastUpdateAt, subscribe } = useWebSocket();
-
-  const updateAge = useMemo(() => {
-    if (lastUpdateAt === null) return "-";
-    const deltaMs = Date.now() - lastUpdateAt;
-    if (deltaMs < 1000) return `${deltaMs} ms ago`;
-    return `${(deltaMs / 1000).toFixed(1)} s ago`;
-  }, [lastUpdateAt]);
 
   // Wire up WebSocket events to refresh data
   useEffect(() => {
@@ -308,12 +398,15 @@ export function App() {
         showVoxelTerrain={layerVisibility.showVoxelTerrain}
         showVoxelHeightLabels={layerVisibility.voxelHeightLabels}
         showBiomeLabels={layerVisibility.biomeLabels}
+        renderDistance={renderDistance}
         voxelLod1MaxDist={voxelLod1MaxDist}
+        minRenderedVoxelLod={minRenderedVoxelLod}
         debugEnabled={layerVisibility.debug}
         debugSettings={mapDebugSettings}
         mode={view}
         onCursorMove={handleCursorMove}
         onChunkStatsChange={handleChunkStatsChange}
+        onVoxelLoadingChange={setVoxelLoading}
         onShareStateChange={handleShareStateChange}
         initialCameraState={initialCameraState}
         flyToRequest={flyToRequest}
@@ -338,8 +431,10 @@ export function App() {
             padding: "8px 14px",
             border: "none",
             borderRadius: 6,
-            background: shareCopied ? "#4a90d9" : "#2a2a3e",
-            color: shareCopied ? "#fff" : "#aaa",
+            background: shareCopied
+              ? uiTheme.accent.surfaceActive
+              : uiTheme.panel.buttonBackgroundMuted,
+            color: shareCopied ? uiTheme.text.onAccent : uiTheme.text.muted,
             fontSize: 13,
             fontWeight: 600,
             cursor: "pointer",
@@ -351,6 +446,10 @@ export function App() {
         <ViewToggle view={view} onViewChange={handleViewChange} />
       </div>
 
+      <LoadingIndicator
+        visible={layerVisibility.debug ? false : voxelLoading}
+      />
+
       {layerVisibility.debug && (
         <>
           <OverlayPanel
@@ -360,7 +459,11 @@ export function App() {
             maxWidth={360}
             collapsible={true}
             defaultCollapsed={true}
-            contentStyle={{ fontSize: 12, lineHeight: 1.55, color: "#d6d9ea" }}
+            contentStyle={{
+              fontSize: 12,
+              lineHeight: 1.55,
+              color: uiTheme.text.secondary,
+            }}
           >
             <div style={{ display: "grid", gap: 6 }}>
               <div>
@@ -368,11 +471,16 @@ export function App() {
               </div>
               <div>Focus LOD: {chunkStats.focusLod}</div>
               <div>FPS: {chunkStats.fps}</div>
-              <div>WS age: {updateAge}</div>
               <div>Loading chunks: {chunkStats.loading}</div>
               <div>Loaded chunks: {chunkStats.loaded}</div>
 
-              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>
+              <div
+                style={{
+                  marginTop: 4,
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                }}
+              >
                 Loading breakdown
               </div>
               <div>Terrain loading: {chunkStats.loadingBreakdown.terrain}</div>
@@ -380,13 +488,25 @@ export function App() {
               <div>Fetch queue: {chunkStats.loadingBreakdown.fetchQueue}</div>
               <div>Mesh queue: {chunkStats.loadingBreakdown.meshQueue}</div>
 
-              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>
+              <div
+                style={{
+                  marginTop: 4,
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                }}
+              >
                 Voxel health
               </div>
               <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
               <div>Failed regions: {chunkStats.voxelHealth.failed}</div>
 
-              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>
+              <div
+                style={{
+                  marginTop: 4,
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                }}
+              >
                 Loaded by LOD
               </div>
               <div>
@@ -395,7 +515,13 @@ export function App() {
                   .join("  ")}
               </div>
 
-              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>
+              <div
+                style={{
+                  marginTop: 4,
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                }}
+              >
                 Estimated Memory
               </div>
               <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
@@ -420,7 +546,13 @@ export function App() {
                   : formatMemoryBytes(chunkStats.jsHeapBytes)}
               </div>
 
-              <div style={{ marginTop: 4, color: "#8fa4e8", fontWeight: 700 }}>
+              <div
+                style={{
+                  marginTop: 4,
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                }}
+              >
                 Memory by LOD
               </div>
               <div>
@@ -441,11 +573,22 @@ export function App() {
             maxWidth={360}
             collapsible={true}
             defaultCollapsed={true}
-            contentStyle={{ fontSize: 12, lineHeight: 1.55, color: "#d6d9ea" }}
+            contentStyle={{
+              fontSize: 12,
+              lineHeight: 1.55,
+              color: uiTheme.text.secondary,
+            }}
           >
             <MapDebugParameters
+              view={view}
               settings={mapDebugSettings}
               onChange={setMapDebugSettings}
+              renderDistance={renderDistance}
+              onRenderDistanceChange={setRenderDistance}
+              voxelLod1MaxDist={voxelLod1MaxDist}
+              onVoxelLod1MaxDistChange={setVoxelLod1MaxDist}
+              minRenderedVoxelLod={minRenderedVoxelLod}
+              onMinRenderedVoxelLodChange={setMinRenderedVoxelLod}
               chunkBorders={layerVisibility.chunkBorders}
               voxelHeights={layerVisibility.voxelHeightLabels}
               onChunkBordersChange={(active) =>
@@ -465,41 +608,6 @@ export function App() {
         </>
       )}
 
-      <OverlayPanel
-        title="Controls"
-        position={{ top: 12, left: 12 }}
-        minWidth={250}
-        maxWidth={350}
-        collapsible={true}
-      >
-        <div
-          style={{
-            fontSize: 12,
-            lineHeight: 1.55,
-            color: "#d6d9ea",
-            display: "grid",
-            gap: 8,
-          }}
-        >
-          <div>
-            <div style={{ color: "#8fa4e8", fontWeight: 700, marginBottom: 2 }}>
-              Mouse
-            </div>
-            <div>Left drag: pan</div>
-            <div>Right drag: orbit</div>
-            <div>Wheel / middle drag: zoom</div>
-          </div>
-          <div>
-            <div style={{ color: "#8fa4e8", fontWeight: 700, marginBottom: 2 }}>
-              Keyboard
-            </div>
-            <div>W/A/S/D or arrows: move camera target</div>
-            <div>Q / E: rotate around center</div>
-            <div>Space: focus spawn</div>
-          </div>
-        </div>
-      </OverlayPanel>
-
       {/* Always mounted; shown/hidden via style.display to avoid re-renders on mouse move */}
       <div
         ref={cursorHudRef}
@@ -510,12 +618,12 @@ export function App() {
           left: "50%",
           transform: "translateX(-50%)",
           zIndex: 1000,
-          background: "rgba(26, 26, 46, 0.88)",
-          border: "1px solid rgba(255,255,255,0.1)",
+          background: uiTheme.panel.background,
+          border: `1px solid ${uiTheme.panel.border}`,
           borderRadius: 6,
           padding: "5px 14px",
           fontSize: 12,
-          color: "#ddd",
+          color: uiTheme.text.secondary,
           pointerEvents: "none",
           whiteSpace: "nowrap",
           boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
@@ -525,21 +633,117 @@ export function App() {
 
       <OverlayPanel
         title="Map Controls"
-        position={{ right: 12, bottom: 12 }}
-        minWidth={180}
+        position={{ top: 12, left: 12 }}
+        minWidth={250}
+        maxWidth={350}
         collapsible={true}
         contentStyle={{ fontSize: 12, lineHeight: 1.55 }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {view === "voxel" && (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span style={{ color: uiTheme.accent.text, fontWeight: 700 }}>
+                  Graphics Presets
+                </span>
+                <span style={{ color: uiTheme.text.muted, fontSize: 11 }}>
+                  {activeGraphicsPresetId === null ? "Custom" : ""}
+                </span>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: 6,
+                }}
+              >
+                {GRAPHICS_PRESETS.map((preset) => {
+                  const active = preset.id === activeGraphicsPresetId;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyGraphicsPreset(preset)}
+                      title={preset.description}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 6,
+                        border: active
+                          ? `1px solid ${uiTheme.accent.border}`
+                          : `1px solid ${uiTheme.panel.buttonBorderMuted}`,
+                        background: active
+                          ? uiTheme.accent.surfaceActive
+                          : uiTheme.panel.buttonBackgroundMuted,
+                        color: active
+                          ? uiTheme.text.onAccent
+                          : uiTheme.text.secondary,
+                        cursor: "pointer",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        textAlign: "center",
+                      }}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <LayerControls
             visibility={layerVisibility}
             onChange={handleLayerVisibilityChange}
             view={view}
-            voxelLod1MaxDist={voxelLod1MaxDist}
-            onVoxelLod1MaxDistChange={setVoxelLod1MaxDist}
           />
+          <div
+            style={{
+              fontSize: 12,
+              lineHeight: 1.55,
+              color: uiTheme.text.secondary,
+              display: "grid",
+              gap: 8,
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                  marginBottom: 2,
+                }}
+              >
+                Mouse
+              </div>
+              <div>Left drag: pan</div>
+              <div>Right drag: orbit</div>
+              <div>Wheel / middle drag: zoom</div>
+            </div>
+            <div>
+              <div
+                style={{
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                  marginBottom: 2,
+                }}
+              >
+                Keyboard
+              </div>
+              <div>W/A/S/D or arrows: move camera target</div>
+              <div>Q / E: rotate around center</div>
+              <div>Space: focus spawn</div>
+            </div>
+          </div>
         </div>
       </OverlayPanel>
+
+      <style>{`@keyframes cubyz-half-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       <InfoPanel
         worldData={worldData}

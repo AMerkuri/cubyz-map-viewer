@@ -83,7 +83,7 @@ Business logic and runtime infrastructure.
 
 Examples:
 
-- `color-map.ts`: builds block colors from textures and biome data
+- `color-map.ts`: builds block colors from textures and biome data; missing block textures fall back to a light-purple placeholder
 - `tile-renderer.ts`: converts parsed surface data into PNG tiles
 - `terrain-data.ts`: prepares terrain payloads for the client
 - `voxel-mesh-service.ts`: cache, dedupe, and orchestration for voxel mesh generation

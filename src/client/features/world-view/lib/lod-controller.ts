@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { TERRAIN_LOD_DISTANCE_THRESHOLDS } from "./constants.js";
+import { LOD_LEVELS, TERRAIN_LOD_DISTANCE_THRESHOLDS } from "./constants.js";
 import {
   getLodForDistance,
   getLodForDistanceWithHysteresis,
@@ -35,6 +35,7 @@ export function checkAndUpdateLod(args: {
     controls: OrbitControls,
   ) => { point: THREE.Vector3; zoomDist: number };
   voxelLodThresholds: { maxDist: number; lod: number }[];
+  minRenderedVoxelLod: number;
   voxelLodHysteresisRatio: number;
   updateVoxelLod: (
     target: THREE.Vector3,
@@ -75,6 +76,7 @@ export function checkAndUpdateLod(args: {
     terrainVisibilityDirtyRef,
     resolveVoxelLodFocus,
     voxelLodThresholds,
+    minRenderedVoxelLod,
     voxelLodHysteresisRatio,
     updateVoxelLod,
     debugLabelsDirtyRef,
@@ -138,12 +140,19 @@ export function checkAndUpdateLod(args: {
     }
 
     const focus = resolveVoxelLodFocus(camera, controls);
-    const focusLod = getLodForDistanceWithHysteresis(
+    const unclampedFocusLod = getLodForDistanceWithHysteresis(
       focus.zoomDist,
       activeFocusLodRef.current,
       voxelLodThresholds,
       voxelLodHysteresisRatio,
     );
+    const focusLod =
+      LOD_LEVELS[
+        Math.max(
+          LOD_LEVELS.indexOf(unclampedFocusLod),
+          LOD_LEVELS.indexOf(minRenderedVoxelLod),
+        )
+      ];
     activeFocusLodRef.current = focusLod;
     updateVoxelLod(
       focus.point,

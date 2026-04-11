@@ -297,6 +297,8 @@ export function updateVoxelLod(args: {
   pendingVoxelMeshQueue: PendingVoxelMeshItem[];
   voxelUnloadGraceUntil: Map<string, number>;
   voxelThresholds: { maxDist: number; lod: number }[];
+  renderDistance: number;
+  minRenderedVoxelLod: number;
   activeVoxelRequestGenerationRef: { current: number };
   voxelLastMotionAt: number;
   voxelDetailRequestDebounceMs: number;
@@ -332,6 +334,8 @@ export function updateVoxelLod(args: {
     pendingVoxelMeshQueue,
     voxelUnloadGraceUntil,
     voxelThresholds,
+    renderDistance,
+    minRenderedVoxelLod,
     activeVoxelRequestGenerationRef,
     voxelLastMotionAt,
     voxelDetailRequestDebounceMs,
@@ -371,6 +375,8 @@ export function updateVoxelLod(args: {
     pendingVoxelMeshQueue,
     voxelUnloadGraceUntil,
     voxelThresholds,
+    renderDistance,
+    minRenderedVoxelLod,
     requestGeneration,
     now,
     stableForDetail,

@@ -112,14 +112,14 @@ export function getSelectionDistForLod(
   lod: number,
   voxelThresholds: { maxDist: number; lod: number }[],
   lodUnloadHysteresis: number,
-  fallbackMaxDist: number,
+  renderDistance: number,
 ): number {
   const unloadDist = getUnloadDistForLod(
     lod,
     voxelThresholds,
     lodUnloadHysteresis,
   );
-  return Number.isFinite(unloadDist) ? unloadDist : fallbackMaxDist;
+  return Number.isFinite(unloadDist) ? unloadDist : renderDistance;
 }
 
 export function noteVoxelRequest(args: {
@@ -181,6 +181,8 @@ export function runVoxelLodSelection(args: {
   pendingVoxelMeshQueue: PendingVoxelMeshItem[];
   voxelUnloadGraceUntil: Map<string, number>;
   voxelThresholds: { maxDist: number; lod: number }[];
+  renderDistance: number;
+  minRenderedVoxelLod: number;
   requestGeneration: number;
   now: number;
   stableForDetail: boolean;
@@ -213,6 +215,8 @@ export function runVoxelLodSelection(args: {
     pendingVoxelMeshQueue,
     voxelUnloadGraceUntil,
     voxelThresholds,
+    renderDistance,
+    minRenderedVoxelLod,
     requestGeneration,
     now,
     stableForDetail,
@@ -231,12 +235,22 @@ export function runVoxelLodSelection(args: {
     };
   }
 
-  const fallbackMaxDist =
-    (voxelThresholds[voxelThresholds.length - 2]?.maxDist ?? 9600) * 2;
   const visibleQuadrantMasks = new Map<string, number>();
   const coverageVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
   const detailVoxelRequests = new Map<string, PendingVoxelFetchRequest>();
   const retainedLoadedVoxelKeys = new Set<string>();
+  const minAllowedLodIndex = LOD_LEVELS.indexOf(minRenderedVoxelLod);
+
+  const clampAllowedLod = (lod: number) => {
+    const lodIndex = LOD_LEVELS.indexOf(lod);
+    if (lodIndex === -1) return lod;
+    const boundedIndex = Math.max(lodIndex, minAllowedLodIndex);
+    return LOD_LEVELS[boundedIndex] ?? lod;
+  };
+
+  const isAllowedLod = (lod: number) => {
+    return lod >= minRenderedVoxelLod;
+  };
 
   const addQuadrant = (key: string, quadrant: number) => {
     addVisibleQuadrant(visibleQuadrantMasks, key, quadrant);
@@ -270,7 +284,7 @@ export function runVoxelLodSelection(args: {
       lod,
       voxelThresholds,
       debugSettings.lodUnloadHysteresis,
-      fallbackMaxDist,
+      renderDistance,
     );
   };
 
@@ -310,11 +324,13 @@ export function runVoxelLodSelection(args: {
       entry.regionX,
       entry.regionY,
     );
-    const desiredLod = getLodForDistanceWithHysteresis(
-      lodSelectionDist,
-      focusLod,
-      voxelThresholds,
-      debugSettings.voxelLodHysteresisRatio,
+    const desiredLod = clampAllowedLod(
+      getLodForDistanceWithHysteresis(
+        lodSelectionDist,
+        focusLod,
+        voxelThresholds,
+        debugSettings.voxelLodHysteresisRatio,
+      ),
     );
     const loadedTile = loadedVoxels.get(key);
     const selfLoaded = !!loadedTile;
@@ -325,7 +341,7 @@ export function runVoxelLodSelection(args: {
     let hasSelectedCoverage = false;
     let needsSelfFallback = false;
 
-    if (entry.lod > desiredLod) {
+    if (entry.lod > desiredLod && entry.lod > minRenderedVoxelLod) {
       const children = getImmediateFinerVoxelChildren(
         entry.lod,
         entry.regionX,
@@ -345,18 +361,18 @@ export function runVoxelLodSelection(args: {
           continue;
         }
 
-        needsSelfFallback = true;
-        if (selfLoaded) {
+        needsSelfFallback = isAllowedLod(entry.lod);
+        if (selfLoaded && isAllowedLod(entry.lod)) {
           addQuadrant(key, quadrant);
           hasSelectedCoverage = true;
         }
       }
     } else {
-      needsSelfFallback = true;
-      if (selfLoaded && selfComplete) {
+      needsSelfFallback = isAllowedLod(entry.lod);
+      if (selfLoaded && selfComplete && isAllowedLod(entry.lod)) {
         visibleQuadrantMasks.set(key, 0b1111);
         hasSelectedCoverage = true;
-      } else if (selfLoaded) {
+      } else if (selfLoaded && isAllowedLod(entry.lod)) {
         retainedLoadedVoxelKeys.add(key);
         if (!hasLoadedFallback) {
           visibleQuadrantMasks.set(key, 0b1111);
@@ -395,7 +411,7 @@ export function runVoxelLodSelection(args: {
   let debugLabelsDirty = false;
   for (const [key, tile] of loadedVoxels) {
     const quadrantMask = visibleQuadrantMasks.get(key) ?? 0;
-    const visible = quadrantMask !== 0;
+    const visible = quadrantMask !== 0 && isAllowedLod(tile.lod);
     const effectiveDist = getEffectiveDist(
       tile.lod,
       tile.regionX,
@@ -438,7 +454,7 @@ export function runVoxelLodSelection(args: {
     if (
       !requestedVoxelRequests.has(key) &&
       !inGrace &&
-      effectiveDist > unloadDist
+      (effectiveDist > unloadDist || !isAllowedLod(tile.lod))
     ) {
       unloadVoxelTile(key);
       debugLabelsDirty = true;
@@ -455,7 +471,8 @@ export function runVoxelLodSelection(args: {
     );
     if (
       !requestedVoxelRequests.has(key) &&
-      effectiveDist > getSelectionDist(parsed.lod) * 1.1
+      (effectiveDist > getSelectionDist(parsed.lod) * 1.1 ||
+        !isAllowedLod(parsed.lod))
     ) {
       loadingVoxels.delete(key);
       pendingVoxelMeshQueue.splice(

@@ -32,8 +32,6 @@ export async function fetchBiomes(
         if (!res.ok) return null;
         return res.json() as Promise<BiomesResponse>;
       },
-      staleTime: 30_000,
-      retry: false,
     });
   } catch {
     return null;

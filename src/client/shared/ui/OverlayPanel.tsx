@@ -1,4 +1,5 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { uiTheme } from "./theme.js";
 
 interface OverlayPanelProps {
   title: string;
@@ -17,13 +18,22 @@ interface OverlayPanelProps {
   collapsible?: boolean;
   defaultCollapsed?: boolean;
   contentStyle?: React.CSSProperties;
+  style?: React.CSSProperties;
 }
 
-interface PanelOffset {
-  x: number;
-  y: number;
+interface PanelPosition {
+  left: number;
+  top: number;
 }
 
+interface PanelBounds {
+  minLeft: number;
+  maxLeft: number;
+  minTop: number;
+  maxTop: number;
+}
+
+const VIEWPORT_EDGE_PADDING_PX = 12;
 const SNAP_DISTANCE_PX = 24;
 const RESET_GLYPH_SIZE = 12;
 
@@ -39,30 +49,38 @@ export function OverlayPanel({
   collapsible = false,
   defaultCollapsed = false,
   contentStyle,
+  style,
 }: OverlayPanelProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
-  const [offset, setOffset] = useState<PanelOffset>({ x: 0, y: 0 });
+  const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(
+    null,
+  );
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
     pointerId: number;
     startPointerX: number;
     startPointerY: number;
-    startOffsetX: number;
-    startOffsetY: number;
+    startLeft: number;
+    startTop: number;
   } | null>(null);
 
-  const baseStyle = useMemo(() => {
-    if (!absolute) {
-      return {
-        position: "relative" as const,
-      };
-    }
+  useEffect(() => {
+    if (!absolute || !panelPosition) return;
 
-    return {
-      position: "absolute" as const,
-      ...(position ?? {}),
+    const handleResize = () => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      setPanelPosition((current) => {
+        if (!current) return current;
+        return clampPositionToViewport(current, panel);
+      });
     };
-  }, [absolute, position]);
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [absolute, panelPosition]);
 
   useEffect(() => {
     if (!absolute) return;
@@ -74,11 +92,11 @@ export function OverlayPanel({
       const panel = panelRef.current;
       if (!panel) return;
 
-      const nextOffset = {
-        x: dragState.startOffsetX + (event.clientX - dragState.startPointerX),
-        y: dragState.startOffsetY + (event.clientY - dragState.startPointerY),
+      const nextPosition = {
+        left: dragState.startLeft + (event.clientX - dragState.startPointerX),
+        top: dragState.startTop + (event.clientY - dragState.startPointerY),
       };
-      setOffset(applySnapToViewport(nextOffset, panel, position));
+      setPanelPosition(clampPositionToViewport(nextPosition, panel));
     };
 
     const stopDragging = (event: PointerEvent) => {
@@ -96,25 +114,29 @@ export function OverlayPanel({
       window.removeEventListener("pointerup", stopDragging);
       window.removeEventListener("pointercancel", stopDragging);
     };
-  }, [absolute, position]);
+  }, [absolute]);
 
-  const moved = offset.x !== 0 || offset.y !== 0;
-
-  const panelStyle: React.CSSProperties = {
-    ...baseStyle,
+  const moved = panelPosition !== null;
+  const panelContainerStyle: React.CSSProperties = {
+    position: absolute ? "absolute" : "relative",
+    ...(absolute
+      ? panelPosition
+        ? { left: panelPosition.left, top: panelPosition.top }
+        : { ...(position ?? {}) }
+      : {}),
     zIndex,
-    background: "rgba(26, 26, 46, 0.82)",
-    border: "1px solid rgba(255,255,255,0.14)",
+    background: uiTheme.panel.background,
+    border: `1px solid ${uiTheme.panel.border}`,
     borderRadius: 8,
-    boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-    backdropFilter: "blur(10px)",
+    boxShadow: uiTheme.panel.shadow,
+    backdropFilter: "blur(5px)",
     minWidth,
     maxWidth,
-    transform: absolute ? `translate(${offset.x}px, ${offset.y}px)` : undefined,
+    ...style,
   };
 
   return (
-    <div ref={panelRef} style={panelStyle}>
+    <div ref={panelRef} style={panelContainerStyle}>
       <div
         onPointerDown={(event) => {
           if (!absolute) return;
@@ -125,12 +147,16 @@ export function OverlayPanel({
           )
             return;
 
+          const panel = panelRef.current;
+          if (!panel) return;
+          const rect = panel.getBoundingClientRect();
+
           dragStateRef.current = {
             pointerId: event.pointerId,
             startPointerX: event.clientX,
             startPointerY: event.clientY,
-            startOffsetX: offset.x,
-            startOffsetY: offset.y,
+            startLeft: rect.left,
+            startTop: rect.top,
           };
           (event.currentTarget as HTMLDivElement).setPointerCapture(
             event.pointerId,
@@ -147,7 +173,9 @@ export function OverlayPanel({
           userSelect: "none",
         }}
       >
-        <div style={{ color: "#7aa2f7", fontSize: 14, fontWeight: 700 }}>
+        <div
+          style={{ color: uiTheme.accent.title, fontSize: 14, fontWeight: 700 }}
+        >
           {title}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -155,7 +183,7 @@ export function OverlayPanel({
           {moved && absolute && (
             <button
               type="button"
-              onClick={() => setOffset({ x: 0, y: 0 })}
+              onClick={() => setPanelPosition(null)}
               style={headerButtonStyle}
               title="Reset panel position"
               aria-label="Reset panel position"
@@ -191,81 +219,52 @@ export function OverlayPanel({
   );
 }
 
-function applySnapToViewport(
-  offset: PanelOffset,
+function clampPositionToViewport(
+  position: PanelPosition,
   panel: HTMLDivElement,
-  position: OverlayPanelProps["position"],
-): PanelOffset {
+): PanelPosition {
   const rect = panel.getBoundingClientRect();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
-  const bounds = getPanelBounds(rect, position, viewportWidth, viewportHeight);
-  let nextOffset = clampOffsetToBounds(offset, bounds);
+  const bounds = getPanelBounds(rect, viewportWidth, viewportHeight);
+  let nextPosition = clampPositionToBounds(position, bounds);
 
-  if (Math.abs(nextOffset.x) <= SNAP_DISTANCE_PX) {
-    nextOffset = { ...nextOffset, x: 0 };
+  if (Math.abs(nextPosition.left - bounds.minLeft) <= SNAP_DISTANCE_PX) {
+    nextPosition = { ...nextPosition, left: bounds.minLeft };
   }
-  if (Math.abs(nextOffset.x - bounds.minX) <= SNAP_DISTANCE_PX) {
-    nextOffset = { ...nextOffset, x: bounds.minX };
+  if (Math.abs(nextPosition.left - bounds.maxLeft) <= SNAP_DISTANCE_PX) {
+    nextPosition = { ...nextPosition, left: bounds.maxLeft };
   }
-  if (Math.abs(nextOffset.x - bounds.maxX) <= SNAP_DISTANCE_PX) {
-    nextOffset = { ...nextOffset, x: bounds.maxX };
+  if (Math.abs(nextPosition.top - bounds.minTop) <= SNAP_DISTANCE_PX) {
+    nextPosition = { ...nextPosition, top: bounds.minTop };
   }
-
-  if (Math.abs(nextOffset.y) <= SNAP_DISTANCE_PX) {
-    nextOffset = { ...nextOffset, y: 0 };
-  }
-  if (Math.abs(nextOffset.y - bounds.minY) <= SNAP_DISTANCE_PX) {
-    nextOffset = { ...nextOffset, y: bounds.minY };
-  }
-  if (Math.abs(nextOffset.y - bounds.maxY) <= SNAP_DISTANCE_PX) {
-    nextOffset = { ...nextOffset, y: bounds.maxY };
+  if (Math.abs(nextPosition.top - bounds.maxTop) <= SNAP_DISTANCE_PX) {
+    nextPosition = { ...nextPosition, top: bounds.maxTop };
   }
 
-  return clampOffsetToBounds(nextOffset, bounds);
+  return clampPositionToBounds(nextPosition, bounds);
 }
 
-function clampOffsetToBounds(
-  offset: PanelOffset,
+function clampPositionToBounds(
+  position: PanelPosition,
   bounds: PanelBounds,
-): PanelOffset {
+): PanelPosition {
   return {
-    x: clamp(offset.x, bounds.minX, bounds.maxX),
-    y: clamp(offset.y, bounds.minY, bounds.maxY),
+    left: clamp(position.left, bounds.minLeft, bounds.maxLeft),
+    top: clamp(position.top, bounds.minTop, bounds.maxTop),
   };
-}
-
-interface PanelBounds {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
 }
 
 function getPanelBounds(
   rect: DOMRect,
-  position: OverlayPanelProps["position"],
   viewportWidth: number,
   viewportHeight: number,
 ): PanelBounds {
-  const horizontalPadding = position?.left ?? position?.right ?? 12;
-  const verticalPadding = position?.top ?? position?.bottom ?? 12;
-  const baseLeft =
-    position?.left ??
-    (position?.right !== undefined
-      ? viewportWidth - position.right - rect.width
-      : horizontalPadding);
-  const baseTop =
-    position?.top ??
-    (position?.bottom !== undefined
-      ? viewportHeight - position.bottom - rect.height
-      : verticalPadding);
-
   return {
-    minX: horizontalPadding - baseLeft,
-    maxX: viewportWidth - rect.width - horizontalPadding - baseLeft,
-    minY: verticalPadding - baseTop,
-    maxY: viewportHeight - rect.height - verticalPadding - baseTop,
+    minLeft: VIEWPORT_EDGE_PADDING_PX,
+    maxLeft: viewportWidth - rect.width - VIEWPORT_EDGE_PADDING_PX,
+    minTop: VIEWPORT_EDGE_PADDING_PX,
+    maxTop: viewportHeight - rect.height - VIEWPORT_EDGE_PADDING_PX,
   };
 }
 
@@ -274,9 +273,9 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 const headerButtonStyle: React.CSSProperties = {
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(255,255,255,0.06)",
-  color: "#cfd8ff",
+  border: `1px solid ${uiTheme.panel.buttonBorder}`,
+  background: uiTheme.panel.buttonBackground,
+  color: uiTheme.text.primary,
   borderRadius: 4,
   width: 22,
   height: 22,

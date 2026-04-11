@@ -25,8 +25,6 @@ export function usePlayers() {
   const query = useQuery({
     queryKey: ["players"],
     queryFn: fetchPlayers,
-    // Poll every 30 seconds as a fallback (WebSocket handles fast updates)
-    refetchInterval: 30000,
   });
 
   const refresh = useCallback(() => {

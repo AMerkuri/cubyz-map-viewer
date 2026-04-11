@@ -3,6 +3,14 @@ import { OverlayPanel } from "../../../shared/ui/OverlayPanel.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 
+const infoPanelTheme = {
+  border: "rgba(255,255,255,0.12)",
+  shadow: "0 4px 12px rgba(0,0,0,0.4)",
+  muted: "#a4acba",
+  secondary: "#e6e8ed",
+  hover: "rgba(255,255,255,0.06)",
+} as const;
+
 interface InfoPanelProps {
   worldData: ReturnType<typeof useWorldData>;
   players: PlayerData[];
@@ -31,9 +39,19 @@ export function InfoPanel({
       minWidth={220}
       maxWidth={320}
       collapsible={true}
-      contentStyle={{ fontSize: 12, lineHeight: 1.55 }}
+      contentStyle={{
+        fontSize: 12,
+        lineHeight: 1.55,
+        color: infoPanelTheme.secondary,
+      }}
+      style={{
+        border: `1px solid ${infoPanelTheme.border}`,
+        boxShadow: infoPanelTheme.shadow,
+      }}
     >
-      {loading && <div style={{ color: "#888" }}>Loading world data...</div>}
+      {loading && (
+        <div style={{ color: infoPanelTheme.muted }}>Loading world data...</div>
+      )}
       {error && <div style={{ color: "#f77" }}>Error: {error}</div>}
 
       {world && (
@@ -51,7 +69,7 @@ export function InfoPanel({
               border: "none",
               borderRadius: 4,
               padding: "1px 4px",
-              margin: "0 -4px",
+              margin: "-1px -4px",
               cursor: "pointer",
               background: hoveredSpawn
                 ? "rgba(255,255,255,0.07)"
@@ -59,6 +77,7 @@ export function InfoPanel({
               transition: "background 0.1s",
               width: "100%",
               textAlign: "left",
+              boxSizing: "content-box",
             }}
           >
             <InfoRow
@@ -71,18 +90,18 @@ export function InfoPanel({
           )}
           <InfoRow
             label="Last update"
-            value={lastUpdateAt !== null ? formatDateTime(lastUpdateAt) : "-"}
+            value={lastUpdateAt !== null ? formatTime(lastUpdateAt) : "-"}
           />
 
           {players.length > 0 && (
             <div
               style={{
                 marginTop: 8,
-                borderTop: "1px solid rgba(255,255,255,0.1)",
+                borderTop: `1px solid ${infoPanelTheme.border}`,
                 paddingTop: 6,
               }}
             >
-              <div style={{ color: "#888", marginBottom: 4 }}>
+              <div style={{ color: infoPanelTheme.muted, marginBottom: 4 }}>
                 Players ({players.length})
               </div>
               {players.map((p, i) => {
@@ -102,7 +121,7 @@ export function InfoPanel({
                       cursor: "pointer",
                       background:
                         hoveredPlayer === i
-                          ? "rgba(255,255,255,0.07)"
+                          ? infoPanelTheme.hover
                           : "transparent",
                       transition: "background 0.1s",
                       width: "100%",
@@ -127,9 +146,13 @@ export function InfoPanel({
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-      <span style={{ color: "#8b92ad" }}>{label}</span>
+      <span style={{ color: infoPanelTheme.muted }}>{label}</span>
       <span
-        style={{ color: "#ddd", textAlign: "right", wordBreak: "break-all" }}
+        style={{
+          color: infoPanelTheme.secondary,
+          textAlign: "right",
+          wordBreak: "break-all",
+        }}
       >
         {value}
       </span>
@@ -150,9 +173,7 @@ function cleanPlayerName(name: string): string {
   return name.replace(/[*]{1,3}|#[0-9A-Fa-f]{6}/g, "").trim() || "Player";
 }
 
-function formatDateTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(timestamp);
+function formatTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}:${date.getSeconds().toString().padStart(2, "0")}`;
 }

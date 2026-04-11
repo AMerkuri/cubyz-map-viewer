@@ -113,11 +113,14 @@ export function World3DView({
   showVoxelTerrain,
   showBiomeLabels,
   showVoxelHeightLabels,
+  renderDistance,
   voxelLod1MaxDist,
+  minRenderedVoxelLod,
   debugEnabled,
   debugSettings,
   onCursorMove,
   onChunkStatsChange,
+  onVoxelLoadingChange,
   initialCameraState,
   onShareStateChange,
   flyToRequest,
@@ -201,6 +204,8 @@ export function World3DView({
   onCursorMoveRef.current = onCursorMove;
   const onChunkStatsChangeRef = useRef(onChunkStatsChange);
   onChunkStatsChangeRef.current = onChunkStatsChange;
+  const onVoxelLoadingChangeRef = useRef(onVoxelLoadingChange);
+  onVoxelLoadingChangeRef.current = onVoxelLoadingChange;
   const debugEnabledRef = useRef(debugEnabled);
   debugEnabledRef.current = debugEnabled;
   const debugSettingsRef = useRef(debugSettings);
@@ -563,6 +568,8 @@ export function World3DView({
       pendingVoxelMeshQueue: pendingVoxelMeshQueueRef.current,
       voxelUnloadGraceUntil: voxelUnloadGraceUntilRef.current,
       voxelThresholds: voxelLodThresholdsRef.current,
+      renderDistance,
+      minRenderedVoxelLod,
       activeVoxelRequestGenerationRef,
       voxelLastMotionAt: voxelLastMotionAtRef.current,
       voxelDetailRequestDebounceMs:
@@ -723,6 +730,7 @@ export function World3DView({
           voxelLodThresholds: voxelLodThresholdsRef.current,
         }),
       voxelLodThresholds: voxelLodThresholdsRef.current,
+      minRenderedVoxelLod,
       voxelLodHysteresisRatio: debugSettingsRef.current.voxelLodHysteresisRatio,
       updateVoxelLod,
       debugLabelsDirtyRef,
@@ -806,6 +814,13 @@ export function World3DView({
     });
   }
 
+  function publishCurrentVoxelLoading() {
+    const loading =
+      loadingVoxelsRef.current.size + pendingVoxelFetchQueueRef.current.length >
+      0;
+    onVoxelLoadingChangeRef.current(modeRef.current === "voxel" && loading);
+  }
+
   useWorld3DSceneRuntime({
     containerRef,
     sceneRef,
@@ -839,6 +854,7 @@ export function World3DView({
     clearDebugLabels,
     refreshBiomeLabels,
     publishChunkStats: publishCurrentChunkStats,
+    publishVoxelLoading: publishCurrentVoxelLoading,
     clearTerrainTiles,
     clearVoxelTiles,
     clearBiomeLabels,
@@ -884,6 +900,7 @@ export function World3DView({
 
   useWorld3DDisplayEffects({
     mode,
+    players,
     showPlayers,
     showSpawn,
     showChunkBorders,

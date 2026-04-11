@@ -44,7 +44,9 @@ src/client/
 - URL-derived initial camera state
 - share-location state
 - layer visibility toggles
+- voxel graphics preset selection and matching
 - debug panel state and chunk stats display
+- overlay panel placement and the bottom-right voxel loading indicator state
 - wiring between data hooks, WebSocket events, and `World3DView`
 
 `App` does not perform low-level Three.js work. It passes data and callbacks down into the world-view feature.
@@ -57,9 +59,9 @@ Feature-facing React components:
 
 - `World3DView.tsx`: the main 3D scene root
 - `InfoPanel.tsx`: world metadata and player list
-- `LayerControls.tsx`: visibility and voxel LOD controls
+- `LayerControls.tsx`: visibility toggles and voxel-mode preset entry area
 - `ViewToggle.tsx`: terrain/voxel mode switch
-- `MapDebugParameters.tsx`: runtime debug tuning controls
+- `MapDebugParameters.tsx`: runtime debug tuning controls and direct voxel rendering sliders
 
 ### `features/world-view/hooks`
 
@@ -128,7 +130,8 @@ The client uses React for composition and state, but the 3D scene is managed imp
 1. `main.tsx` creates the React Query client and renders `App`.
 2. `App` calls `useWorldData`, `usePlayers`, and `useWebSocket`.
 3. `World3DView` initializes the Three.js scene once world data is available.
-4. Terrain tiles and, when enabled, voxel regions are loaded based on camera position and mode.
+4. Terrain tiles and, when enabled, voxel regions are loaded based on camera position, mode, and the voxel rendering controls currently selected directly or through voxel graphics presets.
+5. `App` also controls the overlay layout: `Map Controls` defaults to top-left, `Stats` and `Parameters` default to the top-right stack, and a lightweight spinner-only voxel loading indicator appears in the bottom-right while stats are hidden.
 
 ### Terrain mode
 
@@ -140,10 +143,11 @@ The client uses React for composition and state, but the 3D scene is managed imp
 
 1. `App` enables chunk index loading.
 2. `useWorldData` also fetches `/api/world/chunk-index`.
-3. The voxel runtime selects requested regions based on camera focus and distance.
+3. The voxel runtime selects requested regions based on camera focus, distance, render distance, the minimum allowed voxel LOD, and any preset-applied loading or cache tuning.
 4. `/api/voxels/:lod/:regionX/:regionY` responses are decoded and queued.
 5. The feature worker converts raw mesh buffers into typed arrays.
 6. The main thread uploads those arrays into Three.js geometries within a frame budget.
+7. A lightweight voxel-loading signal is published back to `App` so the UI can show a bottom-right loading indicator even when the debug stats panel is hidden.
 
 ## Live Update Flow
 
@@ -155,7 +159,7 @@ The client uses React for composition and state, but the 3D scene is managed imp
    - `terrain-updates-batch`
 3. `App` subscribes to those events.
 4. Query-backed data is invalidated and refetched.
-5. `World3DView` also listens for terrain and voxel region update events and refreshes loaded scene data in place.
+5. `World3DView` also listens for terrain and voxel region update events and refreshes loaded scene data in place, while player-list changes rebuild the player marker layer without recreating the full scene.
 
 This keeps the UI responsive without a full scene rebuild.
 

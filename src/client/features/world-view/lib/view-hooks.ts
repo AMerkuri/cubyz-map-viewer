@@ -3,6 +3,7 @@ import type * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { type ChunkStats, createEmptyChunkStats } from "../debug.js";
+import type { PlayerData } from "../hooks/usePlayers.js";
 import type { TerrainUpdatesBatchEvent } from "../hooks/useWebSocket.js";
 import type {
   ChunkIndexEntry,
@@ -74,6 +75,7 @@ export function useWorld3DSceneRuntime(args: {
     camDist: number,
   ) => Promise<void> | void;
   publishChunkStats: (fpsValue: number) => void;
+  publishVoxelLoading: () => void;
   clearTerrainTiles: () => void;
   clearVoxelTiles: (preserveWarmCache?: boolean) => void;
   clearBiomeLabels: () => void;
@@ -113,6 +115,7 @@ export function useWorld3DSceneRuntime(args: {
     clearDebugLabels,
     refreshBiomeLabels,
     publishChunkStats,
+    publishVoxelLoading,
     clearTerrainTiles,
     clearVoxelTiles,
     clearBiomeLabels,
@@ -129,6 +132,7 @@ export function useWorld3DSceneRuntime(args: {
   const onClearDebugLabels = useEffectEvent(clearDebugLabels);
   const onRefreshBiomeLabels = useEffectEvent(refreshBiomeLabels);
   const onPublishChunkStats = useEffectEvent(publishChunkStats);
+  const onPublishVoxelLoading = useEffectEvent(publishVoxelLoading);
   const onClearTerrainTiles = useEffectEvent(clearTerrainTiles);
   const onClearVoxelTiles = useEffectEvent(clearVoxelTiles);
   const onClearBiomeLabels = useEffectEvent(clearBiomeLabels);
@@ -169,6 +173,7 @@ export function useWorld3DSceneRuntime(args: {
       clearDebugLabels: onClearDebugLabels,
       refreshBiomeLabels: onRefreshBiomeLabels,
       publishChunkStats: onPublishChunkStats,
+      publishVoxelLoading: onPublishVoxelLoading,
       clearTerrainTiles: onClearTerrainTiles,
       clearVoxelTiles: onClearVoxelTiles,
       clearBiomeLabels: onClearBiomeLabels,
@@ -373,6 +378,7 @@ export function useWorld3DSceneSyncEffects(args: {
 
 export function useWorld3DDisplayEffects(args: {
   mode: "terrain" | "voxel";
+  players: PlayerData[];
   showPlayers: boolean;
   showSpawn: boolean;
   showChunkBorders: boolean;
@@ -408,6 +414,7 @@ export function useWorld3DDisplayEffects(args: {
 }): void {
   const {
     mode,
+    players,
     showPlayers,
     showSpawn,
     showChunkBorders,
@@ -445,8 +452,12 @@ export function useWorld3DDisplayEffects(args: {
   const onCheckAndUpdateLOD = useEffectEvent(checkAndUpdateLOD);
 
   useEffect(() => {
+    if (players.length === 0) {
+      onUpdatePlayerMarkers();
+      return;
+    }
     onUpdatePlayerMarkers();
-  }, []);
+  }, [players]);
 
   useEffect(() => {
     if (markerGroupRef.current) markerGroupRef.current.visible = showPlayers;

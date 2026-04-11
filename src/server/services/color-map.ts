@@ -18,29 +18,8 @@ export interface RGB {
   b: number;
 }
 
-/** Hardcoded fallback colors for common blocks that might not resolve via textures */
-const FALLBACK_BLOCK_COLORS: Record<string, RGB> = {
-  "cubyz:air": { r: 0, g: 0, b: 0 },
-  "cubyz:water": { r: 32, g: 56, b: 96 },
-  "cubyz:lava": { r: 207, g: 97, b: 19 },
-  "cubyz:grass": { r: 95, g: 159, b: 53 },
-  "cubyz:dirt": { r: 134, g: 96, b: 67 },
-  "cubyz:soil": { r: 134, g: 96, b: 67 },
-  "cubyz:stone": { r: 128, g: 128, b: 128 },
-  "cubyz:sand": { r: 219, g: 207, b: 163 },
-  "cubyz:snow": { r: 240, g: 240, b: 255 },
-  "cubyz:ice": { r: 160, g: 200, b: 255 },
-  "cubyz:clay": { r: 159, g: 164, b: 177 },
-  "cubyz:gravel": { r: 136, g: 126, b: 126 },
-  "cubyz:frost": { r: 200, g: 220, b: 240 },
-  "cubyz:mud": { r: 90, g: 70, b: 50 },
-  "cubyz:limestone": { r: 200, g: 190, b: 170 },
-  "cubyz:slate/base": { r: 110, g: 110, b: 115 },
-  "cubyz:marble/base": { r: 220, g: 215, b: 210 },
-  "cubyz:ferrock/base": { r: 130, g: 90, b: 60 },
-  "cubyz:cold_grass": { r: 80, g: 130, b: 65 },
-  "cubyz:dry_grass": { r: 160, g: 150, b: 80 },
-};
+/** Light purple fallback for blocks without a resolved texture color. */
+export const FALLBACK_BLOCK_COLOR: RGB = { r: 200, g: 160, b: 255 };
 
 /** Water color for ocean/below-sea-level areas */
 export const WATER_COLOR: RGB = { r: 32, g: 56, b: 96 };
@@ -181,13 +160,6 @@ export class ColorMapService {
         }
       }
     }
-
-    // Apply fallbacks for blocks without computed colors
-    for (const [blockId, color] of Object.entries(FALLBACK_BLOCK_COLORS)) {
-      if (!this.blockColors.has(blockId)) {
-        this.blockColors.set(blockId, color);
-      }
-    }
   }
 
   private async averageTextureColor(pngPath: string): Promise<RGB> {
@@ -212,7 +184,7 @@ export class ColorMapService {
       totalAlpha += a;
     }
 
-    if (totalAlpha === 0) return { r: 128, g: 128, b: 128 };
+    if (totalAlpha === 0) return FALLBACK_BLOCK_COLOR;
 
     return {
       r: Math.round((r / totalAlpha) ** (1 / 2.2) * 255),
@@ -238,8 +210,8 @@ export class ColorMapService {
     this.paletteColors = new Array(palette.entries.length);
     for (let i = 0; i < palette.entries.length; i++) {
       const blockId = palette.entries[i];
-      this.paletteColors[i] = this.blockColors.get(blockId) ??
-        FALLBACK_BLOCK_COLORS[blockId] ?? { r: 128, g: 128, b: 128 };
+      this.paletteColors[i] =
+        this.blockColors.get(blockId) ?? FALLBACK_BLOCK_COLOR;
     }
   }
 
@@ -264,7 +236,7 @@ export class ColorMapService {
 
   /** Get color for a block palette index */
   getBlockColor(paletteIndex: number): RGB {
-    return this.paletteColors[paletteIndex] ?? { r: 128, g: 128, b: 128 };
+    return this.paletteColors[paletteIndex] ?? FALLBACK_BLOCK_COLOR;
   }
 
   /** Get color for a biome palette index */
@@ -279,10 +251,7 @@ export class ColorMapService {
 
   /** Get color for a named block */
   getBlockColorByName(blockId: string): RGB {
-    return (
-      this.blockColors.get(blockId) ??
-      FALLBACK_BLOCK_COLORS[blockId] ?? { r: 128, g: 128, b: 128 }
-    );
+    return this.blockColors.get(blockId) ?? FALLBACK_BLOCK_COLOR;
   }
 
   /** Get all block colors as a JSON-serializable object */

@@ -50,6 +50,7 @@ export function createMarkerDot(color: string, sizePx: number): CSS2DObject {
   div.style.cssText = [
     `width: ${sizePx}px`,
     `height: ${sizePx}px`,
+    "transform: translate(-50%, -50%)",
     "border-radius: 999px",
     `background: ${color}`,
     "border: 1px solid rgba(255,255,255,0.75)",
@@ -66,6 +67,7 @@ export function createMarkerLabel(text: string, color: string): CSS2DObject {
     `color: ${color}`,
     "font-size: 20px",
     "font-weight: 700",
+    "transform: translate(-50%, calc(-100% - 10px))",
     "text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.55)",
     "pointer-events: none",
     "white-space: nowrap",

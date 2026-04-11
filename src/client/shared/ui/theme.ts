@@ -1,0 +1,31 @@
+export const uiTheme = {
+  accent: {
+    title: "#7df2aa",
+    text: "#9ef7bd",
+    surface: "rgba(74, 217, 122, 0.18)",
+    surfaceActive: "rgba(74, 217, 122, 0.56)",
+    border: "rgba(126, 255, 175, 0.8)",
+    spinnerTop: "#bfffd2",
+    spinnerRight: "#91ffb5",
+  },
+  panel: {
+    background: "rgba(18, 20, 25, 0.84)",
+    border: "rgba(255,255,255,0.12)",
+    shadow: "0 4px 12px rgba(0,0,0,0.4)",
+    buttonBackground: "rgba(34, 39, 47, 0.9)",
+    buttonBorder: "rgba(255,255,255,0.12)",
+    buttonBackgroundMuted: "rgba(34, 39, 47, 0.62)",
+    buttonBorderMuted: "rgba(255,255,255,0.08)",
+    buttonHoverBackground: "rgba(255,255,255,0.06)",
+    tooltipBackground: "rgba(15, 18, 24, 0.97)",
+    tooltipBorder: "rgba(255,255,255,0.12)",
+  },
+  text: {
+    primary: "#f3f5f8",
+    secondary: "#e6e8ed",
+    muted: "#a4acba",
+    disabled: "#7d8797",
+    accent: "#7df2aa",
+    onAccent: "#f4fff7",
+  },
+} as const;

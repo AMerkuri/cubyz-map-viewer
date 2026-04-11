@@ -1,13 +1,22 @@
 import { useMemo, useState } from "react";
+import { uiTheme } from "../../../shared/ui/theme.js";
 import {
   MAP_DEBUG_PARAMETER_DEFINITIONS,
   type MapDebugParameterDefinition,
   type MapDebugSettings,
 } from "../debug.js";
+import { LOD_LEVELS } from "../lib/constants.js";
 
 interface MapDebugParametersProps {
+  view: "terrain" | "voxel";
   settings: MapDebugSettings;
   onChange: (next: MapDebugSettings) => void;
+  renderDistance: number;
+  onRenderDistanceChange: (value: number) => void;
+  voxelLod1MaxDist: number;
+  onVoxelLod1MaxDistChange: (value: number) => void;
+  minRenderedVoxelLod: number;
+  onMinRenderedVoxelLodChange: (value: number) => void;
   chunkBorders: boolean;
   voxelHeights: boolean;
   onChunkBordersChange: (active: boolean) => void;
@@ -18,8 +27,15 @@ const SECTION_ORDER = ["Loading", "LOD", "Focus", "Memory"] as const;
 const RESET_GLYPH_SIZE = 12;
 
 export function MapDebugParameters({
+  view,
   settings,
   onChange,
+  renderDistance,
+  onRenderDistanceChange,
+  voxelLod1MaxDist,
+  onVoxelLod1MaxDistChange,
+  minRenderedVoxelLod,
+  onMinRenderedVoxelLodChange,
   chunkBorders,
   voxelHeights,
   onChunkBordersChange,
@@ -38,46 +54,295 @@ export function MapDebugParameters({
   }, []);
 
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <div style={{ display: "grid", gap: 8 }}>
-        <div style={sectionTitleStyle}>Visual Debug</div>
-        <ToggleRow
-          label="Chunk Borders"
-          active={chunkBorders}
-          onToggle={() => onChunkBordersChange(!chunkBorders)}
-        />
-        <ToggleRow
-          label="Voxel Heights"
-          active={voxelHeights}
-          onToggle={() => onVoxelHeightsChange(!voxelHeights)}
-        />
+    <>
+      <style>{rangeSliderCss}</style>
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ display: "grid", gap: 8 }}>
+          <div style={sectionTitleStyle}>Visual Debug</div>
+          <ToggleRow
+            label="Chunk Borders"
+            active={chunkBorders}
+            onToggle={() => onChunkBordersChange(!chunkBorders)}
+          />
+          <ToggleRow
+            label="Voxel Heights"
+            active={voxelHeights}
+            onToggle={() => onVoxelHeightsChange(!voxelHeights)}
+          />
+        </div>
+
+        {view === "voxel" && (
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={sectionTitleStyle}>Voxel Rendering</div>
+            <SliderRow
+              label="Render Distance"
+              description="Maximum distance around the camera where voxel regions remain eligible for loading and rendering."
+              value={renderDistance}
+              displayValue={String(renderDistance)}
+              min={3200}
+              max={38400}
+              step={800}
+              defaultValue={19200}
+              onChange={onRenderDistanceChange}
+            />
+            <SliderRow
+              label="LOD1 Max Dist"
+              description={
+                minRenderedVoxelLod > 1
+                  ? "Distance threshold where the finest voxel LOD stops being preferred. Inactive while Min LOD is above 1."
+                  : "Distance threshold where the finest voxel LOD stops being preferred."
+              }
+              value={voxelLod1MaxDist}
+              displayValue={String(voxelLod1MaxDist)}
+              min={200}
+              max={1150}
+              step={50}
+              defaultValue={600}
+              onChange={onVoxelLod1MaxDistChange}
+              disabled={minRenderedVoxelLod > 1}
+            />
+            <DiscreteLodRow
+              label="Min LOD"
+              description="Finest voxel LOD allowed to render. Higher values prevent very fine voxel regions from being selected."
+              value={minRenderedVoxelLod}
+              defaultValue={LOD_LEVELS[0]}
+              onChange={onMinRenderedVoxelLodChange}
+            />
+          </div>
+        )}
+
+        {SECTION_ORDER.map((section) => {
+          const items = definitionsBySection.get(section) ?? [];
+          if (items.length === 0) return null;
+          return (
+            <div key={section} style={{ display: "grid", gap: 10 }}>
+              <div style={sectionTitleStyle}>{section}</div>
+              {items.map((definition) => (
+                <ParameterRow
+                  key={definition.key}
+                  definition={definition}
+                  value={settings[definition.key]}
+                  onChange={(value) =>
+                    onChange({ ...settings, [definition.key]: value })
+                  }
+                  onReset={() =>
+                    onChange({
+                      ...settings,
+                      [definition.key]: definition.defaultValue,
+                    })
+                  }
+                />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function SliderRow({
+  label,
+  description,
+  value,
+  displayValue,
+  min,
+  max,
+  step,
+  defaultValue,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  description: string;
+  value: number;
+  displayValue: string;
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <SimpleParameterRow
+      label={label}
+      description={description}
+      valueText={displayValue}
+      isChanged={value !== defaultValue}
+      onReset={() => onChange(defaultValue)}
+      disabled={disabled}
+    >
+      <RangeSlider
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    </SimpleParameterRow>
+  );
+}
+
+function DiscreteLodRow({
+  label,
+  description,
+  value,
+  defaultValue,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  value: number;
+  defaultValue: number;
+  onChange: (value: number) => void;
+}) {
+  const index = LOD_LEVELS.indexOf(value);
+  return (
+    <SimpleParameterRow
+      label={label}
+      description={description}
+      valueText={`L${value}`}
+      isChanged={value !== defaultValue}
+      onReset={() => onChange(defaultValue)}
+    >
+      <RangeSlider
+        min={0}
+        max={LOD_LEVELS.length - 1}
+        step={1}
+        value={Math.max(index, 0)}
+        onChange={(nextIndex) =>
+          onChange(LOD_LEVELS[nextIndex] ?? defaultValue)
+        }
+      />
+    </SimpleParameterRow>
+  );
+}
+
+function RangeSlider({
+  min,
+  max,
+  step,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}) {
+  const progress = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const clampedProgress = Math.min(Math.max(progress, 0), 100);
+
+  return (
+    <input
+      className="map-debug-slider"
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(Number(e.target.value))}
+      style={{
+        opacity: disabled ? 0.45 : 1,
+        cursor: disabled ? "default" : "pointer",
+        ["--slider-progress" as string]: `${clampedProgress}%`,
+        ["--slider-fill" as string]: uiTheme.accent.text,
+        ["--slider-track" as string]: "rgba(255,255,255,0.14)",
+        ["--slider-thumb" as string]: uiTheme.text.primary,
+        ["--slider-thumb-border" as string]: "rgba(126, 255, 175, 0.45)",
+      }}
+    />
+  );
+}
+
+function SimpleParameterRow({
+  label,
+  description,
+  valueText,
+  isChanged,
+  onReset,
+  disabled = false,
+  children,
+}: {
+  label: string;
+  description: string;
+  valueText: string;
+  isChanged: boolean;
+  onReset: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  const [showHelp, setShowHelp] = useState(false);
+  return (
+    <div style={{ display: "grid", gap: 6, position: "relative" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}
+        >
+          <span
+            style={{
+              color: uiTheme.text.secondary,
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            {label}
+          </span>
+          <button
+            type="button"
+            onMouseEnter={() => setShowHelp(true)}
+            onMouseLeave={() => setShowHelp(false)}
+            onFocus={() => setShowHelp(true)}
+            onBlur={() => setShowHelp(false)}
+            style={helpButtonStyle}
+            title={description}
+            aria-label={`${label} help`}
+          >
+            ?
+          </button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              color: disabled ? uiTheme.text.disabled : uiTheme.accent.text,
+              fontSize: 12,
+              fontWeight: 700,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {valueText}
+          </span>
+          {isChanged && (
+            <button
+              type="button"
+              onClick={onReset}
+              style={resetButtonStyle}
+              disabled={disabled}
+              title={`Reset ${label}`}
+              aria-label={`Reset ${label}`}
+            >
+              <ResetGlyph />
+            </button>
+          )}
+        </div>
       </div>
 
-      {SECTION_ORDER.map((section) => {
-        const items = definitionsBySection.get(section) ?? [];
-        if (items.length === 0) return null;
-        return (
-          <div key={section} style={{ display: "grid", gap: 10 }}>
-            <div style={sectionTitleStyle}>{section}</div>
-            {items.map((definition) => (
-              <ParameterRow
-                key={definition.key}
-                definition={definition}
-                value={settings[definition.key]}
-                onChange={(value) =>
-                  onChange({ ...settings, [definition.key]: value })
-                }
-                onReset={() =>
-                  onChange({
-                    ...settings,
-                    [definition.key]: definition.defaultValue,
-                  })
-                }
-              />
-            ))}
-          </div>
-        );
-      })}
+      {showHelp && <div style={tooltipStyle}>{description}</div>}
+
+      {children}
     </div>
   );
 }
@@ -135,7 +400,13 @@ function ParameterRow({
         <div
           style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}
         >
-          <span style={{ color: "#d6d9ea", fontSize: 12, fontWeight: 600 }}>
+          <span
+            style={{
+              color: uiTheme.text.secondary,
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
             {definition.label}
           </span>
           <button
@@ -154,7 +425,7 @@ function ParameterRow({
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span
             style={{
-              color: "#8fa4e8",
+              color: uiTheme.accent.text,
               fontSize: 12,
               fontWeight: 700,
               whiteSpace: "nowrap",
@@ -178,13 +449,12 @@ function ParameterRow({
 
       {showHelp && <div style={tooltipStyle}>{definition.description}</div>}
 
-      <input
-        type="range"
+      <RangeSlider
         min={definition.min}
         max={definition.max}
         step={definition.step}
         value={displayValue}
-        onChange={(e) => commitValue(Number(e.target.value))}
+        onChange={commitValue}
       />
     </div>
   );
@@ -213,7 +483,7 @@ function ToggleRow({
         borderRadius: 6,
         border: "1px solid rgba(255,255,255,0.1)",
         background: "rgba(255,255,255,0.04)",
-        color: "#d6d9ea",
+        color: uiTheme.text.secondary,
         cursor: "pointer",
       }}
     >
@@ -222,7 +492,7 @@ function ToggleRow({
         style={{
           fontSize: 11,
           fontWeight: 700,
-          color: active ? "#8ff0a4" : "#8b92ad",
+          color: active ? uiTheme.text.accent : uiTheme.text.muted,
         }}
       >
         {active ? "On" : "Off"}
@@ -235,8 +505,69 @@ function formatNumeric(value: number, decimals: number): string {
   return decimals > 0 ? value.toFixed(decimals) : String(Math.round(value));
 }
 
+const rangeSliderCss = `
+  .map-debug-slider {
+    width: 100%;
+    height: 14px;
+    margin: 0;
+    background: transparent;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  .map-debug-slider:focus {
+    outline: none;
+  }
+
+  .map-debug-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      var(--slider-fill) 0%,
+      var(--slider-fill) var(--slider-progress),
+      var(--slider-track) var(--slider-progress),
+      var(--slider-track) 100%
+    );
+  }
+
+  .map-debug-slider::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    margin-top: -4px;
+    border-radius: 999px;
+    border: 1px solid var(--slider-thumb-border);
+    background: var(--slider-thumb);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    appearance: none;
+    -webkit-appearance: none;
+  }
+
+  .map-debug-slider::-moz-range-track {
+    height: 6px;
+    border: none;
+    border-radius: 999px;
+    background: var(--slider-track);
+  }
+
+  .map-debug-slider::-moz-range-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--slider-fill);
+  }
+
+  .map-debug-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    border: 1px solid var(--slider-thumb-border);
+    background: var(--slider-thumb);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  }
+`;
+
 const sectionTitleStyle: React.CSSProperties = {
-  color: "#8fa4e8",
+  color: uiTheme.accent.text,
   fontSize: 12,
   fontWeight: 700,
 };
@@ -245,9 +576,9 @@ const helpButtonStyle: React.CSSProperties = {
   width: 18,
   height: 18,
   borderRadius: 999,
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(255,255,255,0.06)",
-  color: "#cfd8ff",
+  border: `1px solid ${uiTheme.panel.buttonBorder}`,
+  background: uiTheme.panel.buttonBackground,
+  color: uiTheme.text.primary,
   fontSize: 11,
   fontWeight: 700,
   cursor: "help",
@@ -257,9 +588,9 @@ const helpButtonStyle: React.CSSProperties = {
 };
 
 const resetButtonStyle: React.CSSProperties = {
-  border: "1px solid rgba(255,255,255,0.18)",
-  background: "rgba(255,255,255,0.06)",
-  color: "#cfd8ff",
+  border: `1px solid ${uiTheme.panel.buttonBorder}`,
+  background: uiTheme.panel.buttonBackground,
+  color: uiTheme.text.primary,
   borderRadius: 4,
   width: 24,
   height: 24,
@@ -276,11 +607,11 @@ const tooltipStyle: React.CSSProperties = {
   right: 0,
   transform: "translateY(-100%)",
   maxWidth: 260,
-  background: "rgba(8, 10, 18, 0.96)",
-  border: "1px solid rgba(255,255,255,0.14)",
+  background: uiTheme.panel.tooltipBackground,
+  border: `1px solid ${uiTheme.panel.tooltipBorder}`,
   borderRadius: 6,
   padding: "8px 10px",
-  color: "#d6d9ea",
+  color: uiTheme.text.secondary,
   fontSize: 11,
   lineHeight: 1.45,
   boxShadow: "0 8px 18px rgba(0,0,0,0.35)",

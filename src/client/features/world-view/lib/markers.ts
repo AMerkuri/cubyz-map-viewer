@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import * as THREE from "three";
 import type { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 
@@ -30,7 +30,7 @@ export function rebuildSpawnMarker(args: {
 
   const [sx, sy, sz] = worldToScene(spawn[0], spawn[1], spawn[2]);
   const dot = createMarkerDot("#ff4444", 17);
-  dot.position.set(sx, sy, sz + 8);
+  dot.position.set(sx, sy, sz);
   spawnGroup.add(dot);
 
   const label = createMarkerLabel("Spawn", "#ff6b6b");
@@ -70,11 +70,11 @@ export function rebuildPlayerMarkers(args: {
     );
 
     const dot = createMarkerDot("#44aaff", 15);
-    dot.position.set(px, py, pz + 6);
+    dot.position.set(px, py, pz);
     markerGroup.add(dot);
 
     const label = createMarkerLabel(cleanPlayerName(player.name), "#6ec1ff");
-    label.position.set(px, py, pz + 22);
+    label.position.set(px, py, pz + 24);
     markerGroup.add(label);
   }
 }
