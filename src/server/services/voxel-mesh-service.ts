@@ -1,9 +1,11 @@
-import { createHash } from "crypto";
-
-import { LRUCache } from "./cache.js";
-import { VoxelWorkerPool, type InstrumentedPoolResult } from "./voxel-worker-pool.js";
+import { createHash } from "node:crypto";
+import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
-import type { VoxelGenerationStats, VoxelJobResult } from "../workers/voxel-worker-protocol.js";
+import { LRUCache } from "./cache.js";
+import {
+  type InstrumentedPoolResult,
+  VoxelWorkerPool,
+} from "./voxel-worker-pool.js";
 
 interface CachedVoxelMesh {
   buf: Buffer;
@@ -85,7 +87,11 @@ export class VoxelMeshService {
   private readonly runMetric: RollingMetric = { sum: 0, max: 0, count: 0 };
   private readonly totalMetric: RollingMetric = { sum: 0, max: 0, count: 0 };
 
-  constructor(savePath: string, blockColors: BlockColorTable, workerCount?: number) {
+  constructor(
+    savePath: string,
+    blockColors: BlockColorTable,
+    workerCount?: number,
+  ) {
     this.pool = new VoxelWorkerPool(savePath, blockColors, workerCount);
   }
 
@@ -129,7 +135,12 @@ export class VoxelMeshService {
     };
   }
 
-  async getVoxelMesh(key: string, lod: number, regionX: number, regionY: number): Promise<VoxelMeshResponse> {
+  async getVoxelMesh(
+    key: string,
+    lod: number,
+    regionX: number,
+    regionY: number,
+  ): Promise<VoxelMeshResponse> {
     this.requests++;
     const startedAt = performance.now();
     const cached = this.cache.get(key);
@@ -159,9 +170,18 @@ export class VoxelMeshService {
     const keyEpoch = this.keyEpochs.get(key) ?? 0;
     const versionedKey = `${key}@${globalEpoch}:${keyEpoch}`;
     const existing = this.inFlight.get(key);
-    const promise = existing && existing.versionedKey === versionedKey
-      ? existing.promise
-      : this.enqueueJob(key, lod, regionX, regionY, globalEpoch, keyEpoch, versionedKey);
+    const promise =
+      existing && existing.versionedKey === versionedKey
+        ? existing.promise
+        : this.enqueueJob(
+            key,
+            lod,
+            regionX,
+            regionY,
+            globalEpoch,
+            keyEpoch,
+            versionedKey,
+          );
 
     const { result, queueMs, runMs } = await promise;
     const safeQueueMs = Number.isFinite(queueMs) ? queueMs : 0;
@@ -220,26 +240,35 @@ export class VoxelMeshService {
     keyEpoch: number,
     versionedKey: string,
   ): Promise<InstrumentedPoolResult> {
-    const promise = this.pool.run({
-      id: this.nextJobId++,
-      key,
-      lod,
-      regionX,
-      regionY,
-      globalEpoch,
-      keyEpoch,
-    }).finally(() => {
-      const inFlight = this.inFlight.get(key);
-      if (inFlight?.versionedKey === versionedKey) {
-        this.inFlight.delete(key);
-      }
-    });
+    const promise = this.pool
+      .run({
+        id: this.nextJobId++,
+        key,
+        lod,
+        regionX,
+        regionY,
+        globalEpoch,
+        keyEpoch,
+      })
+      .finally(() => {
+        const inFlight = this.inFlight.get(key);
+        if (inFlight?.versionedKey === versionedKey) {
+          this.inFlight.delete(key);
+        }
+      });
     this.inFlight.set(key, { versionedKey, promise });
     return promise;
   }
 
-  private isCurrentEpoch(key: string, globalEpoch: number, keyEpoch: number): boolean {
-    return globalEpoch === this.globalEpoch && keyEpoch === (this.keyEpochs.get(key) ?? 0);
+  private isCurrentEpoch(
+    key: string,
+    globalEpoch: number,
+    keyEpoch: number,
+  ): boolean {
+    return (
+      globalEpoch === this.globalEpoch &&
+      keyEpoch === (this.keyEpochs.get(key) ?? 0)
+    );
   }
 
   private recordMetric(metric: RollingMetric, value: number): void {

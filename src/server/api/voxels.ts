@@ -3,19 +3,23 @@
  * GET /api/voxels/:lod/:regionX/:regionY
  */
 
-import { Router, type Request, type Response } from "express";
-
-import type { VoxelMeshService } from "../services/voxel-mesh-service.js";
+import { type Request, type Response, Router } from "express";
 import { logger } from "../services/logger.js";
+import type { VoxelMeshService } from "../services/voxel-mesh-service.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 const COLUMN_VOXELS = 128;
 const VOXEL_CACHE_CONTROL = "public, max-age=0, must-revalidate";
 const VOXEL_MISS_CACHE_CONTROL = "no-store";
 
-function etagMatches(ifNoneMatch: string | string[] | undefined, etag: string): boolean {
+function etagMatches(
+  ifNoneMatch: string | string[] | undefined,
+  etag: string,
+): boolean {
   if (!ifNoneMatch) return false;
-  const value = Array.isArray(ifNoneMatch) ? ifNoneMatch.join(",") : ifNoneMatch;
+  const value = Array.isArray(ifNoneMatch)
+    ? ifNoneMatch.join(",")
+    : ifNoneMatch;
   const tags = value.split(",").map((tag) => tag.trim());
   return tags.includes("*") || tags.includes(etag);
 }
@@ -29,24 +33,29 @@ export function createVoxelsRouter(voxelMeshService: VoxelMeshService): Router {
 
   router.get("/:lod/:regionX/:regionY", async (req: Request, res: Response) => {
     try {
-      const lod = parseInt(req.params.lod as string);
-      const regionX = parseInt(req.params.regionX as string);
-      const regionY = parseInt(req.params.regionY as string);
+      const lod = parseInt(req.params.lod as string, 10);
+      const regionX = parseInt(req.params.regionX as string, 10);
+      const regionY = parseInt(req.params.regionY as string, 10);
       const columnWorldSpan = COLUMN_VOXELS * lod;
 
       if (
-        !VALID_LODS.includes(lod)
-        || isNaN(regionX)
-        || isNaN(regionY)
-        || regionX % columnWorldSpan !== 0
-        || regionY % columnWorldSpan !== 0
+        !VALID_LODS.includes(lod) ||
+        Number.isNaN(regionX) ||
+        Number.isNaN(regionY) ||
+        regionX % columnWorldSpan !== 0 ||
+        regionY % columnWorldSpan !== 0
       ) {
         res.status(400).json({ error: "Invalid lod/region coordinates" });
         return;
       }
 
       const key = `${lod}/${regionX}/${regionY}`;
-      const response = await voxelMeshService.getVoxelMesh(key, lod, regionX, regionY);
+      const response = await voxelMeshService.getVoxelMesh(
+        key,
+        lod,
+        regionX,
+        regionY,
+      );
       res.set("X-Voxel-Source", response.metrics.source);
       res.set("X-Voxel-Queue-Ms", response.metrics.queueMs.toFixed(1));
       res.set("X-Voxel-Run-Ms", response.metrics.runMs.toFixed(1));
@@ -96,7 +105,9 @@ export function createVoxelsRouter(voxelMeshService: VoxelMeshService): Router {
       res.set("Content-Type", "application/octet-stream");
       res.send(response.buf);
     } catch (e) {
-      logger.error("Voxels API error", { error: e instanceof Error ? e.message : String(e) });
+      logger.error("Voxels API error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
       res.status(500).json({ error: "Failed to generate voxel mesh" });
     }
   });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 interface OverlayPanelProps {
   title: string;
@@ -119,7 +119,11 @@ export function OverlayPanel({
         onPointerDown={(event) => {
           if (!absolute) return;
           if (event.button !== 0) return;
-          if (event.target instanceof HTMLElement && event.target.closest("button")) return;
+          if (
+            event.target instanceof HTMLElement &&
+            event.target.closest("button")
+          )
+            return;
 
           dragStateRef.current = {
             pointerId: event.pointerId,
@@ -128,7 +132,9 @@ export function OverlayPanel({
             startOffsetX: offset.x,
             startOffsetY: offset.y,
           };
-          (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
+          (event.currentTarget as HTMLDivElement).setPointerCapture(
+            event.pointerId,
+          );
         }}
         style={{
           display: "flex",
@@ -141,7 +147,9 @@ export function OverlayPanel({
           userSelect: "none",
         }}
       >
-        <div style={{ color: "#7aa2f7", fontSize: 14, fontWeight: 700 }}>{title}</div>
+        <div style={{ color: "#7aa2f7", fontSize: 14, fontWeight: 700 }}>
+          {title}
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {headerRight}
           {moved && absolute && (
@@ -217,7 +225,10 @@ function applySnapToViewport(
   return clampOffsetToBounds(nextOffset, bounds);
 }
 
-function clampOffsetToBounds(offset: PanelOffset, bounds: PanelBounds): PanelOffset {
+function clampOffsetToBounds(
+  offset: PanelOffset,
+  bounds: PanelBounds,
+): PanelOffset {
   return {
     x: clamp(offset.x, bounds.minX, bounds.maxX),
     y: clamp(offset.y, bounds.minY, bounds.maxY),
@@ -239,8 +250,16 @@ function getPanelBounds(
 ): PanelBounds {
   const horizontalPadding = position?.left ?? position?.right ?? 12;
   const verticalPadding = position?.top ?? position?.bottom ?? 12;
-  const baseLeft = position?.left ?? (position?.right !== undefined ? viewportWidth - position.right - rect.width : horizontalPadding);
-  const baseTop = position?.top ?? (position?.bottom !== undefined ? viewportHeight - position.bottom - rect.height : verticalPadding);
+  const baseLeft =
+    position?.left ??
+    (position?.right !== undefined
+      ? viewportWidth - position.right - rect.width
+      : horizontalPadding);
+  const baseTop =
+    position?.top ??
+    (position?.bottom !== undefined
+      ? viewportHeight - position.bottom - rect.height
+      : verticalPadding);
 
   return {
     minX: horizontalPadding - baseLeft,

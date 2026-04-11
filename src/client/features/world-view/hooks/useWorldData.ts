@@ -1,5 +1,5 @@
-import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 export interface WorldData {
   name: string;
@@ -77,14 +77,23 @@ export function useWorldData(loadChunkIndex = true) {
     void queryClient.invalidateQueries({ queryKey: ["chunk-index"] });
   }, [queryClient]);
 
-  const loading = worldQuery.isLoading || indexQuery.isLoading || (loadChunkIndex && chunkIndexQuery.isLoading);
+  const loading =
+    worldQuery.isLoading ||
+    indexQuery.isLoading ||
+    (loadChunkIndex && chunkIndexQuery.isLoading);
   const error = worldQuery.error
-    ? (worldQuery.error instanceof Error ? worldQuery.error.message : "Unknown error")
+    ? worldQuery.error instanceof Error
+      ? worldQuery.error.message
+      : "Unknown error"
     : indexQuery.error
-      ? (indexQuery.error instanceof Error ? indexQuery.error.message : "Unknown error")
+      ? indexQuery.error instanceof Error
+        ? indexQuery.error.message
+        : "Unknown error"
       : loadChunkIndex && chunkIndexQuery.error
-        ? (chunkIndexQuery.error instanceof Error ? chunkIndexQuery.error.message : "Unknown error")
-      : null;
+        ? chunkIndexQuery.error instanceof Error
+          ? chunkIndexQuery.error.message
+          : "Unknown error"
+        : null;
 
   return {
     worldData: worldQuery.data ?? null,

@@ -4,12 +4,12 @@
  * Also maps biomes to colors via biome -> ground_structure[0] -> block texture.
  */
 
-import { readFile, readdir, stat } from "fs/promises";
-import { join, basename } from "path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import sharp from "sharp";
-import { parseZon, type ZonValue } from "../parsers/zon.js";
 import type { BiomeDefinition } from "../parsers/biome.js";
 import type { Palette } from "../parsers/palette.js";
+import { parseZon, type ZonValue } from "../parsers/zon.js";
 import { logger } from "./logger.js";
 
 export interface RGB {
@@ -63,14 +63,14 @@ export class ColorMapService {
     cubyzAssetsPath: string,
     blockPalette: Palette,
     biomePalette: Palette,
-    biomeDefinitions: Map<string, BiomeDefinition>
+    biomeDefinitions: Map<string, BiomeDefinition>,
   ): Promise<void> {
     // Step 1: Parse block definitions to get texture names
     await this.loadBlockTextures(join(cubyzAssetsPath, "blocks"));
 
     // Step 2: Compute average colors from texture PNGs
     await this.computeTextureColors(
-      join(cubyzAssetsPath, "blocks", "textures")
+      join(cubyzAssetsPath, "blocks", "textures"),
     );
 
     // Step 3: Build biome -> color mapping via ground_structure
@@ -93,7 +93,7 @@ export class ColorMapService {
   private async scanBlockDir(
     baseDir: string,
     prefix: string,
-    subPath: string
+    subPath: string,
   ): Promise<void> {
     const dirPath = subPath ? join(baseDir, subPath) : baseDir;
     let entries: string[];
@@ -215,14 +215,14 @@ export class ColorMapService {
     if (totalAlpha === 0) return { r: 128, g: 128, b: 128 };
 
     return {
-      r: Math.round(Math.pow(r / totalAlpha, 1 / 2.2) * 255),
-      g: Math.round(Math.pow(g / totalAlpha, 1 / 2.2) * 255),
-      b: Math.round(Math.pow(b / totalAlpha, 1 / 2.2) * 255),
+      r: Math.round((r / totalAlpha) ** (1 / 2.2) * 255),
+      g: Math.round((g / totalAlpha) ** (1 / 2.2) * 255),
+      b: Math.round((b / totalAlpha) ** (1 / 2.2) * 255),
     };
   }
 
   private buildBiomeColors(
-    biomeDefinitions: Map<string, BiomeDefinition>
+    biomeDefinitions: Map<string, BiomeDefinition>,
   ): void {
     for (const [biomeId, biome] of biomeDefinitions) {
       if (biome.topBlock) {
@@ -238,23 +238,25 @@ export class ColorMapService {
     this.paletteColors = new Array(palette.entries.length);
     for (let i = 0; i < palette.entries.length; i++) {
       const blockId = palette.entries[i];
-      this.paletteColors[i] =
-        this.blockColors.get(blockId) ??
+      this.paletteColors[i] = this.blockColors.get(blockId) ??
         FALLBACK_BLOCK_COLORS[blockId] ?? { r: 128, g: 128, b: 128 };
     }
   }
 
   private buildBiomePaletteColors(
     palette: Palette,
-    biomeDefinitions: Map<string, BiomeDefinition>
+    biomeDefinitions: Map<string, BiomeDefinition>,
   ): void {
     this.biomePaletteColors = new Array(palette.entries.length);
     this.biomePaletteIsOcean = new Array(palette.entries.length);
     for (let i = 0; i < palette.entries.length; i++) {
       const biomeId = palette.entries[i];
       const biomeDef = biomeDefinitions.get(biomeId);
-      this.biomePaletteColors[i] =
-        this.biomeColors.get(biomeId) ?? { r: 100, g: 140, b: 80 };
+      this.biomePaletteColors[i] = this.biomeColors.get(biomeId) ?? {
+        r: 100,
+        g: 140,
+        b: 80,
+      };
       this.biomePaletteIsOcean[i] =
         biomeDef?.isOcean === true || biomeId.includes(":ocean/");
     }
@@ -262,16 +264,12 @@ export class ColorMapService {
 
   /** Get color for a block palette index */
   getBlockColor(paletteIndex: number): RGB {
-    return (
-      this.paletteColors[paletteIndex] ?? { r: 128, g: 128, b: 128 }
-    );
+    return this.paletteColors[paletteIndex] ?? { r: 128, g: 128, b: 128 };
   }
 
   /** Get color for a biome palette index */
   getBiomeColor(biomeIndex: number): RGB {
-    return (
-      this.biomePaletteColors[biomeIndex] ?? { r: 100, g: 140, b: 80 }
-    );
+    return this.biomePaletteColors[biomeIndex] ?? { r: 100, g: 140, b: 80 };
   }
 
   /** Check if a biome palette index is an ocean biome */

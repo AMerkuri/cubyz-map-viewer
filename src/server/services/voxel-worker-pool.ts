@@ -1,10 +1,14 @@
-import { availableParallelism } from "os";
-import { Worker } from "worker_threads";
-import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
-
+import { availableParallelism } from "node:os";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
+import type {
+  VoxelJob,
+  VoxelJobResult,
+  VoxelWorkerData,
+  VoxelWorkerMessage,
+} from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
-import type { VoxelJob, VoxelJobResult, VoxelWorkerData, VoxelWorkerMessage } from "../workers/voxel-worker-protocol.js";
 
 interface PendingJob {
   job: VoxelJob;
@@ -46,7 +50,9 @@ export class VoxelWorkerPool {
   }
 
   async destroy(): Promise<void> {
-    const terminations = this.workers.map((slot) => slot.worker.terminate().catch(() => undefined));
+    const terminations = this.workers.map((slot) =>
+      slot.worker.terminate().catch(() => undefined),
+    );
     this.workers.length = 0;
     this.queue.length = 0;
     this.runningJobs.clear();
@@ -89,7 +95,9 @@ export class VoxelWorkerPool {
   private createWorkerSlot(): WorkerSlot {
     const currentPath = fileURLToPath(import.meta.url);
     const workerUrl = fileURLToPath(import.meta.url).endsWith(".ts")
-      ? new URL(`file://${resolve(dirname(currentPath), "../../../dist/server/workers/voxel-worker.js")}`)
+      ? new URL(
+          `file://${resolve(dirname(currentPath), "../../../dist/server/workers/voxel-worker.js")}`,
+        )
       : new URL("../workers/voxel-worker.js", import.meta.url);
     const worker = new Worker(workerUrl, {
       workerData: this.workerData,
@@ -119,7 +127,9 @@ export class VoxelWorkerPool {
         const pending = this.runningJobs.get(jobId);
         if (pending) {
           this.runningJobs.delete(jobId);
-          pending.reject(error instanceof Error ? error : new Error(String(error)));
+          pending.reject(
+            error instanceof Error ? error : new Error(String(error)),
+          );
         }
       }
       slot.busy = false;

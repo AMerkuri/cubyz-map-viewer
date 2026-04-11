@@ -3,8 +3,8 @@
  * GET /api/players - Returns all player data.
  */
 
-import { Router, type Request, type Response } from "express";
-import { join } from "path";
+import { join } from "node:path";
+import { type Request, type Response, Router } from "express";
 import { loadAllPlayers } from "../parsers/player.js";
 import { logger } from "../services/logger.js";
 
@@ -16,7 +16,9 @@ export function createPlayersRouter(savePath: string): Router {
       const players = await loadAllPlayers(join(savePath, "players"));
       res.json(players);
     } catch (e) {
-      logger.error("Players error", { error: e instanceof Error ? e.message : String(e) });
+      logger.error("Players error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
       res.json([]);
     }
   });

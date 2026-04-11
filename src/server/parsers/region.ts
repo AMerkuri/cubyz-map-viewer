@@ -4,8 +4,8 @@
  * Each region contains 4x4x4 = 64 chunks.
  */
 
-import { readFile } from "fs/promises";
-import { inflateRawSync } from "zlib";
+import { readFile } from "node:fs/promises";
+import { inflateRawSync } from "node:zlib";
 import { BinaryReader } from "./binary-reader.js";
 
 export const CHUNK_SIZE = 32;
@@ -71,7 +71,7 @@ export async function parseRegionFile(
   worldX: number,
   worldY: number,
   worldZ: number,
-  voxelSize: number
+  voxelSize: number,
 ): Promise<RegionData> {
   const raw = await readFile(filePath);
   return parseRegionBuffer(raw, worldX, worldY, worldZ, voxelSize, filePath);
@@ -116,7 +116,7 @@ export function parseRegionBuffer(
     } catch (e) {
       // Skip malformed chunks
       console.warn(
-        `Failed to decompress chunk ${i} in region (${worldX},${worldY},${worldZ})${filePath ? ` [${filePath}]` : ""}: ${e}`
+        `Failed to decompress chunk ${i} in region (${worldX},${worldY},${worldZ})${filePath ? ` [${filePath}]` : ""}: ${e}`,
       );
       reader.seek(chunkStart + chunkLengths[i]);
     }

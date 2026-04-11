@@ -15,6 +15,7 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
       }}
     >
       <button
+        type="button"
         onClick={() => onViewChange("terrain")}
         style={{
           padding: "8px 16px",
@@ -30,6 +31,7 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
         Terrain
       </button>
       <button
+        type="button"
         onClick={() => onViewChange("voxel")}
         style={{
           padding: "8px 16px",

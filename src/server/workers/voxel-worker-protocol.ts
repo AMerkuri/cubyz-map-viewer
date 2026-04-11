@@ -67,4 +67,6 @@ export interface VoxelWorkerShutdownMessage {
   type: "shutdown";
 }
 
-export type VoxelWorkerMessage = VoxelWorkerRequestMessage | VoxelWorkerShutdownMessage;
+export type VoxelWorkerMessage =
+  | VoxelWorkerRequestMessage
+  | VoxelWorkerShutdownMessage;

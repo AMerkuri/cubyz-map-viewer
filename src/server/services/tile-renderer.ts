@@ -16,7 +16,7 @@ const TILE_SIZE = 256;
  */
 export async function renderSurfaceTile(
   surface: SurfaceData,
-  colorMap: ColorMapService
+  colorMap: ColorMapService,
 ): Promise<Buffer> {
   const pixels = Buffer.alloc(TILE_SIZE * TILE_SIZE * 3);
 

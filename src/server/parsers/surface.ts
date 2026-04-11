@@ -4,8 +4,8 @@
  * Decompressed: biome_u32[256*256] + height_i32[256*256] + origHeight_i32[256*256]
  */
 
-import { readFile } from "fs/promises";
-import { inflateRawSync } from "zlib";
+import { readFile } from "node:fs/promises";
+import { inflateRawSync } from "node:zlib";
 import { BinaryReader } from "./binary-reader.js";
 
 export const MAP_SIZE = 256;
@@ -29,7 +29,7 @@ export async function parseSurfaceFile(
   filePath: string,
   worldX: number,
   worldY: number,
-  voxelSize: number
+  voxelSize: number,
 ): Promise<SurfaceData> {
   const raw = await readFile(filePath);
   return parseSurfaceBuffer(raw, worldX, worldY, voxelSize);
@@ -39,7 +39,7 @@ export function parseSurfaceBuffer(
   raw: Buffer,
   worldX: number,
   worldY: number,
-  voxelSize: number
+  voxelSize: number,
 ): SurfaceData {
   const reader = new BinaryReader(raw);
 
@@ -58,7 +58,7 @@ export function parseSurfaceBuffer(
   const expectedSize = pixelCount * 12; // 3 arrays * 4 bytes each
   if (decompressed.length !== expectedSize) {
     throw new Error(
-      `Surface data size mismatch: got ${decompressed.length}, expected ${expectedSize}`
+      `Surface data size mismatch: got ${decompressed.length}, expected ${expectedSize}`,
     );
   }
 

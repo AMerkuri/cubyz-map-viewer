@@ -3,18 +3,17 @@
  * GET /api/tiles/:lod/:x/:y.png - Returns a 256x256 PNG tile.
  */
 
-import { Router, type Request, type Response } from "express";
-import { join } from "path";
-import { existsSync, statSync } from "fs";
-import { parseSurfaceFile, MAP_SIZE } from "../parsers/surface.js";
-import {
-  renderSurfaceTile,
-  renderEmptyTile,
-} from "../services/tile-renderer.js";
-import type { ColorMapService } from "../services/color-map.js";
-import { WATER_COLOR } from "../services/color-map.js";
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { type Request, type Response, Router } from "express";
+import { MAP_SIZE, parseSurfaceFile } from "../parsers/surface.js";
 import type { LRUCache } from "../services/cache.js";
+import type { ColorMapService } from "../services/color-map.js";
 import { logger } from "../services/logger.js";
+import {
+  renderEmptyTile,
+  renderSurfaceTile,
+} from "../services/tile-renderer.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 
@@ -26,7 +25,7 @@ interface CachedTile {
 export function createTilesRouter(
   savePath: string,
   colorMap: ColorMapService,
-  tileCache: LRUCache<string, CachedTile>
+  tileCache: LRUCache<string, CachedTile>,
 ): Router {
   const router = Router();
 
@@ -41,11 +40,11 @@ export function createTilesRouter(
 
   router.get("/:lod/:x/:y.png", async (req: Request, res: Response) => {
     try {
-      const lod = parseInt(req.params.lod as string);
-      const x = parseInt(req.params.x as string);
-      const y = parseInt(req.params.y as string);
+      const lod = parseInt(req.params.lod as string, 10);
+      const x = parseInt(req.params.x as string, 10);
+      const y = parseInt(req.params.y as string, 10);
 
-      if (!VALID_LODS.includes(lod) || isNaN(x) || isNaN(y)) {
+      if (!VALID_LODS.includes(lod) || Number.isNaN(x) || Number.isNaN(y)) {
         res.status(400).send("Invalid tile parameters");
         return;
       }
@@ -58,7 +57,7 @@ export function createTilesRouter(
         "maps",
         String(lod),
         String(worldX),
-        `${worldY}.surface`
+        `${worldY}.surface`,
       );
 
       if (!existsSync(surfacePath)) {
@@ -83,12 +82,7 @@ export function createTilesRouter(
         return;
       }
 
-      const surface = await parseSurfaceFile(
-        surfacePath,
-        worldX,
-        worldY,
-        lod
-      );
+      const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
       const tileBuf = await renderSurfaceTile(surface, colorMap);
 
       tileCache.set(cacheKey, { buf: tileBuf, mtime: fileMtime });
@@ -97,7 +91,9 @@ export function createTilesRouter(
       res.set("Cache-Control", "public, max-age=10");
       res.send(tileBuf);
     } catch (e) {
-      logger.error("Tile render error", { error: e instanceof Error ? e.message : String(e) });
+      logger.error("Tile render error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
       const empty = await getEmptyTile();
       res.set("Content-Type", "image/png");
       res.send(empty);

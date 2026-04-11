@@ -4,9 +4,9 @@
  * and world metadata, then emits events for real-time updates.
  */
 
-import { watch, type FSWatcher } from "chokidar";
-import { join, relative, sep } from "path";
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
+import { join, relative, sep } from "node:path";
+import { type FSWatcher, watch } from "chokidar";
 import { logger } from "./logger.js";
 
 export type WatchEventType =
@@ -34,10 +34,12 @@ interface SaveWatcherOptions {
 export interface WatchEvent {
   type: WatchEventType;
   /** Batch payloads for terrain and voxel region changes. */
-  data?: Record<string, unknown> | {
-    tiles: TerrainTileUpdate[];
-    regions: TerrainRegionUpdate[];
-  };
+  data?:
+    | Record<string, unknown>
+    | {
+        tiles: TerrainTileUpdate[];
+        regions: TerrainRegionUpdate[];
+      };
   /** Unix timestamp (ms) when the server broadcast this event. */
   sentAt?: number;
 }
@@ -59,7 +61,10 @@ export class SaveWatcher extends EventEmitter {
   constructor(savePath: string, options: SaveWatcherOptions = {}) {
     super();
     this.savePath = savePath;
-    this.terrainUpdateBatchMs = Math.max(0, options.terrainUpdateBatchMs ?? 15_000);
+    this.terrainUpdateBatchMs = Math.max(
+      0,
+      options.terrainUpdateBatchMs ?? 15_000,
+    );
   }
 
   start(): void {
@@ -76,11 +81,17 @@ export class SaveWatcher extends EventEmitter {
       },
     });
 
-    this.watcher.on("change", (filePath: string) => this.handleChange(filePath));
+    this.watcher.on("change", (filePath: string) =>
+      this.handleChange(filePath),
+    );
     this.watcher.on("add", (filePath: string) => this.handleAdd(filePath));
-    this.watcher.on("unlink", (filePath: string) => this.handleRemove(filePath));
+    this.watcher.on("unlink", (filePath: string) =>
+      this.handleRemove(filePath),
+    );
     this.watcher.on("error", (err) => {
-      logger.error("SaveWatcher error", { error: err instanceof Error ? err.message : String(err) });
+      logger.error("SaveWatcher error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
 
     logger.info("SaveWatcher watching for file changes");
@@ -111,17 +122,23 @@ export class SaveWatcher extends EventEmitter {
       setTimeout(() => {
         this.debounceTimers.delete(key);
         fn();
-      }, SaveWatcher.DEBOUNCE_MS)
+      }, SaveWatcher.DEBOUNCE_MS),
     );
   }
 
   private queueTileUpdate(tileInfo: TerrainTileUpdate): void {
-    this.pendingTileUpdates.set(`${tileInfo.lod}/${tileInfo.tileX}/${tileInfo.tileY}`, tileInfo);
+    this.pendingTileUpdates.set(
+      `${tileInfo.lod}/${tileInfo.tileX}/${tileInfo.tileY}`,
+      tileInfo,
+    );
     this.scheduleTerrainUpdatesBatch();
   }
 
   private queueRegionUpdate(regionInfo: TerrainRegionUpdate): void {
-    this.pendingRegionUpdates.set(`${regionInfo.lod}/${regionInfo.regionX}/${regionInfo.regionY}`, regionInfo);
+    this.pendingRegionUpdates.set(
+      `${regionInfo.lod}/${regionInfo.regionX}/${regionInfo.regionY}`,
+      regionInfo,
+    );
     this.scheduleTerrainUpdatesBatch();
   }
 
@@ -136,7 +153,11 @@ export class SaveWatcher extends EventEmitter {
   }
 
   private flushTerrainUpdatesBatch(): void {
-    if (this.pendingTileUpdates.size === 0 && this.pendingRegionUpdates.size === 0) return;
+    if (
+      this.pendingTileUpdates.size === 0 &&
+      this.pendingRegionUpdates.size === 0
+    )
+      return;
 
     const tiles = [...this.pendingTileUpdates.values()];
     const regions = [...this.pendingRegionUpdates.values()];
@@ -227,18 +248,14 @@ export class SaveWatcher extends EventEmitter {
    * Parse a relative surface file path like "maps/1/2048/768.surface"
    * into { lod, tileX, tileY }.
    */
-  private parseSurfacePath(
-    rel: string
-  ): TerrainTileUpdate | null {
+  private parseSurfacePath(rel: string): TerrainTileUpdate | null {
     // Expected: maps/{lod}/{worldX}/{worldY}.surface
-    const match = rel.match(
-      /^maps\/(\d+)\/(\d+)\/(\d+)\.surface$/
-    );
+    const match = rel.match(/^maps\/(\d+)\/(\d+)\/(\d+)\.surface$/);
     if (!match) return null;
 
-    const lod = parseInt(match[1]);
-    const worldX = parseInt(match[2]);
-    const worldY = parseInt(match[3]);
+    const lod = parseInt(match[1], 10);
+    const worldX = parseInt(match[2], 10);
+    const worldY = parseInt(match[3], 10);
     const mapSize = 256;
     const tileX = worldX / (mapSize * lod);
     const tileY = worldY / (mapSize * lod);
@@ -252,18 +269,17 @@ export class SaveWatcher extends EventEmitter {
    * Parse a relative region file path like "chunks/2/256/384/128.region"
    * into { lod, regionX, regionY }.
    */
-  private parseRegionPath(
-    rel: string
-  ): TerrainRegionUpdate | null {
+  private parseRegionPath(rel: string): TerrainRegionUpdate | null {
     // Expected: chunks/{lod}/{worldX}/{worldY}/{worldZ}.region
     const match = rel.match(/^chunks\/(\d+)\/(-?\d+)\/(-?\d+)\/-?\d+\.region$/);
     if (!match) return null;
 
-    const lod = parseInt(match[1]);
-    const regionX = parseInt(match[2]);
-    const regionY = parseInt(match[3]);
+    const lod = parseInt(match[1], 10);
+    const regionX = parseInt(match[2], 10);
+    const regionY = parseInt(match[3], 10);
 
-    if (isNaN(lod) || isNaN(regionX) || isNaN(regionY)) return null;
+    if (Number.isNaN(lod) || Number.isNaN(regionX) || Number.isNaN(regionY))
+      return null;
 
     return { lod, regionX, regionY };
   }

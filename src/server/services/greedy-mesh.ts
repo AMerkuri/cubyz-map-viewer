@@ -119,21 +119,39 @@ export function greedyMesh(
 
   function addQuad(
     // Four corners of the quad (world coords), CCW from the outside face
-    v0x: number, v0y: number, v0z: number,
-    v1x: number, v1y: number, v1z: number,
-    v2x: number, v2y: number, v2z: number,
-    v3x: number, v3y: number, v3z: number,
-    r: number, g: number, b: number,
+    v0x: number,
+    v0y: number,
+    v0z: number,
+    v1x: number,
+    v1y: number,
+    v1z: number,
+    v2x: number,
+    v2y: number,
+    v2z: number,
+    v3x: number,
+    v3y: number,
+    v3z: number,
+    r: number,
+    g: number,
+    b: number,
     // dir=+1 → standard winding, dir=-1 → flipped
     dir: number,
   ) {
     const base = positions.length / 3;
 
     positions.push(
-      worldX + v0x, worldY + v0y, worldZ + v0z,
-      worldX + v1x, worldY + v1y, worldZ + v1z,
-      worldX + v2x, worldY + v2y, worldZ + v2z,
-      worldX + v3x, worldY + v3y, worldZ + v3z,
+      worldX + v0x,
+      worldY + v0y,
+      worldZ + v0z,
+      worldX + v1x,
+      worldY + v1y,
+      worldZ + v1z,
+      worldX + v2x,
+      worldY + v2y,
+      worldZ + v2z,
+      worldX + v3x,
+      worldY + v3y,
+      worldZ + v3z,
     );
     for (let i = 0; i < 4; i++) {
       colors.push(r, g, b);
@@ -178,7 +196,11 @@ export function greedyMesh(
 
           // Extend in Z first
           let dz = 1;
-          while (z + dz < height && mask[y * height + z + dz] === typ && !used[y * height + z + dz]) {
+          while (
+            z + dz < height &&
+            mask[y * height + z + dz] === typ &&
+            !used[y * height + z + dz]
+          ) {
             dz++;
           }
           // Extend in Y
@@ -186,7 +208,10 @@ export function greedyMesh(
           let dy = 1;
           outer: while (dy < maxDy) {
             for (let k = 0; k < dz; k++) {
-              if (mask[(y + dy) * height + z + k] !== typ || used[(y + dy) * height + z + k]) {
+              if (
+                mask[(y + dy) * height + z + k] !== typ ||
+                used[(y + dy) * height + z + k]
+              ) {
                 break outer;
               }
             }
@@ -208,11 +233,21 @@ export function greedyMesh(
           // CCW from outside (+X dir): (fx, y, z) → (fx, y+dy, z) → (fx, y+dy, z+dz) → (fx, y, z+dz)
           // For -X dir: flip to maintain outward normals.
           addQuad(
-            fx, y,      z,
-            fx, y + dy, z,
-            fx, y + dy, z + dz,
-            fx, y,      z + dz,
-            rgb.r, rgb.g, rgb.b,
+            fx,
+            y,
+            z,
+            fx,
+            y + dy,
+            z,
+            fx,
+            y + dy,
+            z + dz,
+            fx,
+            y,
+            z + dz,
+            rgb.r,
+            rgb.g,
+            rgb.b,
             dir,
           );
         }
@@ -245,14 +280,21 @@ export function greedyMesh(
           if (typ === 0 || used[x * height + z]) continue;
 
           let dz = 1;
-          while (z + dz < height && mask[x * height + z + dz] === typ && !used[x * height + z + dz]) {
+          while (
+            z + dz < height &&
+            mask[x * height + z + dz] === typ &&
+            !used[x * height + z + dz]
+          ) {
             dz++;
           }
           const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
           outer: while (dx < maxDx) {
             for (let k = 0; k < dz; k++) {
-              if (mask[(x + dx) * height + z + k] !== typ || used[(x + dx) * height + z + k]) {
+              if (
+                mask[(x + dx) * height + z + k] !== typ ||
+                used[(x + dx) * height + z + k]
+              ) {
                 break outer;
               }
             }
@@ -273,11 +315,21 @@ export function greedyMesh(
           // The client still applies the unconditional b↔c swap, so we must
           // pre-invert here to cancel it out.
           addQuad(
-            x,      fy, z,
-            x + dx, fy, z,
-            x + dx, fy, z + dz,
-            x,      fy, z + dz,
-            rgb.r, rgb.g, rgb.b,
+            x,
+            fy,
+            z,
+            x + dx,
+            fy,
+            z,
+            x + dx,
+            fy,
+            z + dz,
+            x,
+            fy,
+            z + dz,
+            rgb.r,
+            rgb.g,
+            rgb.b,
             -dir,
           );
         }
@@ -311,14 +363,21 @@ export function greedyMesh(
 
           const maxDy = Math.min(depth - y, cellsUntilChunkBoundary(y));
           let dy = 1;
-          while (dy < maxDy && mask[x * depth + y + dy] === typ && !used[x * depth + y + dy]) {
+          while (
+            dy < maxDy &&
+            mask[x * depth + y + dy] === typ &&
+            !used[x * depth + y + dy]
+          ) {
             dy++;
           }
           const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
           outer: while (dx < maxDx) {
             for (let k = 0; k < dy; k++) {
-              if (mask[(x + dx) * depth + y + k] !== typ || used[(x + dx) * depth + y + k]) {
+              if (
+                mask[(x + dx) * depth + y + k] !== typ ||
+                used[(x + dx) * depth + y + k]
+              ) {
                 break outer;
               }
             }
@@ -335,11 +394,21 @@ export function greedyMesh(
           const fz = dir === 1 ? z + 1 : z;
 
           addQuad(
-            x,      y,      fz,
-            x + dx, y,      fz,
-            x + dx, y + dy, fz,
-            x,      y + dy, fz,
-            rgb.r, rgb.g, rgb.b,
+            x,
+            y,
+            fz,
+            x + dx,
+            y,
+            fz,
+            x + dx,
+            y + dy,
+            fz,
+            x,
+            y + dy,
+            fz,
+            rgb.r,
+            rgb.g,
+            rgb.b,
             dir,
           );
         }
@@ -410,7 +479,8 @@ export function greedyMeshBinary(
   }
 
   function getBlock(x: number, y: number, z: number): number {
-    if (x < 0 || x >= width || y < 0 || y >= depth || z < 0 || z >= height) return 0;
+    if (x < 0 || x >= width || y < 0 || y >= depth || z < 0 || z >= height)
+      return 0;
     return blockTypes[x * depth * height + y * height + z];
   }
 
@@ -451,38 +521,56 @@ export function greedyMeshBinary(
    * dir=+1 → CCW winding, dir=-1 → flipped.
    */
   function addQuad(
-    v0x: number, v0y: number, v0z: number,
-    v1x: number, v1y: number, v1z: number,
-    v2x: number, v2y: number, v2z: number,
-    v3x: number, v3y: number, v3z: number,
-    r: number, g: number, b: number,
+    v0x: number,
+    v0y: number,
+    v0z: number,
+    v1x: number,
+    v1y: number,
+    v1z: number,
+    v2x: number,
+    v2y: number,
+    v2z: number,
+    v3x: number,
+    v3y: number,
+    v3z: number,
+    r: number,
+    g: number,
+    b: number,
     dir: number,
   ) {
     ensureCapacity();
 
     const qi = quadCount;
-    const vi = qi * 4;   // first vertex slot for this quad
-    const ii = qi * 6;   // first index slot for this quad
+    const vi = qi * 4; // first vertex slot for this quad
+    const ii = qi * 6; // first index slot for this quad
     const baseVert = vi; // vertex index referenced by indices
 
-    quadColors[qi * 3]     = r;
+    quadColors[qi * 3] = r;
     quadColors[qi * 3 + 1] = g;
     quadColors[qi * 3 + 2] = b;
 
-    vertPosX[vi]     = v0x; vertPosY[vi]     = v0y; vertPosZ[vi]     = v0z;
-    vertPosX[vi + 1] = v1x; vertPosY[vi + 1] = v1y; vertPosZ[vi + 1] = v1z;
-    vertPosX[vi + 2] = v2x; vertPosY[vi + 2] = v2y; vertPosZ[vi + 2] = v2z;
-    vertPosX[vi + 3] = v3x; vertPosY[vi + 3] = v3y; vertPosZ[vi + 3] = v3z;
+    vertPosX[vi] = v0x;
+    vertPosY[vi] = v0y;
+    vertPosZ[vi] = v0z;
+    vertPosX[vi + 1] = v1x;
+    vertPosY[vi + 1] = v1y;
+    vertPosZ[vi + 1] = v1z;
+    vertPosX[vi + 2] = v2x;
+    vertPosY[vi + 2] = v2y;
+    vertPosZ[vi + 2] = v2z;
+    vertPosX[vi + 3] = v3x;
+    vertPosY[vi + 3] = v3y;
+    vertPosZ[vi + 3] = v3z;
 
     if (dir === 1) {
-      indexBuf[ii]     = baseVert;
+      indexBuf[ii] = baseVert;
       indexBuf[ii + 1] = baseVert + 1;
       indexBuf[ii + 2] = baseVert + 2;
       indexBuf[ii + 3] = baseVert;
       indexBuf[ii + 4] = baseVert + 2;
       indexBuf[ii + 5] = baseVert + 3;
     } else {
-      indexBuf[ii]     = baseVert;
+      indexBuf[ii] = baseVert;
       indexBuf[ii + 1] = baseVert + 2;
       indexBuf[ii + 2] = baseVert + 1;
       indexBuf[ii + 3] = baseVert;
@@ -512,19 +600,47 @@ export function greedyMeshBinary(
           const typ = mask[y * height + z];
           if (typ === 0 || used[y * height + z]) continue;
           let dz = 1;
-          while (z + dz < height && mask[y * height + z + dz] === typ && !used[y * height + z + dz]) dz++;
+          while (
+            z + dz < height &&
+            mask[y * height + z + dz] === typ &&
+            !used[y * height + z + dz]
+          )
+            dz++;
           const maxDy = Math.min(depth - y, cellsUntilChunkBoundary(y));
           let dy = 1;
           outer: while (dy < maxDy) {
             for (let k = 0; k < dz; k++) {
-              if (mask[(y + dy) * height + z + k] !== typ || used[(y + dy) * height + z + k]) break outer;
+              if (
+                mask[(y + dy) * height + z + k] !== typ ||
+                used[(y + dy) * height + z + k]
+              )
+                break outer;
             }
             dy++;
           }
-          for (let py = 0; py < dy; py++) for (let pz = 0; pz < dz; pz++) used[(y + py) * height + z + pz] = 1;
+          for (let py = 0; py < dy; py++)
+            for (let pz = 0; pz < dz; pz++)
+              used[(y + py) * height + z + pz] = 1;
           const rgb = getBlockColor(blockColors, typ);
           const fx = dir === 1 ? x + 1 : x;
-          addQuad(fx, y, z,  fx, y + dy, z,  fx, y + dy, z + dz,  fx, y, z + dz,  rgb.r, rgb.g, rgb.b, dir);
+          addQuad(
+            fx,
+            y,
+            z,
+            fx,
+            y + dy,
+            z,
+            fx,
+            y + dy,
+            z + dz,
+            fx,
+            y,
+            z + dz,
+            rgb.r,
+            rgb.g,
+            rgb.b,
+            dir,
+          );
         }
       }
     }
@@ -549,20 +665,48 @@ export function greedyMeshBinary(
           const typ = mask[x * height + z];
           if (typ === 0 || used[x * height + z]) continue;
           let dz = 1;
-          while (z + dz < height && mask[x * height + z + dz] === typ && !used[x * height + z + dz]) dz++;
+          while (
+            z + dz < height &&
+            mask[x * height + z + dz] === typ &&
+            !used[x * height + z + dz]
+          )
+            dz++;
           const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
           outer: while (dx < maxDx) {
             for (let k = 0; k < dz; k++) {
-              if (mask[(x + dx) * height + z + k] !== typ || used[(x + dx) * height + z + k]) break outer;
+              if (
+                mask[(x + dx) * height + z + k] !== typ ||
+                used[(x + dx) * height + z + k]
+              )
+                break outer;
             }
             dx++;
           }
-          for (let px = 0; px < dx; px++) for (let pz = 0; pz < dz; pz++) used[(x + px) * height + z + pz] = 1;
+          for (let px = 0; px < dx; px++)
+            for (let pz = 0; pz < dz; pz++)
+              used[(x + px) * height + z + pz] = 1;
           const rgb = getBlockColor(blockColors, typ);
           const fy = dir === 1 ? y + 1 : y;
           // Pre-invert winding to cancel the client-side unconditional b↔c swap for Y-faces
-          addQuad(x, fy, z,  x + dx, fy, z,  x + dx, fy, z + dz,  x, fy, z + dz,  rgb.r, rgb.g, rgb.b, -dir);
+          addQuad(
+            x,
+            fy,
+            z,
+            x + dx,
+            fy,
+            z,
+            x + dx,
+            fy,
+            z + dz,
+            x,
+            fy,
+            z + dz,
+            rgb.r,
+            rgb.g,
+            rgb.b,
+            -dir,
+          );
         }
       }
     }
@@ -588,19 +732,46 @@ export function greedyMeshBinary(
           if (typ === 0 || used[x * depth + y]) continue;
           const maxDy = Math.min(depth - y, cellsUntilChunkBoundary(y));
           let dy = 1;
-          while (dy < maxDy && mask[x * depth + y + dy] === typ && !used[x * depth + y + dy]) dy++;
+          while (
+            dy < maxDy &&
+            mask[x * depth + y + dy] === typ &&
+            !used[x * depth + y + dy]
+          )
+            dy++;
           const maxDx = Math.min(width - x, cellsUntilChunkBoundary(x));
           let dx = 1;
           outer: while (dx < maxDx) {
             for (let k = 0; k < dy; k++) {
-              if (mask[(x + dx) * depth + y + k] !== typ || used[(x + dx) * depth + y + k]) break outer;
+              if (
+                mask[(x + dx) * depth + y + k] !== typ ||
+                used[(x + dx) * depth + y + k]
+              )
+                break outer;
             }
             dx++;
           }
-          for (let px = 0; px < dx; px++) for (let py = 0; py < dy; py++) used[(x + px) * depth + y + py] = 1;
+          for (let px = 0; px < dx; px++)
+            for (let py = 0; py < dy; py++) used[(x + px) * depth + y + py] = 1;
           const rgb = getBlockColor(blockColors, typ);
           const fz = z + 1; // dir is always +1 here
-          addQuad(x, y, fz,  x + dx, y, fz,  x + dx, y + dy, fz,  x, y + dy, fz,  rgb.r, rgb.g, rgb.b, 1);
+          addQuad(
+            x,
+            y,
+            fz,
+            x + dx,
+            y,
+            fz,
+            x + dx,
+            y + dy,
+            fz,
+            x,
+            y + dy,
+            fz,
+            rgb.r,
+            rgb.g,
+            rgb.b,
+            1,
+          );
         }
       }
     }
@@ -728,10 +899,18 @@ export function encodeBinaryQuads(
     quadColors[qi * 3 + 1] = rgb.g;
     quadColors[qi * 3 + 2] = rgb.b;
 
-    vertPosX[vi] = quad.v0x; vertPosY[vi] = quad.v0y; vertPosZ[vi] = quad.v0z;
-    vertPosX[vi + 1] = quad.v1x; vertPosY[vi + 1] = quad.v1y; vertPosZ[vi + 1] = quad.v1z;
-    vertPosX[vi + 2] = quad.v2x; vertPosY[vi + 2] = quad.v2y; vertPosZ[vi + 2] = quad.v2z;
-    vertPosX[vi + 3] = quad.v3x; vertPosY[vi + 3] = quad.v3y; vertPosZ[vi + 3] = quad.v3z;
+    vertPosX[vi] = quad.v0x;
+    vertPosY[vi] = quad.v0y;
+    vertPosZ[vi] = quad.v0z;
+    vertPosX[vi + 1] = quad.v1x;
+    vertPosY[vi + 1] = quad.v1y;
+    vertPosZ[vi + 1] = quad.v1z;
+    vertPosX[vi + 2] = quad.v2x;
+    vertPosY[vi + 2] = quad.v2y;
+    vertPosZ[vi + 2] = quad.v2z;
+    vertPosX[vi + 3] = quad.v3x;
+    vertPosY[vi + 3] = quad.v3y;
+    vertPosZ[vi + 3] = quad.v3z;
 
     if (quad.dir === 1) {
       indexBuf[ii] = vi;
@@ -793,7 +972,10 @@ export function encodeBinaryQuads(
   return buf;
 }
 
-function getBlockColor(blockColors: BlockColorTable, paletteIndex: number): { r: number; g: number; b: number } {
+function getBlockColor(
+  blockColors: BlockColorTable,
+  paletteIndex: number,
+): { r: number; g: number; b: number } {
   const off = paletteIndex * 3;
   if (off + 2 >= blockColors.rgb.length) {
     return { r: 128, g: 128, b: 128 };

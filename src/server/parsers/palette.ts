@@ -4,7 +4,7 @@
  * Array index = numeric ID used in binary data.
  */
 
-import { readFile } from "fs/promises";
+import { readFile } from "node:fs/promises";
 import { parseZon, type ZonValue } from "./zon.js";
 
 export interface Palette {

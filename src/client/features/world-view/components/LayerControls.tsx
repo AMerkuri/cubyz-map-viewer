@@ -26,6 +26,7 @@ interface ToggleButtonProps {
 function ToggleButton({ label, active, onToggle }: ToggleButtonProps) {
   return (
     <button
+      type="button"
       onClick={onToggle}
       style={{
         display: "flex",
@@ -100,10 +101,27 @@ export function LayerControls({
             active={visibility.debug}
             onToggle={() => toggle("debug")}
           />
-          <div style={{ padding: "6px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, color: "#aaa", fontSize: 11 }}>
+          <div
+            style={{
+              padding: "6px 10px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 8,
+                color: "#aaa",
+                fontSize: 11,
+              }}
+            >
               <span>LOD1 Max Dist</span>
-              <span style={{ color: "#d6d9ea", fontWeight: 600 }}>{voxelLod1MaxDist}</span>
+              <span style={{ color: "#d6d9ea", fontWeight: 600 }}>
+                {voxelLod1MaxDist}
+              </span>
             </div>
             <input
               type="range"

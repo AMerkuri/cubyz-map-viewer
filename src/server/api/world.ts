@@ -5,11 +5,11 @@
  * GET /api/world/chunk-index - Returns list of available voxel region columns.
  */
 
-import { Router, type Request, type Response } from "express";
-import { join } from "path";
-import { readdir, stat } from "fs/promises";
-import type { WorldMetadata } from "../parsers/world-meta.js";
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { type Request, type Response, Router } from "express";
 import { MAP_SIZE } from "../parsers/surface.js";
+import type { WorldMetadata } from "../parsers/world-meta.js";
 import { logger } from "../services/logger.js";
 
 export interface SurfaceIndex {
@@ -41,7 +41,9 @@ export function createWorldRouter(
       const index = await buildSurfaceIndex(savePath);
       res.json(index);
     } catch (e) {
-      logger.error("Surface index error", { error: e instanceof Error ? e.message : String(e) });
+      logger.error("Surface index error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
       res.json([]);
     }
   });
@@ -51,7 +53,9 @@ export function createWorldRouter(
       const index = await buildChunkIndex(savePath);
       res.json(index);
     } catch (e) {
-      logger.error("Chunk index error", { error: e instanceof Error ? e.message : String(e) });
+      logger.error("Chunk index error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
       res.json([]);
     }
   });
@@ -71,8 +75,8 @@ async function buildSurfaceIndex(savePath: string): Promise<SurfaceIndex[]> {
   }
 
   for (const lodStr of lodDirs) {
-    const lod = parseInt(lodStr);
-    if (isNaN(lod)) continue;
+    const lod = parseInt(lodStr, 10);
+    if (Number.isNaN(lod)) continue;
 
     const lodPath = join(mapsDir, lodStr);
     const lodStat = await stat(lodPath).catch(() => null);
@@ -80,8 +84,8 @@ async function buildSurfaceIndex(savePath: string): Promise<SurfaceIndex[]> {
 
     const wxDirs = await readdir(lodPath).catch(() => [] as string[]);
     for (const wxStr of wxDirs) {
-      const worldX = parseInt(wxStr);
-      if (isNaN(worldX)) continue;
+      const worldX = parseInt(wxStr, 10);
+      if (Number.isNaN(worldX)) continue;
 
       const wxPath = join(lodPath, wxStr);
       const wxStat = await stat(wxPath).catch(() => null);
@@ -90,8 +94,8 @@ async function buildSurfaceIndex(savePath: string): Promise<SurfaceIndex[]> {
       const files = await readdir(wxPath).catch(() => [] as string[]);
       for (const file of files) {
         if (!file.endsWith(".surface")) continue;
-        const worldY = parseInt(file);
-        if (isNaN(worldY)) continue;
+        const worldY = parseInt(file, 10);
+        if (Number.isNaN(worldY)) continue;
 
         index.push({
           lod,
@@ -119,8 +123,8 @@ async function buildChunkIndex(savePath: string): Promise<ChunkIndexEntry[]> {
   }
 
   for (const lodStr of lodDirs) {
-    const lod = parseInt(lodStr);
-    if (isNaN(lod) || lod <= 0) continue;
+    const lod = parseInt(lodStr, 10);
+    if (Number.isNaN(lod) || lod <= 0) continue;
 
     const lodPath = join(chunksDir, lodStr);
     const lodStat = await stat(lodPath).catch(() => null);
@@ -128,8 +132,8 @@ async function buildChunkIndex(savePath: string): Promise<ChunkIndexEntry[]> {
 
     const rxDirs = await readdir(lodPath).catch(() => [] as string[]);
     for (const rxStr of rxDirs) {
-      const regionX = parseInt(rxStr);
-      if (isNaN(regionX)) continue;
+      const regionX = parseInt(rxStr, 10);
+      if (Number.isNaN(regionX)) continue;
 
       const rxPath = join(lodPath, rxStr);
       const rxStat = await stat(rxPath).catch(() => null);
@@ -137,8 +141,8 @@ async function buildChunkIndex(savePath: string): Promise<ChunkIndexEntry[]> {
 
       const ryDirs = await readdir(rxPath).catch(() => [] as string[]);
       for (const ryStr of ryDirs) {
-        const regionY = parseInt(ryStr);
-        if (isNaN(regionY)) continue;
+        const regionY = parseInt(ryStr, 10);
+        if (Number.isNaN(regionY)) continue;
 
         const ryPath = join(rxPath, ryStr);
         const ryStat = await stat(ryPath).catch(() => null);
@@ -152,6 +156,8 @@ async function buildChunkIndex(savePath: string): Promise<ChunkIndexEntry[]> {
     }
   }
 
-  index.sort((a, b) => a.lod - b.lod || a.regionX - b.regionX || a.regionY - b.regionY);
+  index.sort(
+    (a, b) => a.lod - b.lod || a.regionX - b.regionX || a.regionY - b.regionY,
+  );
   return index;
 }

@@ -4,7 +4,7 @@
  */
 
 import { MAP_SIZE, type SurfaceData } from "../parsers/surface.js";
-import { WATER_COLOR, type ColorMapService } from "./color-map.js";
+import { type ColorMapService, WATER_COLOR } from "./color-map.js";
 
 export interface TerrainMeshData {
   width: number;
@@ -29,7 +29,7 @@ export interface TerrainMeshData {
 export function buildTerrainData(
   surface: SurfaceData,
   colorMap: ColorMapService,
-  resolution: number = 256
+  resolution: number = 256,
 ): TerrainMeshData {
   const step = Math.max(1, Math.floor(MAP_SIZE / resolution));
   const width = Math.floor(MAP_SIZE / step);
@@ -60,13 +60,13 @@ export function buildTerrainData(
         : Math.max(0.5, Math.min(1.3, 1.0 + (h - 30) * 0.003));
 
       colors[outIdx * 3] = Math.round(
-        Math.max(0, Math.min(255, color.r * factor))
+        Math.max(0, Math.min(255, color.r * factor)),
       );
       colors[outIdx * 3 + 1] = Math.round(
-        Math.max(0, Math.min(255, color.g * factor))
+        Math.max(0, Math.min(255, color.g * factor)),
       );
       colors[outIdx * 3 + 2] = Math.round(
-        Math.max(0, Math.min(255, color.b * factor))
+        Math.max(0, Math.min(255, color.b * factor)),
       );
 
       if (h < minH) minH = h;

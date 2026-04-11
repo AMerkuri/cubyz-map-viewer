@@ -2,7 +2,7 @@
  * World metadata parser for world.zig.zon files.
  */
 
-import { readFile } from "fs/promises";
+import { readFile } from "node:fs/promises";
 import { parseZon, type ZonValue } from "./zon.js";
 
 export interface WorldMetadata {
@@ -22,9 +22,7 @@ function getField(obj: Record<string, ZonValue>, key: string): ZonValue {
   return obj[key] ?? null;
 }
 
-export async function parseWorldMeta(
-  filePath: string
-): Promise<WorldMetadata> {
+export async function parseWorldMeta(filePath: string): Promise<WorldMetadata> {
   const text = await readFile(filePath, "utf-8");
   const parsed = parseZon(text) as Record<string, ZonValue>;
 

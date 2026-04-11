@@ -1,7 +1,7 @@
 import { useState } from "react";
-import type { useWorldData } from "../hooks/useWorldData.js";
+import { OverlayPanel } from "../../../shared/ui/OverlayPanel.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
-import { OverlayPanel } from "./OverlayPanel.js";
+import type { useWorldData } from "../hooks/useWorldData.js";
 
 interface InfoPanelProps {
   worldData: ReturnType<typeof useWorldData>;
@@ -41,60 +41,81 @@ export function InfoPanel({
           <InfoRow label="World name" value={world.name} />
           <InfoRow label="Seed" value={String(world.seed)} />
           <InfoRow label="Mode" value={world.defaultGamemode} />
-          <InfoRow
-            label="Time"
-            value={formatGameTime(world.gameTime)}
-          />
-          <div
+          <InfoRow label="Time" value={formatGameTime(world.gameTime)} />
+          <button
+            type="button"
             onClick={onSpawnClick}
             onMouseEnter={() => setHoveredSpawn(true)}
             onMouseLeave={() => setHoveredSpawn(false)}
             style={{
+              border: "none",
               borderRadius: 4,
               padding: "1px 4px",
               margin: "0 -4px",
               cursor: "pointer",
-              background: hoveredSpawn ? "rgba(255,255,255,0.07)" : "transparent",
+              background: hoveredSpawn
+                ? "rgba(255,255,255,0.07)"
+                : "transparent",
               transition: "background 0.1s",
+              width: "100%",
+              textAlign: "left",
             }}
-            >
-              <InfoRow
+          >
+            <InfoRow
               label="Spawn"
               value={`${world.spawn[0]}, ${world.spawn[1]}, ${world.spawn[2]}`}
             />
-          </div>
-          {zoomLevel !== null && <InfoRow label="Zoom" value={String(Math.round(zoomLevel))} />}
+          </button>
+          {zoomLevel !== null && (
+            <InfoRow label="Zoom" value={String(Math.round(zoomLevel))} />
+          )}
           <InfoRow
             label="Last update"
             value={lastUpdateAt !== null ? formatDateTime(lastUpdateAt) : "-"}
           />
 
           {players.length > 0 && (
-            <div style={{ marginTop: 8, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 6 }}>
+            <div
+              style={{
+                marginTop: 8,
+                borderTop: "1px solid rgba(255,255,255,0.1)",
+                paddingTop: 6,
+              }}
+            >
               <div style={{ color: "#888", marginBottom: 4 }}>
                 Players ({players.length})
               </div>
-              {players.map((p, i) => (
-                <div
-                  key={i}
-                  onClick={() => onPlayerClick(p)}
-                  onMouseEnter={() => setHoveredPlayer(i)}
-                  onMouseLeave={() => setHoveredPlayer(null)}
-                  style={{
-                    borderRadius: 4,
-                    padding: "1px 4px",
-                    margin: "0 -4px",
-                    cursor: "pointer",
-                    background: hoveredPlayer === i ? "rgba(255,255,255,0.07)" : "transparent",
-                    transition: "background 0.1s",
-                  }}
-                >
-                  <InfoRow
-                    label={cleanPlayerName(p.name)}
-                    value={`${Math.round(p.position[0])}, ${Math.round(p.position[1])}, ${Math.round(p.position[2])}`}
-                  />
-                </div>
-              ))}
+              {players.map((p, i) => {
+                const playerKey = `${p.name}:${p.position.join(",")}`;
+                return (
+                  <button
+                    type="button"
+                    key={playerKey}
+                    onClick={() => onPlayerClick(p)}
+                    onMouseEnter={() => setHoveredPlayer(i)}
+                    onMouseLeave={() => setHoveredPlayer(null)}
+                    style={{
+                      border: "none",
+                      borderRadius: 4,
+                      padding: "1px 4px",
+                      margin: "0 -4px",
+                      cursor: "pointer",
+                      background:
+                        hoveredPlayer === i
+                          ? "rgba(255,255,255,0.07)"
+                          : "transparent",
+                      transition: "background 0.1s",
+                      width: "100%",
+                      textAlign: "left",
+                    }}
+                  >
+                    <InfoRow
+                      label={cleanPlayerName(p.name)}
+                      value={`${Math.round(p.position[0])}, ${Math.round(p.position[1])}, ${Math.round(p.position[2])}`}
+                    />
+                  </button>
+                );
+              })}
             </div>
           )}
         </>
@@ -107,7 +128,9 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
       <span style={{ color: "#8b92ad" }}>{label}</span>
-      <span style={{ color: "#ddd", textAlign: "right", wordBreak: "break-all" }}>
+      <span
+        style={{ color: "#ddd", textAlign: "right", wordBreak: "break-all" }}
+      >
         {value}
       </span>
     </div>
@@ -117,8 +140,8 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 function formatGameTime(ticks: number): string {
   // Game time is in 100ms ticks, 24000 ticks = 1 day
   const dayTicks = ticks % 24000;
-  const hours = Math.floor((dayTicks / 1000) + 6) % 24;
-  const minutes = Math.floor((dayTicks % 1000) / 1000 * 60);
+  const hours = Math.floor(dayTicks / 1000 + 6) % 24;
+  const minutes = Math.floor(((dayTicks % 1000) / 1000) * 60);
   return `Day ${Math.floor(ticks / 24000)}, ${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
 }
 

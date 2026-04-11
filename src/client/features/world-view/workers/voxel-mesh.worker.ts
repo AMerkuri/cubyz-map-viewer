@@ -65,7 +65,10 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
       );
     }
     const out: WorkerOut = { lod, regionX, regionY, version, ...result };
-    (self as unknown as DedicatedWorkerGlobalScope).postMessage(out, transferables);
+    (self as unknown as DedicatedWorkerGlobalScope).postMessage(
+      out,
+      transferables,
+    );
   } catch (err) {
     const out: WorkerOut = {
       regionX,
@@ -113,9 +116,10 @@ function buildMeshArrays(buf: ArrayBuffer): {
   // If the trailer is absent (stale server cache from before this feature was
   // added), fall back to 0xFFFF: any mesh response implies blocks exist, so
   // terrain should be hidden underneath rather than shown through it.
-  const chunkCoverage = buf.byteLength >= expectedSize + 4
-    ? view.getUint32(expectedSize, true)
-    : 0xFFFF;
+  const chunkCoverage =
+    buf.byteLength >= expectedSize + 4
+      ? view.getUint32(expectedSize, true)
+      : 0xffff;
 
   // --- Positions (with Y-negation for Three.js coordinate system) ---
   // sceneY = -worldY so that increasing world Y moves toward -Y in scene space.
@@ -128,7 +132,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const ry = view.getUint8(off++);
     const rz = view.getUint16(off, true);
     off += 2;
-    positions[vi * 3]     = worldX + rx * voxelSize;
+    positions[vi * 3] = worldX + rx * voxelSize;
     positions[vi * 3 + 1] = -(worldY + ry * voxelSize); // Y-negation
     positions[vi * 3 + 2] = worldZ + rz * voxelSize;
     if (positions[vi * 3 + 2] < minZ) minZ = positions[vi * 3 + 2];
@@ -146,7 +150,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const b = view.getUint8(colorOff++) / 255;
     const base = qi * 4;
     for (let v = 0; v < 4; v++) {
-      colors[(base + v) * 3]     = r;
+      colors[(base + v) * 3] = r;
       colors[(base + v) * 3 + 1] = g;
       colors[(base + v) * 3 + 2] = b;
     }
@@ -157,10 +161,13 @@ function buildMeshArrays(buf: ArrayBuffer): {
   // in every triangle restores the original outward-facing normals.
   const indices = new Uint32Array(indexCount);
   for (let i = 0; i < indexCount; i += 3) {
-    const a = view.getUint32(off, true); off += 4;
-    const b = view.getUint32(off, true); off += 4;
-    const c = view.getUint32(off, true); off += 4;
-    indices[i]     = a;
+    const a = view.getUint32(off, true);
+    off += 4;
+    const b = view.getUint32(off, true);
+    off += 4;
+    const c = view.getUint32(off, true);
+    off += 4;
+    indices[i] = a;
     indices[i + 1] = c; // swap b↔c
     indices[i + 2] = b;
   }
@@ -176,13 +183,23 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const ib = indices[i + 1];
     const ic = indices[i + 2];
 
-    const ax = positions[ia * 3], ay = positions[ia * 3 + 1], az = positions[ia * 3 + 2];
-    const bx = positions[ib * 3], by = positions[ib * 3 + 1], bz = positions[ib * 3 + 2];
-    const cx = positions[ic * 3], cy = positions[ic * 3 + 1], cz = positions[ic * 3 + 2];
+    const ax = positions[ia * 3],
+      ay = positions[ia * 3 + 1],
+      az = positions[ia * 3 + 2];
+    const bx = positions[ib * 3],
+      by = positions[ib * 3 + 1],
+      bz = positions[ib * 3 + 2];
+    const cx = positions[ic * 3],
+      cy = positions[ic * 3 + 1],
+      cz = positions[ic * 3 + 2];
 
     // Edge vectors AB and AC
-    const ex = bx - ax, ey = by - ay, ez = bz - az;
-    const fx = cx - ax, fy = cy - ay, fz = cz - az;
+    const ex = bx - ax,
+      ey = by - ay,
+      ez = bz - az;
+    const fx = cx - ax,
+      fy = cy - ay,
+      fz = cz - az;
 
     // Cross product AB × AC
     const nx = ey * fz - ez * fy;
@@ -191,10 +208,12 @@ function buildMeshArrays(buf: ArrayBuffer): {
 
     const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
     const inv = len > 0 ? 1 / len : 0;
-    const nnx = nx * inv, nny = ny * inv, nnz = nz * inv;
+    const nnx = nx * inv,
+      nny = ny * inv,
+      nnz = nz * inv;
 
     for (const vi of [ia, ib, ic]) {
-      normals[vi * 3]     = nnx;
+      normals[vi * 3] = nnx;
       normals[vi * 3 + 1] = nny;
       normals[vi * 3 + 2] = nnz;
     }
@@ -218,9 +237,15 @@ function buildMeshArrays(buf: ArrayBuffer): {
     // Keep only upward faces (voxel top surfaces).
     if (normals[ia * 3 + 2] <= 0.5) continue;
 
-    const ax = positions[ia * 3], ay = positions[ia * 3 + 1], az = positions[ia * 3 + 2];
-    const bx = positions[ib * 3], by = positions[ib * 3 + 1], bz = positions[ib * 3 + 2];
-    const cx = positions[ic * 3], cy = positions[ic * 3 + 1], cz = positions[ic * 3 + 2];
+    const ax = positions[ia * 3],
+      ay = positions[ia * 3 + 1],
+      az = positions[ia * 3 + 2];
+    const bx = positions[ib * 3],
+      by = positions[ib * 3 + 1],
+      bz = positions[ib * 3 + 2];
+    const cx = positions[ic * 3],
+      cy = positions[ic * 3 + 1],
+      cz = positions[ic * 3 + 2];
 
     const triTopZ = Math.max(az, bz, cz);
 
@@ -229,7 +254,13 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const localYMin = Math.min(-ay - worldY, -by - worldY, -cy - worldY);
     const localYMax = Math.max(-ay - worldY, -by - worldY, -cy - worldY);
 
-    if (localXMax <= 0 || localYMax <= 0 || localXMin >= regionWorldSize || localYMin >= regionWorldSize) continue;
+    if (
+      localXMax <= 0 ||
+      localYMax <= 0 ||
+      localXMin >= regionWorldSize ||
+      localYMin >= regionWorldSize
+    )
+      continue;
 
     const EPS = 1e-4;
     const colX0 = Math.max(0, Math.floor(localXMin / chunkWorldSize));
@@ -261,10 +292,12 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const cy = positions[ic * 3 + 1];
 
     const centerX = (ax + bx + cx) / 3;
-    const centerYWorld = (-(ay + by + cy)) / 3;
+    const centerYWorld = -(ay + by + cy) / 3;
     const localX = centerX - worldX;
     const localY = centerYWorld - worldY;
-    const quadrantIndex = (localX >= regionWorldSize / 2 ? 1 : 0) + (localY >= regionWorldSize / 2 ? 2 : 0);
+    const quadrantIndex =
+      (localX >= regionWorldSize / 2 ? 1 : 0) +
+      (localY >= regionWorldSize / 2 ? 2 : 0);
     quadrantTris[quadrantIndex].push(ia, ib, ic);
   }
 
@@ -276,7 +309,8 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const localIdx: number[] = [];
 
     for (let i = 0; i < tri.length; i++) {
-      const src = tri[i]!;
+      const src = tri[i];
+      if (src === undefined) continue;
       let dst = indexMap.get(src);
       if (dst === undefined) {
         dst = indexMap.size;
@@ -309,5 +343,12 @@ function buildMeshArrays(buf: ArrayBuffer): {
     };
   });
 
-  return { quadrantMeshes, chunkCoverage, chunkTopHeights, voxelSize, minZ, maxZ };
+  return {
+    quadrantMeshes,
+    chunkCoverage,
+    chunkTopHeights,
+    voxelSize,
+    minZ,
+    maxZ,
+  };
 }

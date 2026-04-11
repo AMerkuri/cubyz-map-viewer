@@ -4,39 +4,44 @@
  * Includes WebSocket server for real-time file change notifications.
  */
 
-import express from "express";
+import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { createServer } from "node:http";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import compression from "compression";
-import { createServer } from "http";
-import { join, resolve, dirname } from "path";
-import { existsSync } from "fs";
-import { readdir } from "fs/promises";
-import { fileURLToPath } from "url";
-import { homedir } from "os";
-import { WebSocketServer, type WebSocket } from "ws";
-
-import { loadPalette } from "./parsers/palette.js";
-import { parseWorldMeta } from "./parsers/world-meta.js";
-import { loadAllBiomes } from "./parsers/biome.js";
-import { ColorMapService } from "./services/color-map.js";
-import { LRUCache } from "./services/cache.js";
-import { SaveWatcher, type WatchEvent } from "./services/watcher.js";
-import { buildBlockColorTable } from "./services/block-color-table.js";
-import { VoxelMeshService } from "./services/voxel-mesh-service.js";
-import { logger } from "./services/logger.js";
-import { createTilesRouter } from "./api/tiles.js";
-import { createWorldRouter } from "./api/world.js";
+import express from "express";
+import { type WebSocket, WebSocketServer } from "ws";
+import { createBiomesRouter } from "./api/biomes.js";
 import { createPlayersRouter } from "./api/players.js";
 import { createTerrainRouter } from "./api/terrain.js";
-import { createBiomesRouter } from "./api/biomes.js";
+import { createTilesRouter } from "./api/tiles.js";
 import { createVoxelsRouter } from "./api/voxels.js";
+import { createWorldRouter } from "./api/world.js";
+import { loadAllBiomes } from "./parsers/biome.js";
+import { loadPalette } from "./parsers/palette.js";
+import { parseWorldMeta } from "./parsers/world-meta.js";
+import { buildBlockColorTable } from "./services/block-color-table.js";
+import { LRUCache } from "./services/cache.js";
+import { ColorMapService } from "./services/color-map.js";
+import { logger } from "./services/logger.js";
+import { VoxelMeshService } from "./services/voxel-mesh-service.js";
+import { SaveWatcher, type WatchEvent } from "./services/watcher.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const PORT = parseInt(process.env.PORT ?? "3001");
+const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
-const CACHE_SIZE = parseInt(process.env.CACHE_SIZE ?? "500");
-const VOXEL_FULL_CLEAR_THROTTLE_MS = parseInt(process.env.VOXEL_FULL_CLEAR_THROTTLE_MS ?? "1000");
-const TERRAIN_UPDATE_BATCH_MS = parseInt(process.env.TERRAIN_UPDATE_BATCH_MS ?? "15000");
+const CACHE_SIZE = parseInt(process.env.CACHE_SIZE ?? "500", 10);
+const VOXEL_FULL_CLEAR_THROTTLE_MS = parseInt(
+  process.env.VOXEL_FULL_CLEAR_THROTTLE_MS ?? "1000",
+  10,
+);
+const TERRAIN_UPDATE_BATCH_MS = parseInt(
+  process.env.TERRAIN_UPDATE_BATCH_MS ?? "15000",
+  10,
+);
 
 interface TerrainUpdatesBatchData {
   tiles: { lod: number; tileX: number; tileY: number }[];
@@ -64,7 +69,7 @@ async function findSavePath(): Promise<string> {
   const savesDir = join(homedir(), ".cubyz", "saves");
   if (!existsSync(savesDir)) {
     throw new Error(
-      `No saves directory found at ${savesDir}. Use --save=<path> to specify.`
+      `No saves directory found at ${savesDir}. Use --save=<path> to specify.`,
     );
   }
 
@@ -102,7 +107,7 @@ function findCubyzPath(): string {
   }
 
   throw new Error(
-    "Cannot find Cubyz assets directory. Use --cubyz=<path> to specify."
+    "Cannot find Cubyz assets directory. Use --cubyz=<path> to specify.",
   );
 }
 
@@ -124,13 +129,16 @@ async function main() {
   // Load world metadata
   logger.info("Loading world metadata");
   const worldMeta = await parseWorldMeta(join(savePath, "world.zig.zon"));
-  logger.info("Loaded world metadata", { worldName: worldMeta.name, spawn: worldMeta.spawn });
+  logger.info("Loaded world metadata", {
+    worldName: worldMeta.name,
+    spawn: worldMeta.spawn,
+  });
 
   // Load palettes
   logger.info("Loading palettes");
   const blockPalette = await loadPalette(join(savePath, "palette.zig.zon"));
   const biomePalette = await loadPalette(
-    join(savePath, "biome_palette.zig.zon")
+    join(savePath, "biome_palette.zig.zon"),
   );
   logger.info("Loaded palettes", {
     blockPaletteEntries: blockPalette.entries.length,
@@ -145,16 +153,25 @@ async function main() {
   // Initialize color map
   logger.info("Building color map from block textures");
   const colorMap = new ColorMapService();
-  await colorMap.initialize(assetsPath, blockPalette, biomePalette, biomeDefinitions);
+  await colorMap.initialize(
+    assetsPath,
+    blockPalette,
+    biomePalette,
+    biomeDefinitions,
+  );
   const voxelMeshService = new VoxelMeshService(
     savePath,
     buildBlockColorTable(colorMap),
-    process.env.VOXEL_WORKERS ? parseInt(process.env.VOXEL_WORKERS) : undefined,
+    process.env.VOXEL_WORKERS
+      ? parseInt(process.env.VOXEL_WORKERS, 10)
+      : undefined,
   );
   await voxelMeshService.start();
 
   // Create tile cache (stores rendered PNGs with source file mtime for invalidation)
-  const tileCache = new LRUCache<string, { buf: Buffer; mtime: number }>(CACHE_SIZE);
+  const tileCache = new LRUCache<string, { buf: Buffer; mtime: number }>(
+    CACHE_SIZE,
+  );
 
   // Create Express app
   const app = express();
@@ -217,37 +234,49 @@ async function main() {
   wss.on("connection", (ws) => {
     wsClients.add(ws);
     logger.info("WebSocket client connected", { totalClients: wsClients.size });
-    ws.send(JSON.stringify({
-      type: "viewer-ws-connected",
-      sentAt: Date.now(),
-    }));
+    ws.send(
+      JSON.stringify({
+        type: "viewer-ws-connected",
+        sentAt: Date.now(),
+      }),
+    );
 
     ws.on("close", () => {
       wsClients.delete(ws);
-      logger.info("WebSocket client disconnected", { totalClients: wsClients.size });
+      logger.info("WebSocket client disconnected", {
+        totalClients: wsClients.size,
+      });
     });
 
     ws.on("error", (err) => {
-      logger.error("WebSocket error", { error: err instanceof Error ? err.message : String(err) });
+      logger.error("WebSocket error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       wsClients.delete(ws);
     });
   });
 
   function broadcast(event: WatchEvent): void {
-    logger.info("Watch event broadcast", { eventType: event.type, eventData: event.data ?? null });
+    logger.info("Watch event broadcast", {
+      eventType: event.type,
+      eventData: event.data ?? null,
+    });
     const msg = JSON.stringify({
       ...event,
       sentAt: Date.now(),
     });
     for (const client of wsClients) {
-      if (client.readyState === 1) { // WebSocket.OPEN
+      if (client.readyState === 1) {
+        // WebSocket.OPEN
         client.send(msg);
       }
     }
   }
 
   // File watcher for live updates
-  const watcher = new SaveWatcher(savePath, { terrainUpdateBatchMs: TERRAIN_UPDATE_BATCH_MS });
+  const watcher = new SaveWatcher(savePath, {
+    terrainUpdateBatchMs: TERRAIN_UPDATE_BATCH_MS,
+  });
   let voxelFullClearCooldownUntil = 0;
 
   watcher.on("watch-event", (event: WatchEvent) => {
@@ -267,7 +296,9 @@ async function main() {
       }
 
       for (const region of regions) {
-        voxelMeshService.clear(`${region.lod}/${region.regionX}/${region.regionY}`);
+        voxelMeshService.clear(
+          `${region.lod}/${region.regionX}/${region.regionY}`,
+        );
       }
     }
     // Broadcast to all connected WebSocket clients
@@ -309,6 +340,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  logger.error("Fatal error", { error: err instanceof Error ? err.message : String(err) });
+  logger.error("Fatal error", {
+    error: err instanceof Error ? err.message : String(err),
+  });
   process.exit(1);
 });

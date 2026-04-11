@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type WatchEventType =
   | "players-updated"
@@ -58,14 +58,14 @@ export function useWebSocket() {
       if (!handlersRef.current.has(eventType)) {
         handlersRef.current.set(eventType, new Set());
       }
-      handlersRef.current.get(eventType)!.add(handler);
+      handlersRef.current.get(eventType)?.add(handler);
 
       // Return unsubscribe function
       return () => {
         handlersRef.current.get(eventType)?.delete(handler);
       };
     },
-    []
+    [],
   );
 
   useEffect(() => {
@@ -92,7 +92,9 @@ export function useWebSocket() {
 
       ws.onmessage = (msg) => {
         try {
-          const event = JSON.parse(msg.data) as WatchEvent | TerrainUpdatesBatchEvent;
+          const event = JSON.parse(msg.data) as
+            | WatchEvent
+            | TerrainUpdatesBatchEvent;
           setLastUpdateAt(event.sentAt ?? Date.now());
           const handlers = handlersRef.current.get(event.type);
           if (handlers) {

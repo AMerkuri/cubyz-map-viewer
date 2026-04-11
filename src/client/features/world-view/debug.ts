@@ -110,7 +110,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "maxConcurrentVoxelFetches",
     section: "Loading",
     label: "Concurrent Voxel Fetches",
-    description: "Limits how many voxel region HTTP requests can be in flight at the same time. Higher values can improve throughput but may compete harder for bandwidth.",
+    description:
+      "Limits how many voxel region HTTP requests can be in flight at the same time. Higher values can improve throughput but may compete harder for bandwidth.",
     min: 1,
     max: 32,
     step: 1,
@@ -120,7 +121,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelDetailRequestDebounceMs",
     section: "Loading",
     label: "Detail Debounce",
-    description: "Delay before the client starts committing detail voxel requests after camera motion. Higher values avoid waste during movement, lower values refine faster.",
+    description:
+      "Delay before the client starts committing detail voxel requests after camera motion. Higher values avoid waste during movement, lower values refine faster.",
     min: 0,
     max: 1000,
     step: 10,
@@ -131,7 +133,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelUnloadGraceMs",
     section: "Loading",
     label: "Unload Grace",
-    description: "How long a voxel tile stays eligible to remain loaded after it stops being requested. Higher values reduce pop when turning around quickly.",
+    description:
+      "How long a voxel tile stays eligible to remain loaded after it stops being requested. Higher values reduce pop when turning around quickly.",
     min: 0,
     max: 5000,
     step: 50,
@@ -142,7 +145,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelMeshBuildBudgetMs",
     section: "Loading",
     label: "Mesh Build Budget",
-    description: "Per-frame time budget for turning worker results into Three.js meshes. Higher values upload more data each frame but can hurt frame pacing.",
+    description:
+      "Per-frame time budget for turning worker results into Three.js meshes. Higher values upload more data each frame but can hurt frame pacing.",
     min: 1,
     max: 20,
     step: 1,
@@ -153,7 +157,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "maxVoxelMeshesPerFrame",
     section: "Loading",
     label: "Meshes Per Frame",
-    description: "Caps how many queued voxel meshes may be built in a single frame. Higher values empty the queue faster but can spike frame time.",
+    description:
+      "Caps how many queued voxel meshes may be built in a single frame. Higher values empty the queue faster but can spike frame time.",
     min: 1,
     max: 32,
     step: 1,
@@ -163,7 +168,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "lodUnloadHysteresis",
     section: "LOD",
     label: "LOD Unload Hysteresis",
-    description: "Controls how much farther a chunk can drift before it is unloaded. Higher values reduce unload/reload churn but keep more data in memory.",
+    description:
+      "Controls how much farther a chunk can drift before it is unloaded. Higher values reduce unload/reload churn but keep more data in memory.",
     min: 1,
     max: 3,
     step: 0.05,
@@ -174,7 +180,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelLodHysteresisRatio",
     section: "LOD",
     label: "LOD Hysteresis Ratio",
-    description: "How much LOD transitions resist small distance changes. Higher values reduce rapid LOD flipping but make transitions more conservative.",
+    description:
+      "How much LOD transitions resist small distance changes. Higher values reduce rapid LOD flipping but make transitions more conservative.",
     min: 0,
     max: 0.5,
     step: 0.01,
@@ -185,7 +192,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelBehindCameraDotStart",
     section: "LOD",
     label: "Behind-Camera Start",
-    description: "Horizontal dot-product threshold where behind-camera LOD bias starts. Raise it toward zero to affect more side/back regions; lower it to only affect regions clearly behind you.",
+    description:
+      "Horizontal dot-product threshold where behind-camera LOD bias starts. Raise it toward zero to affect more side/back regions; lower it to only affect regions clearly behind you.",
     min: -1,
     max: 0.5,
     step: 0.01,
@@ -196,7 +204,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelBehindCameraMaxMultiplier",
     section: "LOD",
     label: "Behind-Camera Multiplier",
-    description: "Maximum distance multiplier applied to behind-camera voxel regions for LOD selection. Higher values keep more of the unseen area coarse.",
+    description:
+      "Maximum distance multiplier applied to behind-camera voxel regions for LOD selection. Higher values keep more of the unseen area coarse.",
     min: 1,
     max: 3,
     step: 0.05,
@@ -207,7 +216,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelFocusStickyMs",
     section: "Focus",
     label: "Focus Sticky Time",
-    description: "How long the last voxel ray hit remains the preferred focus point after you stop hitting geometry. Higher values reduce focus jitter but can lag behind sudden camera turns.",
+    description:
+      "How long the last voxel ray hit remains the preferred focus point after you stop hitting geometry. Higher values reduce focus jitter but can lag behind sudden camera turns.",
     min: 0,
     max: 4000,
     step: 50,
@@ -218,7 +228,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "voxelFocusSmoothAlpha",
     section: "Focus",
     label: "Focus Smooth Alpha",
-    description: "Blend factor for smoothing the voxel focus point and distance. Higher values react faster, lower values feel steadier.",
+    description:
+      "Blend factor for smoothing the voxel focus point and distance. Higher values react faster, lower values feel steadier.",
     min: 0,
     max: 1,
     step: 0.01,
@@ -229,7 +240,8 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     key: "warmVoxelCacheMaxBytes",
     section: "Memory",
     label: "Warm Cache Limit",
-    description: "Maximum memory reserved for keeping recently unloaded voxel tiles ready for quick reuse. Higher values improve turn-around reuse at the cost of memory.",
+    description:
+      "Maximum memory reserved for keeping recently unloaded voxel tiles ready for quick reuse. Higher values improve turn-around reuse at the cost of memory.",
     min: 0,
     max: 2048,
     step: 32,

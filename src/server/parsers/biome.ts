@@ -4,8 +4,8 @@
  * ground_structure (top block for color mapping).
  */
 
-import { readFile, readdir, stat } from "fs/promises";
-import { join, basename } from "path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { parseZon, type ZonValue } from "./zon.js";
 
 export interface BiomeDefinition {
@@ -31,7 +31,7 @@ function parseGroundEntry(entry: string): string {
 
 export async function parseBiomeFile(
   filePath: string,
-  biomeId: string
+  biomeId: string,
 ): Promise<BiomeDefinition> {
   const text = await readFile(filePath, "utf-8");
   const parsed = parseZon(text) as Record<string, ZonValue>;
@@ -45,9 +45,7 @@ export async function parseBiomeFile(
   }
 
   const topBlock =
-    groundStructure.length > 0
-      ? parseGroundEntry(groundStructure[0])
-      : null;
+    groundStructure.length > 0 ? parseGroundEntry(groundStructure[0]) : null;
 
   const properties = parsed.properties;
   const isOcean = Array.isArray(properties)
@@ -63,7 +61,7 @@ export async function parseBiomeFile(
  */
 export async function loadAllBiomes(
   biomesDir: string,
-  prefix: string = "cubyz"
+  prefix: string = "cubyz",
 ): Promise<Map<string, BiomeDefinition>> {
   const biomes = new Map<string, BiomeDefinition>();
   await scanBiomeDir(biomesDir, prefix, "", biomes);
@@ -74,7 +72,7 @@ async function scanBiomeDir(
   baseDir: string,
   prefix: string,
   subPath: string,
-  biomes: Map<string, BiomeDefinition>
+  biomes: Map<string, BiomeDefinition>,
 ): Promise<void> {
   const dirPath = subPath ? join(baseDir, subPath) : baseDir;
   let entries: string[];

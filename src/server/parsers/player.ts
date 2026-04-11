@@ -2,8 +2,8 @@
  * Player data parser for players/*.zon files.
  */
 
-import { readFile, readdir, stat } from "fs/promises";
-import { join } from "path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { parseZon, type ZonValue } from "./zon.js";
 
 /** Players whose save file was modified within this many milliseconds are considered active. */
@@ -52,15 +52,15 @@ export async function parsePlayerFile(filePath: string): Promise<PlayerData> {
 }
 
 export async function loadAllPlayers(
-  playersDir: string
+  playersDir: string,
 ): Promise<PlayerData[]> {
   try {
     const files = await readdir(playersDir);
     const zonFiles = files
       .filter((f) => f.endsWith(".zon"))
       .sort((a, b) => {
-        const numA = parseInt(a);
-        const numB = parseInt(b);
+        const numA = parseInt(a, 10);
+        const numB = parseInt(b, 10);
         return numA - numB;
       });
 

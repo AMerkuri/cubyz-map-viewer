@@ -159,7 +159,7 @@ class ZonParser {
         break;
       }
       throw new Error(
-        `Unexpected character in object at pos ${this.pos}: ${char ?? "EOF"}`
+        `Unexpected character in object at pos ${this.pos}: ${char ?? "EOF"}`,
       );
     }
     return obj;
@@ -186,7 +186,7 @@ class ZonParser {
         break;
       }
       throw new Error(
-        `Unexpected character in array at pos ${this.pos}: ${char ?? "EOF"}`
+        `Unexpected character in array at pos ${this.pos}: ${char ?? "EOF"}`,
       );
     }
     return arr;
@@ -204,9 +204,7 @@ class ZonParser {
     }
     const char = this.text[this.pos];
     if (!isIdentifierStart(char)) {
-      throw new Error(
-        `Invalid identifier start at pos ${this.pos}: '${char}'`
-      );
+      throw new Error(`Invalid identifier start at pos ${this.pos}: '${char}'`);
     }
     const start = this.pos;
     this.pos += 1;
@@ -330,7 +328,7 @@ class ZonParser {
       if (!fractionDigits && !hasDigits) {
         const lookahead = this.text.slice(
           start,
-          Math.min(this.length, this.pos + 10)
+          Math.min(this.length, this.pos + 10),
         );
         throw new Error(`Invalid number literal: ${lookahead}`);
       }
@@ -346,7 +344,7 @@ class ZonParser {
       if (!exponentDigits) {
         const lookahead = this.text.slice(
           start,
-          Math.min(this.length, this.pos + 10)
+          Math.min(this.length, this.pos + 10),
         );
         throw new Error(`Invalid exponent in number: ${lookahead}`);
       }
@@ -354,7 +352,7 @@ class ZonParser {
     if (!hasDigits) {
       const lookahead = this.text.slice(
         start,
-        Math.min(this.length, this.pos + 10)
+        Math.min(this.length, this.pos + 10),
       );
       throw new Error(`Invalid number literal: ${lookahead}`);
     }
@@ -392,7 +390,7 @@ class ZonParser {
   private expect(char: string): void {
     if (this.peek() !== char) {
       throw new Error(
-        `Expected '${char}' but found '${this.peek() ?? "EOF"}' at pos ${this.pos}`
+        `Expected '${char}' but found '${this.peek() ?? "EOF"}' at pos ${this.pos}`,
       );
     }
     this.pos += 1;

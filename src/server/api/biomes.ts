@@ -4,11 +4,11 @@
  * Each region includes the biome name, centroid position, and cell count.
  */
 
-import { Router, type Request, type Response } from "express";
-import { join } from "path";
-import { existsSync } from "fs";
-import { parseSurfaceFile, MAP_SIZE } from "../parsers/surface.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { type Request, type Response, Router } from "express";
 import type { Palette } from "../parsers/palette.js";
+import { MAP_SIZE, parseSurfaceFile } from "../parsers/surface.js";
 import { logger } from "../services/logger.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
@@ -26,17 +26,17 @@ interface BiomeRegion {
 
 export function createBiomesRouter(
   savePath: string,
-  biomePalette: Palette
+  biomePalette: Palette,
 ): Router {
   const router = Router();
 
   router.get("/:lod/:x/:y", async (req: Request, res: Response) => {
     try {
-      const lod = parseInt(req.params.lod as string);
-      const x = parseInt(req.params.x as string);
-      const y = parseInt(req.params.y as string);
+      const lod = parseInt(req.params.lod as string, 10);
+      const x = parseInt(req.params.x as string, 10);
+      const y = parseInt(req.params.y as string, 10);
 
-      if (!VALID_LODS.includes(lod) || isNaN(x) || isNaN(y)) {
+      if (!VALID_LODS.includes(lod) || Number.isNaN(x) || Number.isNaN(y)) {
         res.status(400).json({ error: "Invalid parameters" });
         return;
       }
@@ -48,7 +48,7 @@ export function createBiomesRouter(
         "maps",
         String(lod),
         String(worldX),
-        `${worldY}.surface`
+        `${worldY}.surface`,
       );
 
       if (!existsSync(surfacePath)) {
@@ -57,12 +57,20 @@ export function createBiomesRouter(
       }
 
       const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
-      const regions = extractBiomeRegions(surface.biomes, worldX, worldY, lod, biomePalette);
+      const regions = extractBiomeRegions(
+        surface.biomes,
+        worldX,
+        worldY,
+        lod,
+        biomePalette,
+      );
 
       res.set("Cache-Control", "public, max-age=60");
       res.json({ tileX: x, tileY: y, lod, regions });
     } catch (e) {
-      logger.error("Biome data error", { error: e instanceof Error ? e.message : String(e) });
+      logger.error("Biome data error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
       res.status(500).json({ error: "Failed to extract biome data" });
     }
   });
@@ -79,7 +87,7 @@ function extractBiomeRegions(
   worldX: number,
   worldY: number,
   lod: number,
-  biomePalette: Palette
+  biomePalette: Palette,
 ): BiomeRegion[] {
   // Accumulate per-biome: sum of positions and count
   const biomeAccum = new Map<
