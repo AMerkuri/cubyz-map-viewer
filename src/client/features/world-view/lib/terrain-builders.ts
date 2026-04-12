@@ -57,7 +57,9 @@ export function buildFullTileMesh(
   for (let i = 0; i < positions.count; i++) {
     const col = i % data.width;
     const row = Math.floor(i / data.width);
-    const dataIdx = col * data.height + row;
+    // PlaneGeometry emits rows from +Y to -Y, so reverse the sampled row to
+    // keep scene Y aligned with increasing world Y.
+    const dataIdx = col * data.height + (data.height - 1 - row);
 
     const ht = data.heights[dataIdx] ?? 0;
     positions.setZ(i, ht);
@@ -161,7 +163,7 @@ export function buildFullTileMesh(
 
   const mesh = new THREE.Mesh(merged, terrainMaterial);
   const centerX = data.worldX + worldTileSize / 2;
-  const centerY = -(data.worldY + worldTileSize / 2);
+  const centerY = data.worldY + worldTileSize / 2;
   mesh.position.set(centerX, centerY, 0);
   return mesh;
 }
@@ -178,28 +180,28 @@ export function buildSurfaceTileBorderLines(
 
   const verts = new Float32Array([
     worldX,
-    -worldY,
+    worldY,
     z,
     worldX + size,
-    -worldY,
+    worldY,
     z,
     worldX + size,
-    -worldY,
+    worldY,
     z,
     worldX + size,
-    -(worldY + size),
+    worldY + size,
     z,
     worldX + size,
-    -(worldY + size),
+    worldY + size,
     z,
     worldX,
-    -(worldY + size),
+    worldY + size,
     z,
     worldX,
-    -(worldY + size),
+    worldY + size,
     z,
     worldX,
-    -worldY,
+    worldY,
     z,
   ]);
 
@@ -213,6 +215,6 @@ export function buildSurfaceTileBorderLines(
 
   const label = createTextSprite(`LOD ${lod}`, colors.label);
   label.scale.set(48, 12, 1);
-  label.position.set(worldX + size / 2, -(worldY + size / 2), z + 6);
+  label.position.set(worldX + size / 2, worldY + size / 2, z + 6);
   return { lines, label };
 }

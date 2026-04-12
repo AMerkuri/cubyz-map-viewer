@@ -1,5 +1,6 @@
 node_modules/
 dist/
 logs/
+/plans
 .github
 compose.local.yml

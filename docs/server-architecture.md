@@ -157,8 +157,9 @@ Fallback block color use is logged at `error` level once per block or palette in
 3. `VoxelMeshService` first checks its in-memory cache.
 4. On cache miss, it submits a job to `VoxelWorkerPool`.
 5. A worker parses one or more `.region` files, generates a greedy mesh, and returns an indexless binary payload plus metrics.
-6. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
-7. The route requires compressed voxel transport, negotiates `br` first and `gzip` second based on the request's `Accept-Encoding`, rejects requests that accept neither with `406`, and exposes timing and queue metrics through response headers.
+6. The binary mesh payload preserves direct world `X/Y/Z` coordinates so the client does not need to mirror an axis during decode.
+7. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
+8. The route requires compressed voxel transport, negotiates `br` first and `gzip` second based on the request's `Accept-Encoding`, rejects requests that accept neither with `406`, and exposes timing and queue metrics through response headers.
 
 Fog and glass blocks are currently normalized to air during voxel generation, so unsupported transparent blocks are excluded from the rendered mesh even if they appear in the save palette.
 

@@ -25,6 +25,7 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 600,
+          backdropFilter: "blur(2px)",
           background:
             view === "terrain"
               ? uiTheme.accent.surfaceActive
@@ -45,6 +46,7 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 600,
+          backdropFilter: "blur(2px)",
           background:
             view === "voxel"
               ? uiTheme.accent.surfaceActive

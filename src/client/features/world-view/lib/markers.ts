@@ -29,7 +29,7 @@ export function rebuildSpawnMarker(args: {
   }
 
   const [sx, sy, sz] = worldToScene(spawn[0], spawn[1], spawn[2]);
-  const dot = createMarkerDot("#ff4444", 17);
+  const dot = createMarkerDot("#ff4444bc", 17);
   dot.position.set(sx, sy, sz);
   spawnGroup.add(dot);
 
@@ -75,8 +75,8 @@ export function rebuildPlayerMarkers(args: {
 
     const marker = createPlayerMarkerModel();
     marker.position.set(px, py, pz);
-    // Scene Y is mirrored, so player yaw needs a half-turn offset to stay aligned.
-    marker.rotation.z = (player.rotation[2] ?? 0) + Math.PI;
+    // Cubyz renders entity models with rotationZ(-yaw), so match that sign here.
+    marker.rotation.z = -(player.rotation[2] ?? 0);
     marker.userData.player = player;
     marker.userData.playerMarker = true;
     markerGroup.add(marker);

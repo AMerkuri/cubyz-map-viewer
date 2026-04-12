@@ -36,7 +36,6 @@ export function getTileEffectiveDist(
   regionY: number,
 ): number {
   const size = regionWorldSize(lod);
-  const yWorldTarget = -target.y;
   const dx =
     target.x < regionX
       ? regionX - target.x
@@ -44,10 +43,10 @@ export function getTileEffectiveDist(
         ? target.x - (regionX + size)
         : 0;
   const dy =
-    yWorldTarget < regionY
-      ? regionY - yWorldTarget
-      : yWorldTarget > regionY + size
-        ? yWorldTarget - (regionY + size)
+    target.y < regionY
+      ? regionY - target.y
+      : target.y > regionY + size
+        ? target.y - (regionY + size)
         : 0;
   return Math.max(Math.hypot(dx, dy), camDist);
 }
@@ -87,7 +86,7 @@ export function getTileLodSelectionDist(args: {
 
   const size = regionWorldSize(lod);
   const toCenterX = regionX + size / 2 - cameraPosition.x;
-  const toCenterY = -(regionY + size / 2) - cameraPosition.y;
+  const toCenterY = regionY + size / 2 - cameraPosition.y;
   const toCenterLen = Math.hypot(toCenterX, toCenterY);
   if (toCenterLen <= 1e-6) return effectiveDist;
 

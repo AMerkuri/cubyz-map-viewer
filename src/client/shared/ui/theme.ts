@@ -3,7 +3,7 @@ export const uiTheme = {
     title: "#7df2aa",
     text: "#9ef7bd",
     surface: "rgba(74, 217, 122, 0.18)",
-    surfaceActive: "rgba(74, 217, 122, 0.8)",
+    surfaceActive: "rgba(74, 217, 122, 0.72)",
     border: "rgba(126, 255, 175, 0.8)",
     spinnerTop: "#bfffd2",
     spinnerRight: "#91ffb5",

@@ -97,8 +97,8 @@ export async function refreshBiomeLabels(args: {
       const aWorldY = a.tileY * 256 * a.lod + (256 * a.lod) / 2;
       const bWorldX = b.tileX * 256 * b.lod + (256 * b.lod) / 2;
       const bWorldY = b.tileY * 256 * b.lod + (256 * b.lod) / 2;
-      const ad = Math.hypot(aWorldX - target.x, -aWorldY - target.y);
-      const bd = Math.hypot(bWorldX - target.x, -bWorldY - target.y);
+      const ad = Math.hypot(aWorldX - target.x, aWorldY - target.y);
+      const bd = Math.hypot(bWorldX - target.x, bWorldY - target.y);
       return ad - bd;
     });
   } else {
@@ -107,7 +107,7 @@ export async function refreshBiomeLabels(args: {
         const tileWorldSize = 256 * entry.lod;
         const centerX = entry.worldX + tileWorldSize / 2;
         const centerY = entry.worldY + tileWorldSize / 2;
-        const xyDist = Math.hypot(centerX - target.x, -centerY - target.y);
+        const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
         const dist = Math.max(xyDist, camDist);
         return {
           entry,
@@ -205,7 +205,7 @@ export async function refreshBiomeLabels(args: {
 
     const el = label.element as HTMLDivElement;
     el.textContent = labelData.text;
-    label.position.set(labelData.x, -labelData.y, labelData.z);
+    label.position.set(labelData.x, labelData.y, labelData.z);
   }
 
   for (const [key, label] of labelMap) {

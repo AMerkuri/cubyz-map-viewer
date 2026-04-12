@@ -83,7 +83,7 @@ export function createCursorInteractionHandlers(args: {
     const point = intersections[0].point;
     onCursorMoveRef.current([
       Math.round(point.x),
-      Math.round(-point.y),
+      Math.round(point.y),
       Math.round(point.z),
     ]);
   }

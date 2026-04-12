@@ -81,7 +81,7 @@ npm start
 
 ## Docker
 
-The production container runs a single Node.js process that serves both the built client and the API/WebSocket server on port `3001`.
+The production container runs a single Node.js process that serves both the built client and the API/WebSocket server on port `3000`.
 
 Build the image:
 
@@ -92,7 +92,7 @@ docker build -t cubyz-map-viewer .
 Run it directly:
 
 ```bash
-docker run --rm -p 3001:3001 \
+docker run --rm -p 3000:3000 \
   -e SAVE_PATH=/data/save \
   -e CUBYZ_PATH=/data/cubyz \
   -e VOXEL_CACHE_DIR=/data/cache/voxels \
@@ -121,13 +121,6 @@ docker compose up --build
 Edit the two bind-mount source paths in `compose.yml` to match your machine, then run:
 
 ```bash
-docker compose up --build
-```
-
-If you previously created the named volumes before this permissions fix, remove them once so Docker can recreate them from the updated image:
-
-```bash
-docker compose down -v
 docker compose up --build
 ```
 

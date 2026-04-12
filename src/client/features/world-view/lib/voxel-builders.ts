@@ -19,19 +19,19 @@ export function buildVoxelBorderLines(
 
   for (let i = 0; i <= 4; i++) {
     const gx = regionX + i * chunkSize;
-    verts.push(gx, -regionY, zMax, gx, -(regionY + regionSize), zMax);
+    verts.push(gx, regionY, zMax, gx, regionY + regionSize, zMax);
   }
 
   for (let j = 0; j <= 4; j++) {
-    const gy = -(regionY + j * chunkSize);
+    const gy = regionY + j * chunkSize;
     verts.push(regionX, gy, zMax, regionX + regionSize, gy, zMax);
   }
 
   const corners: [number, number][] = [
-    [regionX, -regionY],
-    [regionX + regionSize, -regionY],
-    [regionX, -(regionY + regionSize)],
-    [regionX + regionSize, -(regionY + regionSize)],
+    [regionX, regionY],
+    [regionX + regionSize, regionY],
+    [regionX, regionY + regionSize],
+    [regionX + regionSize, regionY + regionSize],
   ];
   for (const [cx, cy] of corners) {
     verts.push(cx, cy, zMin, cx, cy, zMax);

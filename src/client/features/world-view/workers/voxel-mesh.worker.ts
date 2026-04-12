@@ -10,11 +10,11 @@ const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
  * Off-thread voxel mesh builder.
  *
  * Receives the raw binary ArrayBuffer produced by greedyMeshBinary() on the
- * server (transferred zero-copy from the main thread), decodes it, applies the
- * coordinate transform (Y-negation + winding swap) required by the Three.js
- * scene, and computes flat per-face normals.  The resulting typed arrays are
- * transferred back to the main thread so Three.js can build the BufferGeometry
- * without any heavy work on the render/event thread.
+ * server (transferred zero-copy from the main thread), decodes it, rebuilds
+ * triangle indices from the per-quad winding flags, and computes flat
+ * per-face normals. The resulting typed arrays are transferred back to the
+ * main thread so Three.js can build the BufferGeometry without any heavy work
+ * on the render/event thread.
  *
  * Binary layout (all little-endian):
  *   Header 20 bytes:
@@ -133,8 +133,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
   let directionOff = 20 + colorPadded;
   const positionOffset = 20 + colorPadded + directionPadded;
 
-  // --- Positions (with Y-negation for Three.js coordinate system) ---
-  // sceneY = -worldY so that increasing world Y moves toward -Y in scene space.
+  // --- Positions ---
   const positions = new Float32Array(vertexCount * 3);
   let minZ = Number.POSITIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
@@ -145,7 +144,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const rz = view.getUint16(off, true);
     off += 2;
     positions[vi * 3] = worldX + rx * voxelSize;
-    positions[vi * 3 + 1] = -(worldY + ry * voxelSize); // Y-negation
+    positions[vi * 3 + 1] = worldY + ry * voxelSize;
     positions[vi * 3 + 2] = worldZ + rz * voxelSize;
     if (positions[vi * 3 + 2] < minZ) minZ = positions[vi * 3 + 2];
     if (positions[vi * 3 + 2] > maxZ) maxZ = positions[vi * 3 + 2];
@@ -162,9 +161,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
     quadColors[qi * 3 + 2] = view.getUint8(colorOff++) / 255;
   }
 
-  // --- Indices (with b↔c swap to fix winding after Y-negation) ---
-  // Y-negation flips triangle winding; swapping the two non-pivot vertices
-  // in every triangle restores the original outward-facing normals.
+  // --- Indices ---
   const resolvedIndexCount = quadCount * 6;
   const indices = new Uint32Array(resolvedIndexCount);
   for (let qi = 0; qi < quadCount; qi++) {
@@ -173,18 +170,18 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const dir = view.getUint8(directionOff++);
     if (dir === 1) {
       indices[out] = base;
-      indices[out + 1] = base + 2;
-      indices[out + 2] = base + 1;
-      indices[out + 3] = base;
-      indices[out + 4] = base + 3;
-      indices[out + 5] = base + 2;
-    } else {
-      indices[out] = base;
       indices[out + 1] = base + 1;
       indices[out + 2] = base + 2;
       indices[out + 3] = base;
       indices[out + 4] = base + 2;
       indices[out + 5] = base + 3;
+    } else {
+      indices[out] = base;
+      indices[out + 1] = base + 2;
+      indices[out + 2] = base + 1;
+      indices[out + 3] = base;
+      indices[out + 4] = base + 3;
+      indices[out + 5] = base + 2;
     }
   }
 
@@ -287,8 +284,8 @@ function buildMeshArrays(buf: ArrayBuffer): {
 
     const localXMin = Math.min(ax, bx, cx) - worldX;
     const localXMax = Math.max(ax, bx, cx) - worldX;
-    const localYMin = Math.min(-ay - worldY, -by - worldY, -cy - worldY);
-    const localYMax = Math.max(-ay - worldY, -by - worldY, -cy - worldY);
+    const localYMin = Math.min(ay, by, cy) - worldY;
+    const localYMax = Math.max(ay, by, cy) - worldY;
 
     if (
       localXMax <= 0 ||
@@ -328,7 +325,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const cy = positions[ic * 3 + 1];
 
     const centerX = (ax + bx + cx) / 3;
-    const centerYWorld = -(ay + by + cy) / 3;
+    const centerYWorld = (ay + by + cy) / 3;
     const localX = centerX - worldX;
     const localY = centerYWorld - worldY;
     const quadrantIndex =

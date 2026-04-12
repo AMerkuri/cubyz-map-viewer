@@ -200,7 +200,7 @@ export function updateTerrainVisibility(args: {
     const tileWorldSize = 256 * tile.lod;
     const centerX = tile.worldX + tileWorldSize / 2;
     const centerY = tile.worldY + tileWorldSize / 2;
-    const xyDist = Math.hypot(centerX - target.x, -centerY - target.y);
+    const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
     const dist = Math.max(xyDist, camDist);
     const desiredLod = getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
     const visible = renderTerrain && tile.lod === desiredLod;
@@ -263,7 +263,7 @@ export function syncTerrainLod(args: {
     for (const entry of surfaceIndex) {
       const tileWorldSize = 256 * entry.lod;
       const centerX = entry.worldX + tileWorldSize / 2;
-      const centerY = -(entry.worldY + tileWorldSize / 2);
+      const centerY = entry.worldY + tileWorldSize / 2;
       const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
       const dist = Math.max(xyDist, camDist);
       const desiredLod = getLodForDistance(
@@ -281,8 +281,7 @@ export function syncTerrainLod(args: {
     const tileWorldSize = 256 * tile.lod;
     const centerWorldX = tile.worldX + tileWorldSize / 2;
     const centerWorldY = tile.worldY + tileWorldSize / 2;
-    const centerSceneY = -centerWorldY;
-    const xyDist = Math.hypot(centerWorldX - target.x, centerSceneY - target.y);
+    const xyDist = Math.hypot(centerWorldX - target.x, centerWorldY - target.y);
     const dist = Math.max(xyDist, camDist);
     const desiredLod = getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
 

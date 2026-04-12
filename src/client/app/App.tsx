@@ -437,6 +437,7 @@ export function App() {
             background: shareCopied
               ? uiTheme.accent.surfaceActive
               : uiTheme.panel.buttonBackgroundMuted,
+            backdropFilter: "blur(2px)",
             color: shareCopied ? uiTheme.text.onAccent : uiTheme.text.muted,
             fontSize: 13,
             fontWeight: 600,

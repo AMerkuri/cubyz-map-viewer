@@ -3,10 +3,10 @@
  * Converts a 3D block array into an optimized triangle mesh by merging
  * adjacent same-color faces into larger quads (greedy meshing).
  *
- * Coordinate convention (matches Three.js scene):
+ * Coordinate convention:
  *   x = world X, y = world Y, z = world Z (up)
- * The client negates Y when placing geometry, so this module outputs
- * raw world coords; Y-negation and winding correction happen client-side.
+ * The binary payload stays in direct world coordinates so the client can
+ * upload geometry without any axis mirroring.
  *
  * Two output modes:
  *   greedyMesh()       – JSON-serialisable object (kept for reference)
@@ -316,10 +316,8 @@ export function greedyMesh(
           const rgb = getBlockColor(blockColors, typ);
           const fy = dir === 1 ? y + 1 : y;
 
-          // Y-faces: all vertices share the same Y, so client-side Y-negation
-          // does NOT reverse their winding (unlike X/Z faces where Y varies).
-          // The client still applies the unconditional b↔c swap, so we must
-          // pre-invert here to cancel it out.
+          // Standard winding points toward -Y for these vertex coordinates, so
+          // Y+ faces use flipped winding and Y- faces use standard winding.
           addQuad(
             x,
             fy,
@@ -678,7 +676,8 @@ export function greedyMeshBinary(
               used[(x + px) * height + z + pz] = 1;
           const rgb = getBlockColor(blockColors, typ);
           const fy = dir === 1 ? y + 1 : y;
-          // Pre-invert winding to cancel the client-side unconditional b↔c swap for Y-faces
+          // Standard winding points toward -Y for these vertex coordinates, so
+          // Y+ faces use flipped winding and Y- faces use standard winding.
           addQuad(
             x,
             fy,

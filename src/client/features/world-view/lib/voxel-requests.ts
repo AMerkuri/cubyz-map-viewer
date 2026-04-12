@@ -205,12 +205,15 @@ export async function fetchVoxelRegion(args: {
 
     const buffer = await res.arrayBuffer();
     const fetchMs = performance.now() - requestStartedAt;
-    const resourceTiming = performance
-      .getEntriesByName(res.url)
-      .findLast(
-        (entry): entry is PerformanceResourceTiming =>
-          entry.entryType === "resource",
-      );
+    const resourceEntries = performance.getEntriesByName(res.url);
+    let resourceTiming: PerformanceResourceTiming | undefined;
+    for (let i = resourceEntries.length - 1; i >= 0; i--) {
+      const entry = resourceEntries[i];
+      if (entry?.entryType === "resource") {
+        resourceTiming = entry as PerformanceResourceTiming;
+        break;
+      }
+    }
     if (
       !workerRef.current ||
       (!activeVoxelRequestKeysRef.current.has(key) &&

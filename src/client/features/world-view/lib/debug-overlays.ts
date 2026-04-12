@@ -55,7 +55,7 @@ export function refreshDebugLabels(args: {
       active.add(key);
       const text = `T L${tile.lod} ${tile.worldX}/${tile.worldY}`;
       const x = tile.worldX + (256 * tile.lod) / 2;
-      const y = -(tile.worldY + (256 * tile.lod) / 2);
+      const y = tile.worldY + (256 * tile.lod) / 2;
       const z = (tile.mesh.geometry.boundingBox?.max.z ?? 0) + 6;
 
       const lodColor = getLodBorderColor(tile.lod).label;
@@ -102,7 +102,7 @@ export function refreshDebugLabels(args: {
       const text = parts.join("  ");
       const regSize = regionWorldSize(tile.lod);
       const x = tile.regionX + regSize / 2;
-      const y = -(tile.regionY + regSize / 2);
+      const y = tile.regionY + regSize / 2;
       const z = tile.maxZ + 6;
 
       const lodColor = getLodBorderColor(tile.lod).label;

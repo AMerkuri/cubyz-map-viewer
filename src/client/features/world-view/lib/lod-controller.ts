@@ -177,7 +177,7 @@ export function checkAndUpdateLod(args: {
   if (r >= 0.001) {
     onShareStateChange({
       mode,
-      pos: [Math.round(target.x), Math.round(-target.y), Math.round(target.z)],
+      pos: [Math.round(target.x), Math.round(target.y), Math.round(target.z)],
       zoom: Math.round(r),
       theta: Math.round(
         THREE.MathUtils.radToDeg(Math.atan2(offset.y, offset.x)),

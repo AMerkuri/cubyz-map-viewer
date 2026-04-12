@@ -5,7 +5,7 @@ export function worldToScene(
   worldY: number,
   worldZ: number,
 ): [number, number, number] {
-  return [worldX, -worldY, worldZ];
+  return [worldX, worldY, worldZ];
 }
 
 export function shouldRenderTerrainForMode(
