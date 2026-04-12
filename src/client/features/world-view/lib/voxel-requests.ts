@@ -178,6 +178,7 @@ export async function fetchVoxelRegion(args: {
   const { key, lod, regionX, regionY, version } = request;
 
   try {
+    const requestStartedAt = performance.now();
     const res = await fetch(`/api/voxels/${lod}/${regionX}/${regionY}`, {
       signal: controller.signal,
     });
@@ -203,6 +204,13 @@ export async function fetchVoxelRegion(args: {
     }
 
     const buffer = await res.arrayBuffer();
+    const fetchMs = performance.now() - requestStartedAt;
+    const resourceTiming = performance
+      .getEntriesByName(res.url)
+      .findLast(
+        (entry): entry is PerformanceResourceTiming =>
+          entry.entryType === "resource",
+      );
     if (
       !workerRef.current ||
       (!activeVoxelRequestKeysRef.current.has(key) &&
@@ -213,7 +221,22 @@ export async function fetchVoxelRegion(args: {
     }
 
     workerRef.current.postMessage(
-      { buffer, lod, regionX, regionY, version } satisfies WorkerIn,
+      {
+        buffer,
+        lod,
+        regionX,
+        regionY,
+        version,
+        benchmark: {
+          fetchCompletedAt: performance.now(),
+          fetchMs,
+          transferBytes: resourceTiming?.transferSize ?? null,
+          encodedBodyBytes: resourceTiming?.encodedBodySize ?? null,
+          decodedBodyBytes: resourceTiming?.decodedBodySize ?? null,
+          rawBufferBytes: buffer.byteLength,
+          contentEncoding: res.headers.get("content-encoding"),
+        },
+      } satisfies WorkerIn,
       [buffer],
     );
   } catch (e) {

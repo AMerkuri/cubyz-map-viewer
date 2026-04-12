@@ -144,10 +144,12 @@ The client uses React for composition and state, but the 3D scene is managed imp
 1. `App` enables chunk index loading.
 2. `useWorldData` also fetches `/api/world/chunk-index`.
 3. The voxel runtime selects requested regions based on camera focus, distance, render distance, the minimum allowed voxel LOD, and any preset-applied loading or cache tuning.
-4. `/api/voxels/:lod/:regionX/:regionY` responses are decoded and queued.
-5. The feature worker converts raw mesh buffers into typed arrays.
+4. `/api/voxels/:lod/:regionX/:regionY` responses are fetched as binary payloads that arrive compressed over HTTP, preferring Brotli with gzip fallback, and are transparently decompressed by the browser before JavaScript sees them.
+5. The feature worker converts the raw mesh buffers into typed arrays, rebuilding triangle indices from compact per-quad winding flags from the current 20-byte voxel header format.
 6. The main thread uploads those arrays into Three.js geometries within a frame budget.
 7. A lightweight voxel-loading signal is published back to `App` so the UI can show a bottom-right loading indicator even when the debug stats panel is hidden.
+
+When the debug panel is open, the client also keeps a rolling voxel benchmark summary based on real browser fetches. It reports average fetch time, worker decode time, combined fetch-plus-worker time, and the browser-exposed transfer and body sizes when `PerformanceResourceTiming` provides them.
 
 ## Live Update Flow
 

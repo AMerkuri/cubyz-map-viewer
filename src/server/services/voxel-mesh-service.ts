@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { promisify } from "node:util";
+import { brotliCompress, gzip, constants as zlibConstants } from "node:zlib";
 import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
 import { LRUCache } from "./cache.js";
@@ -8,14 +10,36 @@ import {
 } from "./voxel-worker-pool.js";
 
 interface CachedVoxelMesh {
+  key: string;
+  buf: Buffer;
+  hash: string;
+  cacheTier: VoxelGenerationStats["cacheTier"];
+  variants: Map<VoxelContentEncoding, CachedVoxelVariant>;
+  variantJobs: Map<CompressedVoxelEncoding, Promise<CachedVoxelVariant>>;
+}
+
+interface CachedVoxelVariant {
   buf: Buffer;
   etag: string;
+}
+
+export interface VoxelEncodingBenchmark {
+  encoding: VoxelContentEncoding;
+  byteLength: number;
+  generateMs: number;
+}
+
+export interface VoxelMeshBenchmark {
+  key: string;
+  rawByteLength: number;
+  variants: VoxelEncodingBenchmark[];
 }
 
 interface VoxelMeshResponse {
   status: "ok" | "empty";
   buf?: Buffer;
   etag?: string;
+  contentEncoding?: CompressedVoxelEncoding;
   metrics: VoxelRequestMetrics;
 }
 
@@ -29,6 +53,19 @@ interface RollingMetric {
   max: number;
   count: number;
 }
+
+type CompressedVoxelEncoding = "br" | "gzip";
+
+export type VoxelContentEncoding = CompressedVoxelEncoding | "identity";
+
+const brotliCompressAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+const BROTLI_RESPONSE_OPTIONS = {
+  params: {
+    [zlibConstants.BROTLI_PARAM_QUALITY]: 6,
+  },
+};
+const GZIP_RESPONSE_OPTIONS = { level: 6 };
 
 export interface VoxelRequestMetrics {
   source: "cache" | "worker";
@@ -140,18 +177,22 @@ export class VoxelMeshService {
     lod: number,
     regionX: number,
     regionY: number,
+    contentEncoding: VoxelContentEncoding,
   ): Promise<VoxelMeshResponse> {
     this.requests++;
     const startedAt = performance.now();
     const cached = this.cache.get(key);
     if (cached) {
+      const variant = await this.getVariant(cached, contentEncoding);
       this.cacheHits++;
       const totalMs = performance.now() - startedAt;
       this.recordMetric(this.totalMetric, totalMs);
       return {
         status: "ok",
-        buf: cached.buf,
-        etag: cached.etag,
+        buf: variant.buf,
+        etag: variant.etag,
+        contentEncoding:
+          contentEncoding === "identity" ? undefined : contentEncoding,
         metrics: {
           source: "cache",
           queueMs: 0,
@@ -160,8 +201,8 @@ export class VoxelMeshService {
           queueDepth: this.pool.getQueueDepth(),
           runningJobs: this.pool.getRunningCount(),
           inFlightJobs: this.inFlight.size,
-          byteLength: cached.buf.byteLength,
-          cacheTier: "worker",
+          byteLength: variant.buf.byteLength,
+          cacheTier: cached.cacheTier,
         },
       };
     }
@@ -226,9 +267,91 @@ export class VoxelMeshService {
     }
 
     const responseBuffer = Buffer.from(result.buffer);
-    const etag = `"voxels-${key}-${createHash("sha1").update(responseBuffer).digest("hex")}"`;
-    this.cache.set(key, { buf: responseBuffer, etag });
-    return { status: "ok", buf: responseBuffer, etag, metrics };
+    const hash = createHash("sha1").update(responseBuffer).digest("hex");
+    const variants = new Map<VoxelContentEncoding, CachedVoxelVariant>();
+    variants.set("identity", {
+      buf: responseBuffer,
+      etag: this.buildVariantEtag(key, hash, "identity"),
+    });
+    const cachedMesh: CachedVoxelMesh = {
+      key,
+      buf: responseBuffer,
+      hash,
+      cacheTier: result.stats?.cacheTier ?? "worker",
+      variants,
+      variantJobs: new Map(),
+    };
+    this.cache.set(key, cachedMesh);
+    const variant = await this.getVariant(cachedMesh, contentEncoding);
+    return {
+      status: "ok",
+      buf: variant.buf,
+      etag: variant.etag,
+      contentEncoding:
+        contentEncoding === "identity" ? undefined : contentEncoding,
+      metrics: {
+        ...metrics,
+        byteLength: variant.buf.byteLength,
+      },
+    };
+  }
+
+  async benchmarkVoxelMesh(
+    key: string,
+    lod: number,
+    regionX: number,
+    regionY: number,
+    fresh = false,
+  ): Promise<VoxelMeshBenchmark | null> {
+    const response = await this.getVoxelMesh(
+      key,
+      lod,
+      regionX,
+      regionY,
+      "identity",
+    );
+    if (response.status !== "ok" || !response.buf) {
+      return null;
+    }
+    const cached = this.cache.get(key);
+    if (!cached) {
+      return null;
+    }
+
+    const variants: VoxelEncodingBenchmark[] = [
+      {
+        encoding: "identity",
+        byteLength: cached.buf.byteLength,
+        generateMs: 0,
+      },
+      {
+        encoding: "gzip",
+        byteLength: 0,
+        generateMs: 0,
+      },
+      {
+        encoding: "br",
+        byteLength: 0,
+        generateMs: 0,
+      },
+    ];
+    for (const [index, encoding] of (["gzip", "br"] as const).entries()) {
+      const startedAt = performance.now();
+      const variant = fresh
+        ? await this.compressVariant(cached, encoding)
+        : await this.getVariant(cached, encoding);
+      variants[index + 1] = {
+        encoding,
+        byteLength: variant.buf.byteLength,
+        generateMs: performance.now() - startedAt,
+      };
+    }
+
+    return {
+      key,
+      rawByteLength: cached.buf.byteLength,
+      variants,
+    };
   }
 
   private enqueueJob(
@@ -279,5 +402,56 @@ export class VoxelMeshService {
 
   private average(metric: RollingMetric): number {
     return metric.count > 0 ? metric.sum / metric.count : 0;
+  }
+
+  private async getVariant(
+    cached: CachedVoxelMesh,
+    contentEncoding: VoxelContentEncoding,
+  ): Promise<CachedVoxelVariant> {
+    const existing = cached.variants.get(contentEncoding);
+    if (existing) {
+      return existing;
+    }
+    if (contentEncoding === "identity") {
+      throw new Error("Missing identity voxel variant");
+    }
+    const inFlight = cached.variantJobs.get(contentEncoding);
+    if (inFlight) {
+      return inFlight;
+    }
+    const job = this.compressVariant(cached, contentEncoding)
+      .then((variant) => {
+        cached.variants.set(contentEncoding, variant);
+        cached.variantJobs.delete(contentEncoding);
+        return variant;
+      })
+      .catch((error) => {
+        cached.variantJobs.delete(contentEncoding);
+        throw error;
+      });
+    cached.variantJobs.set(contentEncoding, job);
+    return job;
+  }
+
+  private async compressVariant(
+    cached: CachedVoxelMesh,
+    contentEncoding: CompressedVoxelEncoding,
+  ): Promise<CachedVoxelVariant> {
+    const compressed =
+      contentEncoding === "br"
+        ? await brotliCompressAsync(cached.buf, BROTLI_RESPONSE_OPTIONS)
+        : await gzipAsync(cached.buf, GZIP_RESPONSE_OPTIONS);
+    return {
+      buf: compressed,
+      etag: this.buildVariantEtag(cached.key, cached.hash, contentEncoding),
+    };
+  }
+
+  private buildVariantEtag(
+    key: string,
+    hash: string,
+    contentEncoding: VoxelContentEncoding,
+  ): string {
+    return `"voxels-${key}-${contentEncoding}-${hash}"`;
   }
 }

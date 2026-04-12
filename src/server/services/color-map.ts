@@ -19,7 +19,7 @@ export interface RGB {
 }
 
 /** Light purple fallback for blocks without a resolved texture color. */
-export const FALLBACK_BLOCK_COLOR: RGB = { r: 200, g: 160, b: 255 };
+export const FALLBACK_BLOCK_COLOR: RGB = { r: 255, g: 0, b: 220 };
 
 /** Water color for ocean/below-sea-level areas */
 export const WATER_COLOR: RGB = { r: 32, g: 56, b: 96 };

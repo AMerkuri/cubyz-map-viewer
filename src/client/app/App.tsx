@@ -56,6 +56,11 @@ function formatMemoryBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatNullableBytes(bytes: number | null): string {
+  if (bytes === null) return "n/a";
+  return formatMemoryBytes(Math.round(bytes));
+}
+
 function LoadingIndicator({ visible }: { visible: boolean }) {
   const [mounted, setMounted] = useState(visible);
   const [shown, setShown] = useState(visible);
@@ -428,6 +433,7 @@ export function App() {
             padding: "8px 14px",
             border: "none",
             borderRadius: 6,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
             background: shareCopied
               ? uiTheme.accent.surfaceActive
               : uiTheme.panel.buttonBackgroundMuted,
@@ -559,6 +565,54 @@ export function App() {
                       `L${lod}:${formatMemoryBytes(chunkStats.memoryByLod[lod] ?? 0)}`,
                   )
                   .join("  ")}
+              </div>
+
+              <div
+                style={{
+                  marginTop: 4,
+                  color: uiTheme.accent.text,
+                  fontWeight: 700,
+                }}
+              >
+                Voxel Benchmark
+              </div>
+              <div>Samples: {chunkStats.voxelBenchmark.samples}</div>
+              <div>
+                Encoding: {chunkStats.voxelBenchmark.contentEncoding ?? "n/a"}
+              </div>
+              <div>
+                Avg fetch: {chunkStats.voxelBenchmark.avgFetchMs.toFixed(1)} ms
+              </div>
+              <div>
+                Avg decode: {chunkStats.voxelBenchmark.avgDecodeMs.toFixed(1)}{" "}
+                ms
+              </div>
+              <div>
+                Avg total: {chunkStats.voxelBenchmark.avgTotalMs.toFixed(1)} ms
+              </div>
+              <div>
+                Avg transfer:{" "}
+                {formatNullableBytes(
+                  chunkStats.voxelBenchmark.avgTransferBytes,
+                )}
+              </div>
+              <div>
+                Avg encoded:{" "}
+                {formatNullableBytes(
+                  chunkStats.voxelBenchmark.avgEncodedBodyBytes,
+                )}
+              </div>
+              <div>
+                Avg decoded:{" "}
+                {formatNullableBytes(
+                  chunkStats.voxelBenchmark.avgDecodedBodyBytes,
+                )}
+              </div>
+              <div>
+                Avg worker input:{" "}
+                {formatNullableBytes(
+                  chunkStats.voxelBenchmark.avgRawBufferBytes,
+                )}
               </div>
             </div>
           </OverlayPanel>

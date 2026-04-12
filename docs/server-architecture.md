@@ -153,11 +153,18 @@ Server-side worker entrypoints and protocol definitions used for voxel mesh gene
 2. `voxels.ts` validates region alignment and delegates to `VoxelMeshService`.
 3. `VoxelMeshService` first checks its in-memory cache.
 4. On cache miss, it submits a job to `VoxelWorkerPool`.
-5. A worker parses one or more `.region` files, generates a greedy mesh, and returns a binary payload plus metrics.
-6. The service drops stale results using epoch-based invalidation, computes an ETag, caches the response, and returns it.
-7. The route exposes timing and queue metrics through response headers.
+5. A worker parses one or more `.region` files, generates a greedy mesh, and returns an indexless binary payload plus metrics.
+6. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
+7. The route requires compressed voxel transport, negotiates `br` first and `gzip` second, rejects requests that accept neither with `406`, and exposes timing and queue metrics through response headers.
 
 This design keeps expensive voxel meshing off the main server thread.
+
+### Voxel benchmarking
+
+- `GET /api/voxels/metrics` returns aggregate voxel service metrics
+- `GET /api/voxels/metrics?lod=<lod>&regionX=<x>&regionY=<y>` benchmarks one voxel region and returns raw, `gzip`, and `br` payload sizes plus variant-generation time
+- add `fresh=1` to force new `gzip` and `br` compression work instead of reusing cached variants when comparing cold compression cost
+- this endpoint is intended for before/after transport comparisons without needing a browser trace
 
 ## Real-Time Update Flow
 
@@ -203,7 +210,8 @@ This allows the client to refresh only the affected world data.
 - cached in memory by `lod/regionX/regionY`
 - deduplicated across concurrent requests using an in-flight map
 - protected against stale writes with global and per-key epochs
-- exposed with ETags so clients can revalidate cheaply
+- exposed with encoding-specific ETags so clients can revalidate cheaply
+- cache raw payloads plus lazily generated `gzip` and `br` variants for repeated responses
 - can also persist generated mesh payloads on disk via `VOXEL_CACHE_DIR` for faster warm restarts and container reuse
 
 ### Logs and runtime paths

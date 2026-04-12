@@ -28,7 +28,7 @@ const VALID_LODS = [1, 2, 4, 8, 16, 32];
 const COLUMN_VOXELS = VOXEL_REGION_SIZE;
 const CHUNK_COLUMNS_PER_AXIS = COLUMN_VOXELS / CHUNK_SIZE;
 const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
-const VOXEL_GENERATOR_CACHE_VERSION = 11;
+const VOXEL_GENERATOR_CACHE_VERSION = 13;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??
@@ -1423,11 +1423,11 @@ function countChunkColumns(view: DataView, byteLength: number): number {
 function extractMaxWorldZ(view: DataView, _byteLength: number): number {
   const worldZ = view.getInt32(8, true);
   const quadCount = view.getUint32(12, true);
-  const indexCount = view.getUint32(16, true);
-  const voxelSize = view.getUint32(20, true) || 1;
+  const voxelSize = view.getUint32(16, true) || 1;
   const vertexCount = quadCount * 4;
   const colorPadded = (quadCount * 3 + 3) & ~3;
-  let off = 24 + colorPadded;
+  const directionPadded = (quadCount + 3) & ~3;
+  let off = 20 + colorPadded + directionPadded;
   let maxRelZ = 0;
   for (let i = 0; i < vertexCount; i++) {
     off += 2;
@@ -1435,6 +1435,5 @@ function extractMaxWorldZ(view: DataView, _byteLength: number): number {
     if (relZ > maxRelZ) maxRelZ = relZ;
     off += 2;
   }
-  void indexCount;
   return worldZ + maxRelZ * voxelSize;
 }

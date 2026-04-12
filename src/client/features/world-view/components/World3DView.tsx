@@ -33,6 +33,7 @@ import {
   disposePlayerMarkerModel,
   disposeTextSprite,
 } from "../lib/primitives.js";
+import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
 import { publishChunkStats } from "../lib/stats.js";
 import {
   clearTerrainTiles as clearTerrainTilesManaged,
@@ -246,6 +247,17 @@ export function World3DView({
   const biomeLabelsDirtyRef = useRef(false);
   const biomeRefreshTokenRef = useRef(0);
   const lastChunkStatsRef = useRef("");
+  const voxelBenchmarkRef = useRef<RollingVoxelBenchmarkStats>({
+    samples: 0,
+    contentEncoding: null,
+    avgFetchMs: 0,
+    avgDecodeMs: 0,
+    avgTotalMs: 0,
+    avgTransferBytes: null,
+    avgEncodedBodyBytes: null,
+    avgDecodedBodyBytes: null,
+    avgRawBufferBytes: null,
+  });
   const playerMarkerModelTemplateRef = useRef<THREE.Object3D | null>(null);
   const playerMarkerTextureRef = useRef<THREE.Texture | null>(null);
   const activeFocusLodRef = useRef<number>(1);
@@ -806,6 +818,54 @@ export function World3DView({
       failedVoxels: failedVoxelsRef.current,
       pendingVoxelMeshQueueRef,
       isVoxelTileStale,
+      onBenchmarkSample: (sample) => {
+        const current = voxelBenchmarkRef.current;
+        const nextSamples = current.samples + 1;
+        voxelBenchmarkRef.current = {
+          samples: nextSamples,
+          contentEncoding: sample.contentEncoding,
+          avgFetchMs:
+            (current.avgFetchMs * current.samples + sample.fetchMs) /
+            nextSamples,
+          avgDecodeMs:
+            (current.avgDecodeMs * current.samples + sample.decodeMs) /
+            nextSamples,
+          avgTotalMs:
+            (current.avgTotalMs * current.samples + sample.totalMs) /
+            nextSamples,
+          avgTransferBytes: averageNullableMetric(
+            current.avgTransferBytes,
+            current.samples,
+            sample.transferBytes,
+            nextSamples,
+          ),
+          avgEncodedBodyBytes: averageNullableMetric(
+            current.avgEncodedBodyBytes,
+            current.samples,
+            sample.encodedBodyBytes,
+            nextSamples,
+          ),
+          avgDecodedBodyBytes: averageNullableMetric(
+            current.avgDecodedBodyBytes,
+            current.samples,
+            sample.decodedBodyBytes,
+            nextSamples,
+          ),
+          avgRawBufferBytes: averageNullableMetric(
+            current.avgRawBufferBytes,
+            current.samples,
+            sample.rawBufferBytes,
+            nextSamples,
+          ),
+        };
+
+        if (debugEnabledRef.current) {
+          console.debug("voxel benchmark", {
+            key: `${data.lod ?? 1}/${data.regionX}/${data.regionY}`,
+            ...sample,
+          });
+        }
+      },
     });
   }
 
@@ -860,6 +920,7 @@ export function World3DView({
       loadedTerrain: loadedTerrainRef.current,
       loadedVoxels: loadedVoxelsRef.current,
       warmCachedVoxels: warmCachedVoxelsRef.current,
+      voxelBenchmark: voxelBenchmarkRef.current,
       lastChunkStatsRef,
       onChunkStatsChange: (stats) => {
         onChunkStatsChangeRef.current(stats);
@@ -1005,4 +1066,19 @@ export function World3DView({
       }}
     />
   );
+}
+
+function averageNullableMetric(
+  currentAverage: number | null,
+  currentSamples: number,
+  nextValue: number | null,
+  nextSamples: number,
+): number | null {
+  if (nextValue === null) {
+    return currentAverage;
+  }
+  if (currentAverage === null || currentSamples === 0) {
+    return nextValue;
+  }
+  return (currentAverage * currentSamples + nextValue) / nextSamples;
 }

@@ -189,8 +189,17 @@ async function main() {
   // Create Express app
   const app = express();
 
-  // Compress all responses (gzip/deflate)
-  app.use(compression());
+  // Voxel responses negotiate and cache their own encoded variants.
+  app.use(
+    compression({
+      filter: (req, res) => {
+        if (req.path === "/api/voxels" || req.path.startsWith("/api/voxels/")) {
+          return false;
+        }
+        return compression.filter(req, res);
+      },
+    }),
+  );
 
   app.use(requestContextMiddleware);
 

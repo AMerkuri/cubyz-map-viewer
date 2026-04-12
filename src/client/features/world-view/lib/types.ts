@@ -66,6 +66,15 @@ export interface WorkerIn {
   regionX: number;
   regionY: number;
   version?: number;
+  benchmark?: {
+    fetchCompletedAt: number;
+    fetchMs: number;
+    transferBytes: number | null;
+    encodedBodyBytes: number | null;
+    decodedBodyBytes: number | null;
+    rawBufferBytes: number;
+    contentEncoding: string | null;
+  };
 }
 
 export interface WorkerOut {
@@ -79,6 +88,16 @@ export interface WorkerOut {
   voxelSize?: number;
   minZ?: number;
   maxZ?: number;
+  benchmark?: {
+    fetchMs: number;
+    decodeMs: number;
+    totalMs: number;
+    transferBytes: number | null;
+    encodedBodyBytes: number | null;
+    decodedBodyBytes: number | null;
+    rawBufferBytes: number;
+    contentEncoding: string | null;
+  };
   error?: string;
 }
 

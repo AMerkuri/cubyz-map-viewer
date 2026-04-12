@@ -14,6 +14,18 @@ import type {
   WarmCachedVoxelTile,
 } from "./types.js";
 
+export interface RollingVoxelBenchmarkStats {
+  samples: number;
+  contentEncoding: string | null;
+  avgFetchMs: number;
+  avgDecodeMs: number;
+  avgTotalMs: number;
+  avgTransferBytes: number | null;
+  avgEncodedBodyBytes: number | null;
+  avgDecodedBodyBytes: number | null;
+  avgRawBufferBytes: number | null;
+}
+
 export function publishChunkStats(args: {
   mode: "terrain" | "voxel";
   fpsValue: number;
@@ -27,6 +39,7 @@ export function publishChunkStats(args: {
   loadedTerrain: Map<string, LoadedTerrainTile>;
   loadedVoxels: Map<string, LoadedVoxelTile>;
   warmCachedVoxels: Map<string, WarmCachedVoxelTile>;
+  voxelBenchmark: RollingVoxelBenchmarkStats;
   lastChunkStatsRef: { current: string };
   onChunkStatsChange: (stats: ChunkStats) => void;
 }): void {
@@ -43,6 +56,7 @@ export function publishChunkStats(args: {
     loadedTerrain,
     loadedVoxels,
     warmCachedVoxels,
+    voxelBenchmark,
     lastChunkStatsRef,
     onChunkStatsChange,
   } = args;
@@ -137,6 +151,7 @@ export function publishChunkStats(args: {
     memoryByLod,
     jsHeapBytes,
     warmCacheCount: warmCachedVoxels.size,
+    voxelBenchmark,
   };
   const statsKey = JSON.stringify(statsPayload);
   if (lastChunkStatsRef.current !== statsKey) {

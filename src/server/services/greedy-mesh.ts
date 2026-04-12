@@ -14,23 +14,23 @@
  *
  * Binary layout
  * ─────────────
- * Header (24 bytes)
+ * Header (20 bytes)
  *   i32  worldX
  *   i32  worldY
  *   i32  worldZBase
  *   u32  quadCount
- *   u32  indexCount
  *   u32  voxelSize
  *
  * Per-quad colors  (3 × quadCount bytes, padded to 4-byte alignment)
  *   u8 r, u8 g, u8 b   — one entry per quad (client expands to 4 vertices)
  *
+ * Per-quad winding flags (quadCount bytes, padded to 4-byte alignment)
+ *   u8 dir   — 1 for standard winding, 0 for flipped winding
+ *
  * Per-vertex positions  (4 × quadCount × 4 bytes)
  *   u8  x   relative to worldX  (0–127)
  *   u8  y   relative to worldY  (0–127)
  *   u16 z   relative to worldZBase (0–65535, little-endian)
- *
- * Indices  (4 × indexCount bytes, u32[])
  *
  * Trailer (4 bytes)
  *   u32 chunkCoverage  — 16-bit bitmask, bit (cx*4+cy) set when the 32×32
@@ -425,6 +425,7 @@ export function greedyMesh(
  *   - Skips bottom (−Z) faces: never visible from above in a map viewer
  *   - Per-quad (not per-vertex) colors — client expands 1→4 vertices
  *   - Positions stored as relative u8 XY + u16 Z offsets from worldX/Y/Z
+ *   - Per-quad winding flags so the client can rebuild indices cheaply
  *   - Returns an ArrayBuffer ready to send as application/octet-stream
  *   - Preserves 32×32 internal chunk-column boundaries so the client can
  *     independently cull parent/child LOD columns without geometry overlap
@@ -445,19 +446,17 @@ export function greedyMeshBinary(
   surfaceHeights?: Int32Array,
 ): ArrayBuffer {
   // Accumulate quads into typed arrays, doubling capacity as needed.
-  // Each quad: 3 color bytes + 4 vertices × (u8 x, u8 y, u16 z) = 3 + 16 = 19 bytes
-  // Plus 6 indices × 4 bytes = 24 bytes per quad.
+  // Each quad: 3 color bytes + 1 winding byte + 4 vertices × (u8 x, u8 y, u16 z).
   let capacity = 4096;
   let quadCount = 0;
 
   // Per-quad: r, g, b
   let quadColors = new Uint8Array(capacity * 3);
+  let quadDirections = new Uint8Array(capacity);
   // Per-vertex (4 per quad): x (u8), y (u8), z_lo (u8), z_hi (u8)
   let vertPosX = new Uint8Array(capacity * 4);
   let vertPosY = new Uint8Array(capacity * 4);
   let vertPosZ = new Uint16Array(capacity * 4);
-  // 6 indices per quad
-  let indexBuf = new Uint32Array(capacity * 6);
 
   function ensureCapacity() {
     if (quadCount < capacity) return;
@@ -465,6 +464,9 @@ export function greedyMeshBinary(
     const qc2 = new Uint8Array(capacity * 3);
     qc2.set(quadColors);
     quadColors = qc2;
+    const qd2 = new Uint8Array(capacity);
+    qd2.set(quadDirections);
+    quadDirections = qd2;
     const vx2 = new Uint8Array(capacity * 4);
     vx2.set(vertPosX);
     vertPosX = vx2;
@@ -474,9 +476,6 @@ export function greedyMeshBinary(
     const vz2 = new Uint16Array(capacity * 4);
     vz2.set(vertPosZ);
     vertPosZ = vz2;
-    const ib2 = new Uint32Array(capacity * 6);
-    ib2.set(indexBuf);
-    indexBuf = ib2;
   }
 
   function getBlock(x: number, y: number, z: number): number {
@@ -543,12 +542,11 @@ export function greedyMeshBinary(
 
     const qi = quadCount;
     const vi = qi * 4; // first vertex slot for this quad
-    const ii = qi * 6; // first index slot for this quad
-    const baseVert = vi; // vertex index referenced by indices
 
     quadColors[qi * 3] = r;
     quadColors[qi * 3 + 1] = g;
     quadColors[qi * 3 + 2] = b;
+    quadDirections[qi] = dir === 1 ? 1 : 0;
 
     vertPosX[vi] = v0x;
     vertPosY[vi] = v0y;
@@ -562,22 +560,6 @@ export function greedyMeshBinary(
     vertPosX[vi + 3] = v3x;
     vertPosY[vi + 3] = v3y;
     vertPosZ[vi + 3] = v3z;
-
-    if (dir === 1) {
-      indexBuf[ii] = baseVert;
-      indexBuf[ii + 1] = baseVert + 1;
-      indexBuf[ii + 2] = baseVert + 2;
-      indexBuf[ii + 3] = baseVert;
-      indexBuf[ii + 4] = baseVert + 2;
-      indexBuf[ii + 5] = baseVert + 3;
-    } else {
-      indexBuf[ii] = baseVert;
-      indexBuf[ii + 1] = baseVert + 2;
-      indexBuf[ii + 2] = baseVert + 1;
-      indexBuf[ii + 3] = baseVert;
-      indexBuf[ii + 4] = baseVert + 3;
-      indexBuf[ii + 5] = baseVert + 2;
-    }
 
     quadCount++;
   }
@@ -779,7 +761,6 @@ export function greedyMeshBinary(
   }
 
   const vertexCount = quadCount * 4;
-  const indexCount = quadCount * 6;
 
   // Chunk-column coverage bitmask: bit (cx*4+cy) is set when the 32×32 column
   // at local offsets (cx*32 .. cx*32+31, cy*32 .. cy*32+31) has ≥1 non-air block.
@@ -805,14 +786,15 @@ export function greedyMeshBinary(
   const colorBytes = quadCount * 3;
   const colorPadded = (colorBytes + 3) & ~3;
 
+  // Direction section: 1 byte per quad, padded to 4-byte alignment
+  const directionBytes = quadCount;
+  const directionPadded = (directionBytes + 3) & ~3;
+
   // Position section: 4 bytes per vertex (u8 x, u8 y, u16 z)
   const posBytes = vertexCount * 4;
 
-  // Index section: 4 bytes per index
-  const idxBytes = indexCount * 4;
-
   // Trailer: 4 bytes (u32 chunkCoverage)
-  const totalBytes = 24 + colorPadded + posBytes + idxBytes + 4;
+  const totalBytes = 20 + colorPadded + directionPadded + posBytes + 4;
   const buf = new ArrayBuffer(totalBytes);
   const view = new DataView(buf);
 
@@ -821,17 +803,21 @@ export function greedyMeshBinary(
   view.setInt32(4, worldY, true);
   view.setInt32(8, worldZ, true);
   view.setUint32(12, quadCount, true);
-  view.setUint32(16, indexCount, true);
-  view.setUint32(20, voxelSize, true);
+  view.setUint32(16, voxelSize, true);
 
   // Per-quad colors
-  let off = 24;
+  let off = 20;
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadColors[qi * 3]);
     view.setUint8(off++, quadColors[qi * 3 + 1]);
     view.setUint8(off++, quadColors[qi * 3 + 2]);
   }
-  off = 24 + colorPadded; // skip padding
+  off = 20 + colorPadded; // skip padding
+
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadDirections[qi]);
+  }
+  off = 20 + colorPadded + directionPadded;
 
   // Per-vertex positions (4 per quad)
   for (let vi = 0; vi < vertexCount; vi++) {
@@ -839,12 +825,6 @@ export function greedyMeshBinary(
     view.setUint8(off++, vertPosY[vi]);
     view.setUint16(off, vertPosZ[vi], true);
     off += 2;
-  }
-
-  // Indices
-  for (let ii = 0; ii < indexCount; ii++) {
-    view.setUint32(off, indexBuf[ii], true);
-    off += 4;
   }
 
   // Trailer: chunk-column coverage bitmask
@@ -865,10 +845,10 @@ export function encodeBinaryQuads(
   let capacity = Math.max(4096, quads.length || 1);
   let quadCount = 0;
   let quadColors = new Uint8Array(capacity * 3);
+  let quadDirections = new Uint8Array(capacity);
   let vertPosX = new Uint8Array(capacity * 4);
   let vertPosY = new Uint8Array(capacity * 4);
   let vertPosZ = new Uint16Array(capacity * 4);
-  let indexBuf = new Uint32Array(capacity * 6);
 
   function ensureCapacity() {
     if (quadCount < capacity) return;
@@ -876,6 +856,9 @@ export function encodeBinaryQuads(
     const qc2 = new Uint8Array(capacity * 3);
     qc2.set(quadColors);
     quadColors = qc2;
+    const qd2 = new Uint8Array(capacity);
+    qd2.set(quadDirections);
+    quadDirections = qd2;
     const vx2 = new Uint8Array(capacity * 4);
     vx2.set(vertPosX);
     vertPosX = vx2;
@@ -885,20 +868,17 @@ export function encodeBinaryQuads(
     const vz2 = new Uint16Array(capacity * 4);
     vz2.set(vertPosZ);
     vertPosZ = vz2;
-    const ib2 = new Uint32Array(capacity * 6);
-    ib2.set(indexBuf);
-    indexBuf = ib2;
   }
 
   for (const quad of quads) {
     ensureCapacity();
     const qi = quadCount;
     const vi = qi * 4;
-    const ii = qi * 6;
     const rgb = getBlockColor(blockColors, quad.typ);
     quadColors[qi * 3] = rgb.r;
     quadColors[qi * 3 + 1] = rgb.g;
     quadColors[qi * 3 + 2] = rgb.b;
+    quadDirections[qi] = quad.dir === 1 ? 1 : 0;
 
     vertPosX[vi] = quad.v0x;
     vertPosY[vi] = quad.v0y;
@@ -913,32 +893,16 @@ export function encodeBinaryQuads(
     vertPosY[vi + 3] = quad.v3y;
     vertPosZ[vi + 3] = quad.v3z;
 
-    if (quad.dir === 1) {
-      indexBuf[ii] = vi;
-      indexBuf[ii + 1] = vi + 1;
-      indexBuf[ii + 2] = vi + 2;
-      indexBuf[ii + 3] = vi;
-      indexBuf[ii + 4] = vi + 2;
-      indexBuf[ii + 5] = vi + 3;
-    } else {
-      indexBuf[ii] = vi;
-      indexBuf[ii + 1] = vi + 2;
-      indexBuf[ii + 2] = vi + 1;
-      indexBuf[ii + 3] = vi;
-      indexBuf[ii + 4] = vi + 3;
-      indexBuf[ii + 5] = vi + 2;
-    }
-
     quadCount++;
   }
 
   const vertexCount = quadCount * 4;
-  const indexCount = quadCount * 6;
   const colorBytes = quadCount * 3;
   const colorPadded = (colorBytes + 3) & ~3;
+  const directionBytes = quadCount;
+  const directionPadded = (directionBytes + 3) & ~3;
   const posBytes = vertexCount * 4;
-  const idxBytes = indexCount * 4;
-  const totalBytes = 24 + colorPadded + posBytes + idxBytes + 4;
+  const totalBytes = 20 + colorPadded + directionPadded + posBytes + 4;
   const buf = new ArrayBuffer(totalBytes);
   const view = new DataView(buf);
 
@@ -946,27 +910,26 @@ export function encodeBinaryQuads(
   view.setInt32(4, worldY, true);
   view.setInt32(8, worldZ, true);
   view.setUint32(12, quadCount, true);
-  view.setUint32(16, indexCount, true);
-  view.setUint32(20, voxelSize, true);
+  view.setUint32(16, voxelSize, true);
 
-  let off = 24;
+  let off = 20;
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadColors[qi * 3]);
     view.setUint8(off++, quadColors[qi * 3 + 1]);
     view.setUint8(off++, quadColors[qi * 3 + 2]);
   }
-  off = 24 + colorPadded;
+  off = 20 + colorPadded;
+
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadDirections[qi]);
+  }
+  off = 20 + colorPadded + directionPadded;
 
   for (let vi = 0; vi < vertexCount; vi++) {
     view.setUint8(off++, vertPosX[vi]);
     view.setUint8(off++, vertPosY[vi]);
     view.setUint16(off, vertPosZ[vi], true);
     off += 2;
-  }
-
-  for (let ii = 0; ii < indexCount; ii++) {
-    view.setUint32(off, indexBuf[ii], true);
-    off += 4;
   }
 
   view.setUint32(off, chunkCoverage, true);

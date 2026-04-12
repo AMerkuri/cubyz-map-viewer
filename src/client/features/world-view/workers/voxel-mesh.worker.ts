@@ -11,22 +11,23 @@ import type { WorkerIn, WorkerOut } from "../lib/types.js";
  * without any heavy work on the render/event thread.
  *
  * Binary layout (all little-endian):
- *   Header 24 bytes:
- *     i32 worldX, i32 worldY, i32 worldZBase, u32 quadCount, u32 indexCount
- *     u32 voxelSize
+ *   Header 20 bytes:
+ *     i32 worldX, i32 worldY, i32 worldZBase, u32 quadCount, u32 voxelSize
  *   Per-quad color section (quadCount × 3 bytes, padded to 4-byte alignment):
  *     u8 r, u8 g, u8 b per quad
+ *   Per-quad winding section (quadCount bytes, padded to 4-byte alignment):
+ *     u8 dir per quad: 1 = standard winding, 0 = flipped winding
  *   Per-vertex position section (quadCount × 4 × 4 bytes):
  *     u8 relX, u8 relY, u16 relZ per vertex
- *   Index section (indexCount × 4 bytes):
- *     u32[] – 6 indices per quad, two CCW triangles
+ *   The client always rebuilds triangle indices from the winding section.
  */
 
 self.onmessage = (e: MessageEvent<WorkerIn>) => {
-  const { buffer, lod, regionX, regionY, version } = e.data;
+  const { buffer, lod, regionX, regionY, version, benchmark } = e.data;
   const workerGlobal = globalThis as unknown as {
     postMessage(message: WorkerOut, transfer?: Transferable[]): void;
   };
+  const startedAt = performance.now();
 
   try {
     const result = buildMeshArrays(buffer);
@@ -39,7 +40,25 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
         quadrant.indices.buffer,
       );
     }
-    const out: WorkerOut = { lod, regionX, regionY, version, ...result };
+    const out: WorkerOut = {
+      lod,
+      regionX,
+      regionY,
+      version,
+      ...result,
+      benchmark: benchmark
+        ? {
+            fetchMs: benchmark.fetchMs,
+            decodeMs: performance.now() - startedAt,
+            totalMs: 0,
+            transferBytes: benchmark.transferBytes,
+            encodedBodyBytes: benchmark.encodedBodyBytes,
+            decodedBodyBytes: benchmark.decodedBodyBytes,
+            rawBufferBytes: benchmark.rawBufferBytes,
+            contentEncoding: benchmark.contentEncoding,
+          }
+        : undefined,
+    };
     workerGlobal.postMessage(out, transferables);
   } catch (err) {
     const out: WorkerOut = {
@@ -47,6 +66,18 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
       regionY,
       lod,
       version,
+      benchmark: benchmark
+        ? {
+            fetchMs: benchmark.fetchMs,
+            decodeMs: performance.now() - startedAt,
+            totalMs: 0,
+            transferBytes: benchmark.transferBytes,
+            encodedBodyBytes: benchmark.encodedBodyBytes,
+            decodedBodyBytes: benchmark.decodedBodyBytes,
+            rawBufferBytes: benchmark.rawBufferBytes,
+            contentEncoding: benchmark.contentEncoding,
+          }
+        : undefined,
       error: err instanceof Error ? err.message : String(err),
     };
     workerGlobal.postMessage(out);
@@ -67,21 +98,21 @@ function buildMeshArrays(buf: ArrayBuffer): {
   minZ: number;
   maxZ: number;
 } {
-  if (buf.byteLength < 24) throw new Error("buffer too small for header");
+  if (buf.byteLength < 20) throw new Error("buffer too small for header");
 
   const view = new DataView(buf);
   const worldX = view.getInt32(0, true);
   const worldY = view.getInt32(4, true);
   const worldZ = view.getInt32(8, true);
   const quadCount = view.getUint32(12, true);
-  const indexCount = view.getUint32(16, true);
-  const voxelSize = view.getUint32(20, true) || 1;
+  const voxelSize = view.getUint32(16, true) || 1;
 
   const vertexCount = quadCount * 4;
 
   // Color section: 3 bytes per quad, padded to 4-byte boundary
   const colorPadded = (quadCount * 3 + 3) & ~3;
-  const expectedSize = 24 + colorPadded + vertexCount * 4 + indexCount * 4;
+  const directionPadded = (quadCount + 3) & ~3;
+  const expectedSize = 20 + colorPadded + directionPadded + vertexCount * 4;
   if (buf.byteLength < expectedSize) throw new Error("buffer truncated");
 
   // The server appends a u32 LE chunk-coverage bitmask after the mesh data.
@@ -93,12 +124,15 @@ function buildMeshArrays(buf: ArrayBuffer): {
       ? view.getUint32(expectedSize, true)
       : 0xffff;
 
+  let directionOff = 20 + colorPadded;
+  const positionOffset = 20 + colorPadded + directionPadded;
+
   // --- Positions (with Y-negation for Three.js coordinate system) ---
   // sceneY = -worldY so that increasing world Y moves toward -Y in scene space.
   const positions = new Float32Array(vertexCount * 3);
   let minZ = Number.POSITIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
-  let off = 24 + colorPadded;
+  let off = positionOffset;
   for (let vi = 0; vi < vertexCount; vi++) {
     const rx = view.getUint8(off++);
     const ry = view.getUint8(off++);
@@ -115,7 +149,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
 
   // --- Colors (per-quad → per-vertex, normalized 0–1) ---
   const colors = new Float32Array(vertexCount * 3);
-  let colorOff = 24;
+  let colorOff = 20;
   for (let qi = 0; qi < quadCount; qi++) {
     const r = view.getUint8(colorOff++) / 255;
     const g = view.getUint8(colorOff++) / 255;
@@ -131,17 +165,27 @@ function buildMeshArrays(buf: ArrayBuffer): {
   // --- Indices (with b↔c swap to fix winding after Y-negation) ---
   // Y-negation flips triangle winding; swapping the two non-pivot vertices
   // in every triangle restores the original outward-facing normals.
-  const indices = new Uint32Array(indexCount);
-  for (let i = 0; i < indexCount; i += 3) {
-    const a = view.getUint32(off, true);
-    off += 4;
-    const b = view.getUint32(off, true);
-    off += 4;
-    const c = view.getUint32(off, true);
-    off += 4;
-    indices[i] = a;
-    indices[i + 1] = c; // swap b↔c
-    indices[i + 2] = b;
+  const resolvedIndexCount = quadCount * 6;
+  const indices = new Uint32Array(resolvedIndexCount);
+  for (let qi = 0; qi < quadCount; qi++) {
+    const base = qi * 4;
+    const out = qi * 6;
+    const dir = view.getUint8(directionOff++);
+    if (dir === 1) {
+      indices[out] = base;
+      indices[out + 1] = base + 2;
+      indices[out + 2] = base + 1;
+      indices[out + 3] = base;
+      indices[out + 4] = base + 3;
+      indices[out + 5] = base + 2;
+    } else {
+      indices[out] = base;
+      indices[out + 1] = base + 1;
+      indices[out + 2] = base + 2;
+      indices[out + 3] = base;
+      indices[out + 4] = base + 2;
+      indices[out + 5] = base + 3;
+    }
   }
 
   // --- Flat normals ---
@@ -150,7 +194,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
   // a quad are coplanar, the second write for each vertex is identical to the
   // first and is simply overwritten with no correctness issue.
   const normals = new Float32Array(vertexCount * 3);
-  for (let i = 0; i < indexCount; i += 3) {
+  for (let i = 0; i < resolvedIndexCount; i += 3) {
     const ia = indices[i];
     const ib = indices[i + 1];
     const ic = indices[i + 2];
@@ -201,7 +245,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
   const regionWorldSize = 128 * voxelSize;
   const chunkWorldSize = 32 * voxelSize;
 
-  for (let i = 0; i < indexCount; i += 3) {
+  for (let i = 0; i < resolvedIndexCount; i += 3) {
     const ia = indices[i];
     const ib = indices[i + 1];
     const ic = indices[i + 2];
@@ -251,7 +295,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
   }
 
   const quadrantTris: number[][] = Array.from({ length: 4 }, () => []);
-  for (let i = 0; i < indexCount; i += 3) {
+  for (let i = 0; i < resolvedIndexCount; i += 3) {
     const ia = indices[i];
     const ib = indices[i + 1];
     const ic = indices[i + 2];

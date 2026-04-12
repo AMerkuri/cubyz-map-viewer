@@ -404,6 +404,7 @@ export function handleVoxelWorkerMessage(args: {
   failedVoxels: Map<string, number>;
   pendingVoxelMeshQueueRef: { current: PendingVoxelMeshItem[] };
   isVoxelTileStale: (key: string) => boolean;
+  onBenchmarkSample?: (sample: NonNullable<WorkerOut["benchmark"]>) => void;
 }): void {
   const {
     data,
@@ -414,6 +415,7 @@ export function handleVoxelWorkerMessage(args: {
     failedVoxels,
     pendingVoxelMeshQueueRef,
     isVoxelTileStale,
+    onBenchmarkSample,
   } = args;
   const {
     lod,
@@ -426,8 +428,16 @@ export function handleVoxelWorkerMessage(args: {
     voxelSize,
     minZ,
     maxZ,
+    benchmark,
     error,
   } = data;
+
+  if (benchmark) {
+    onBenchmarkSample?.({
+      ...benchmark,
+      totalMs: benchmark.fetchMs + benchmark.decodeMs,
+    });
+  }
 
   const resolvedLod = lod ?? 1;
   const key = voxelTileKey(resolvedLod, regionX, regionY);

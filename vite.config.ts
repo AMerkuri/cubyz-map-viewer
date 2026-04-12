@@ -32,6 +32,15 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     proxy: {
+      "/api/voxels": {
+        target: "http://localhost:3001",
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.setHeader("Accept-Encoding", "br, gzip;q=0.8");
+          });
+        },
+      },
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true,

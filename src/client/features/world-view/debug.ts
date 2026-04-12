@@ -25,6 +25,17 @@ export type ChunkStats = {
   memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
   jsHeapBytes: number | null;
   warmCacheCount: number;
+  voxelBenchmark: {
+    samples: number;
+    contentEncoding: string | null;
+    avgFetchMs: number;
+    avgDecodeMs: number;
+    avgTotalMs: number;
+    avgTransferBytes: number | null;
+    avgEncodedBodyBytes: number | null;
+    avgDecodedBodyBytes: number | null;
+    avgRawBufferBytes: number | null;
+  };
 };
 
 export interface MapDebugSettings {
@@ -102,6 +113,17 @@ export function createEmptyChunkStats(mode: "terrain" | "voxel"): ChunkStats {
     memoryByLod: {},
     jsHeapBytes: null,
     warmCacheCount: 0,
+    voxelBenchmark: {
+      samples: 0,
+      contentEncoding: null,
+      avgFetchMs: 0,
+      avgDecodeMs: 0,
+      avgTotalMs: 0,
+      avgTransferBytes: null,
+      avgEncodedBodyBytes: null,
+      avgDecodedBodyBytes: null,
+      avgRawBufferBytes: null,
+    },
   };
 }
 
