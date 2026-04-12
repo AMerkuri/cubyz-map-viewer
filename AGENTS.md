@@ -3,8 +3,9 @@
 - Work only inside `cubyz-map-viewer/`. Do not modify the parent `Cubyz` game code when working on this repo.
 - Keep documentation up to date. Whenever you change client or server behavior, structure, or workflows, update the corresponding files in `docs/` in the same task.
 - Architecture docs live in:
-  - `docs/client-architecture.md`
-  - `docs/server-architecture.md`
+  - `docs/specification.md`
+  - `docs/client-specification.md`
+  - `docs/server-specification.md`
 
 ## Read First
 
