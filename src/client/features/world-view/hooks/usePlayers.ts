@@ -1,5 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef } from "react";
+
+import type { WatchEvent, WatchEventType } from "./useWebSocket.js";
+
+const PLAYERS_STALE_AFTER_MS = 30_000;
 
 export interface PlayerData {
   name: string;
@@ -19,17 +23,50 @@ async function fetchPlayers(): Promise<PlayerData[]> {
   return res.json();
 }
 
-export function usePlayers() {
+export function usePlayers(
+  subscribe?: (
+    type: WatchEventType,
+    handler: (event: WatchEvent) => void,
+  ) => () => void,
+) {
   const queryClient = useQueryClient();
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const query = useQuery({
     queryKey: ["players"],
     queryFn: fetchPlayers,
+    staleTime: PLAYERS_STALE_AFTER_MS,
   });
 
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["players"] });
   }, [queryClient]);
+
+  const scheduleSilenceRefresh = useEffectEvent(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+    }
+    silenceTimerRef.current = setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: ["players"] });
+    }, PLAYERS_STALE_AFTER_MS);
+  });
+
+  useEffect(() => {
+    scheduleSilenceRefresh();
+    return () => {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!subscribe) return;
+    return subscribe("players-updated", () => {
+      scheduleSilenceRefresh();
+      void queryClient.invalidateQueries({ queryKey: ["players"] });
+    });
+  }, [subscribe, queryClient]);
 
   return { data: query.data ?? [], refresh };
 }

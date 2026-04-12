@@ -49,6 +49,7 @@ export function useWorld3DSceneRuntime(args: {
     current: { worldData?: { spawn?: [number, number, number] | null } };
   };
   onCursorMoveRef: { current: (pos: [number, number, number] | null) => void };
+  onPlayerClickRef: { current: (player: PlayerData) => void };
   terrainVisibilityDirtyRef: { current: boolean };
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
@@ -103,6 +104,7 @@ export function useWorld3DSceneRuntime(args: {
     keysHeldRef,
     worldDataRef,
     onCursorMoveRef,
+    onPlayerClickRef,
     terrainVisibilityDirtyRef,
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,
@@ -161,6 +163,7 @@ export function useWorld3DSceneRuntime(args: {
       keysHeldRef,
       worldDataRef,
       onCursorMoveRef,
+      onPlayerClickRef,
       terrainVisibilityDirtyRef,
       debugLabelsDirtyRef,
       biomeLabelsDirtyRef,
@@ -201,6 +204,7 @@ export function useWorld3DSceneRuntime(args: {
     keysHeldRef,
     worldDataRef,
     onCursorMoveRef,
+    onPlayerClickRef,
     terrainVisibilityDirtyRef,
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,

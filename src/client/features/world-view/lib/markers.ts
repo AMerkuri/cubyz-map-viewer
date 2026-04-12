@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 
-import { cleanPlayerName, worldToScene } from "./utils.js";
+import { worldToScene } from "./utils.js";
 
 export function rebuildSpawnMarker(args: {
   spawn: [number, number, number] | null | undefined;
@@ -41,15 +41,17 @@ export function rebuildSpawnMarker(args: {
 export function rebuildPlayerMarkers(args: {
   players: PlayerData[];
   markerGroup: THREE.Group | null;
-  createMarkerDot: (color: string, sizePx: number) => CSS2DObject;
-  createMarkerLabel: (text: string, color: string) => CSS2DObject;
+  createPlayerMarkerModel: () => THREE.Object3D;
+  createFormattedPlayerLabel: (text: string) => CSS2DObject;
+  disposePlayerMarkerModel: (model: THREE.Object3D) => void;
   disposeTextSprite: (sprite: THREE.Sprite) => void;
 }): void {
   const {
     players,
     markerGroup,
-    createMarkerDot,
-    createMarkerLabel,
+    createPlayerMarkerModel,
+    createFormattedPlayerLabel,
+    disposePlayerMarkerModel,
     disposeTextSprite,
   } = args;
   if (!markerGroup) return;
@@ -59,6 +61,8 @@ export function rebuildPlayerMarkers(args: {
     markerGroup.remove(child);
     if (child instanceof THREE.Sprite) {
       disposeTextSprite(child);
+    } else {
+      disposePlayerMarkerModel(child);
     }
   }
 
@@ -69,11 +73,14 @@ export function rebuildPlayerMarkers(args: {
       player.position[2],
     );
 
-    const dot = createMarkerDot("#44aaff", 15);
-    dot.position.set(px, py, pz);
-    markerGroup.add(dot);
+    const marker = createPlayerMarkerModel();
+    marker.position.set(px, py, pz);
+    marker.rotation.z = -(player.rotation[2] ?? 0);
+    marker.userData.player = player;
+    marker.userData.playerMarker = true;
+    markerGroup.add(marker);
 
-    const label = createMarkerLabel(cleanPlayerName(player.name), "#6ec1ff");
+    const label = createFormattedPlayerLabel(player.name);
     label.position.set(px, py, pz + 24);
     markerGroup.add(label);
   }

@@ -118,6 +118,9 @@ async function main() {
   const savePath = await findSavePath();
   const cubyzPath = findCubyzPath();
   const assetsPath = join(cubyzPath, "assets", "cubyz");
+  const clientDistDir = resolve(__dirname, "..", "client");
+  const clientIndexPath = join(clientDistDir, "index.html");
+  const hasBuiltClient = existsSync(clientIndexPath);
 
   logger.info("Resolved paths", { savePath, cubyzPath, assetsPath });
 
@@ -214,6 +217,28 @@ async function main() {
     res.json(colorMap.getAllBlockColors());
   });
 
+  app.get("/api/assets/entities/textures/:name", (req, res) => {
+    const textureName = req.params.name;
+    if (
+      !textureName ||
+      textureName.includes("/") ||
+      textureName.includes("\\")
+    ) {
+      res.status(400).send("Invalid texture name");
+      return;
+    }
+    res.sendFile(join(assetsPath, "entities", "textures", textureName));
+  });
+
+  app.get("/api/assets/entities/models/:name", (req, res) => {
+    const modelName = req.params.name;
+    if (!modelName || modelName.includes("/") || modelName.includes("\\")) {
+      res.status(400).send("Invalid model name");
+      return;
+    }
+    res.sendFile(join(assetsPath, "entities", "models", modelName));
+  });
+
   // Health check
   app.get("/api/health", (_req, res) => {
     res.json({
@@ -223,6 +248,34 @@ async function main() {
       cacheSize: tileCache.size,
     });
   });
+
+  if (hasBuiltClient) {
+    app.use(
+      express.static(clientDistDir, {
+        index: false,
+      }),
+    );
+
+    app.use((req, res, next) => {
+      if (req.method !== "GET") {
+        next();
+        return;
+      }
+      if (
+        req.path === "/api" ||
+        req.path.startsWith("/api/") ||
+        req.path === "/ws"
+      ) {
+        next();
+        return;
+      }
+      res.sendFile(clientIndexPath);
+    });
+  } else {
+    logger.warn("Built client bundle not found; serving API only", {
+      clientDistDir,
+    });
+  }
 
   // Create HTTP server for both Express and WebSocket
   const server = createServer(app);
@@ -322,7 +375,10 @@ async function main() {
   server.listen(PORT, HOST, () => {
     logger.info("Server listening", {
       url: `http://localhost:${PORT}`,
-      frontendUrl: "http://localhost:5173",
+      frontendUrl: hasBuiltClient
+        ? `http://localhost:${PORT}`
+        : "http://localhost:5173",
+      servingBuiltClient: hasBuiltClient,
       endpoints: [
         "GET /api/world",
         "GET /api/world/surface-index",

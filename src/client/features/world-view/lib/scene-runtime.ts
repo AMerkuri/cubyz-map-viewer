@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
-
+import type { PlayerData } from "../hooks/usePlayers.js";
 import {
   focusCameraOnWorldPosition,
   updateKeyboardCameraMotion,
@@ -41,6 +41,7 @@ export function initializeSceneRuntime(args: {
     current: { worldData?: { spawn?: [number, number, number] | null } };
   };
   onCursorMoveRef: { current: (pos: [number, number, number] | null) => void };
+  onPlayerClickRef: { current: (player: PlayerData) => void };
   terrainVisibilityDirtyRef: { current: boolean };
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
@@ -95,6 +96,7 @@ export function initializeSceneRuntime(args: {
     keysHeldRef,
     worldDataRef,
     onCursorMoveRef,
+    onPlayerClickRef,
     terrainVisibilityDirtyRef,
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,
@@ -224,6 +226,32 @@ export function initializeSceneRuntime(args: {
     terrainVisibilityDirtyRef.current = true;
     debugLabelsDirtyRef.current = true;
     biomeLabelsDirtyRef.current = true;
+  }
+
+  function handlePlayerMarkerClick(e: PointerEvent) {
+    if (!markerGroupRef.current) return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    const pointerNdc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointerNdc, camera);
+
+    const intersections = raycaster.intersectObjects(
+      markerGroupRef.current.children,
+      true,
+    );
+    const hit = intersections.find(
+      (entry) => entry.object.userData.playerMarker === true,
+    );
+    const player = hit?.object.userData.player as PlayerData | undefined;
+    if (player) {
+      onPlayerClickRef.current(player);
+    }
   }
 
   let animFrameId = 0;
@@ -363,6 +391,7 @@ export function initializeSceneRuntime(args: {
     cursorHandlers.onPointerDown,
   );
   renderer.domElement.addEventListener("pointerup", cursorHandlers.onPointerUp);
+  renderer.domElement.addEventListener("click", handlePlayerMarkerClick);
   renderer.domElement.addEventListener(
     "pointercancel",
     cursorHandlers.onPointerCancel,
@@ -392,6 +421,7 @@ export function initializeSceneRuntime(args: {
       "pointerup",
       cursorHandlers.onPointerUp,
     );
+    renderer.domElement.removeEventListener("click", handlePlayerMarkerClick);
     renderer.domElement.removeEventListener(
       "pointercancel",
       cursorHandlers.onPointerCancel,

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { parseZon, type ZonValue } from "./zon.js";
 
 /** Players whose save file was modified within this many milliseconds are considered active. */
-const ACTIVE_PLAYER_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const ACTIVE_PLAYER_TIMEOUT_MS = 60 * 1000; // 1 minute
 
 export interface PlayerData {
   name: string;

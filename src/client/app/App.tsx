@@ -331,18 +331,12 @@ export function App() {
     setChunkStats(createEmptyChunkStats(view));
   }, [layerVisibility.debug, view]);
 
-  const players = usePlayers();
   const { lastUpdateAt, subscribe } = useWebSocket();
+  const players = usePlayers(subscribe);
 
   // Wire up WebSocket events to refresh data
   useEffect(() => {
     const unsubs: (() => void)[] = [];
-
-    unsubs.push(
-      subscribe("players-updated", () => {
-        players.refresh();
-      }),
-    );
 
     unsubs.push(
       subscribe("world-updated", () => {
@@ -378,7 +372,6 @@ export function App() {
     };
   }, [
     subscribe,
-    players.refresh,
     worldData.refresh,
     worldData.refreshSurfaceIndex,
     worldData.refreshChunkIndex,
@@ -405,6 +398,7 @@ export function App() {
         debugSettings={mapDebugSettings}
         mode={view}
         onCursorMove={handleCursorMove}
+        onPlayerClick={handlePlayerClick}
         onChunkStatsChange={handleChunkStatsChange}
         onVoxelLoadingChange={setVoxelLoading}
         onShareStateChange={handleShareStateChange}

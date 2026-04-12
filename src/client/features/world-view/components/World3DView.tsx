@@ -1,12 +1,13 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type {
   CSS2DObject,
   CSS2DRenderer,
 } from "three/addons/renderers/CSS2DRenderer.js";
+import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import type {
   ChunkIndexEntry,
   SurfaceIndexEntry,
@@ -25,8 +26,11 @@ import { checkAndUpdateLod as checkAndUpdateLodManaged } from "../lib/lod-contro
 import { createVoxelLodDistanceThresholds } from "../lib/lod-utils.js";
 import { rebuildPlayerMarkers, rebuildSpawnMarker } from "../lib/markers.js";
 import {
+  createFormattedPlayerLabel,
   createMarkerDot,
   createMarkerLabel,
+  createPlayerMarkerModel,
+  disposePlayerMarkerModel,
   disposeTextSprite,
 } from "../lib/primitives.js";
 import { publishChunkStats } from "../lib/stats.js";
@@ -119,6 +123,7 @@ export function World3DView({
   debugEnabled,
   debugSettings,
   onCursorMove,
+  onPlayerClick,
   onChunkStatsChange,
   onVoxelLoadingChange,
   initialCameraState,
@@ -202,6 +207,8 @@ export function World3DView({
 
   const onCursorMoveRef = useRef(onCursorMove);
   onCursorMoveRef.current = onCursorMove;
+  const onPlayerClickRef = useRef(onPlayerClick);
+  onPlayerClickRef.current = onPlayerClick;
   const onChunkStatsChangeRef = useRef(onChunkStatsChange);
   onChunkStatsChangeRef.current = onChunkStatsChange;
   const onVoxelLoadingChangeRef = useRef(onVoxelLoadingChange);
@@ -239,6 +246,8 @@ export function World3DView({
   const biomeLabelsDirtyRef = useRef(false);
   const biomeRefreshTokenRef = useRef(0);
   const lastChunkStatsRef = useRef("");
+  const playerMarkerModelTemplateRef = useRef<THREE.Object3D | null>(null);
+  const playerMarkerTextureRef = useRef<THREE.Texture | null>(null);
   const activeFocusLodRef = useRef<number>(1);
   const voxelFocusStateRef = useRef<VoxelFocusState>({
     point: new THREE.Vector3(),
@@ -246,6 +255,43 @@ export function World3DView({
     lastHitAt: 0,
     initialized: false,
   });
+
+  useEffect(() => {
+    const textureLoader = new THREE.TextureLoader();
+    const objLoader = new OBJLoader();
+    let disposed = false;
+
+    textureLoader.load("/api/assets/entities/textures/snale.png", (texture) => {
+      if (disposed) {
+        texture.dispose();
+        return;
+      }
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      playerMarkerTextureRef.current = texture;
+      if (playerMarkerModelTemplateRef.current) {
+        onUpdatePlayerMarkers();
+      }
+    });
+
+    objLoader.load("/api/assets/entities/models/snale.obj", (model) => {
+      if (disposed) {
+        return;
+      }
+      playerMarkerModelTemplateRef.current = model;
+      if (playerMarkerTextureRef.current) {
+        onUpdatePlayerMarkers();
+      }
+    });
+
+    return () => {
+      disposed = true;
+      playerMarkerModelTemplateRef.current = null;
+      playerMarkerTextureRef.current?.dispose();
+      playerMarkerTextureRef.current = null;
+    };
+  }, []);
 
   function rebuildVoxelIndexCache(entries: ChunkIndexEntry[]) {
     const { availableKeys, roots } = rebuildVoxelIndex(entries);
@@ -637,14 +683,21 @@ export function World3DView({
   }
 
   function updatePlayerMarkers() {
+    const playerMarkerModelTemplate = playerMarkerModelTemplateRef.current;
+    const playerMarkerTexture = playerMarkerTextureRef.current;
+    if (!playerMarkerModelTemplate || !playerMarkerTexture) return;
     rebuildPlayerMarkers({
       players: playersRef.current,
       markerGroup: markerGroupRef.current,
-      createMarkerDot,
-      createMarkerLabel,
+      createPlayerMarkerModel: () =>
+        createPlayerMarkerModel(playerMarkerModelTemplate, playerMarkerTexture),
+      createFormattedPlayerLabel,
+      disposePlayerMarkerModel,
       disposeTextSprite,
     });
   }
+
+  const onUpdatePlayerMarkers = useEffectEvent(updatePlayerMarkers);
 
   function updateMarkerScales(_: THREE.PerspectiveCamera, __: OrbitControls) {
     // Marker labels are CSS2D-based and intentionally keep constant screen size,
@@ -842,6 +895,7 @@ export function World3DView({
     keysHeldRef,
     worldDataRef,
     onCursorMoveRef,
+    onPlayerClickRef,
     terrainVisibilityDirtyRef,
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,

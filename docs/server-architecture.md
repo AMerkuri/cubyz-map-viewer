@@ -38,8 +38,9 @@ src/server/
 6. initialize the color map service
 7. start the voxel mesh service and worker pool
 8. create caches and routers
-9. start the HTTP server and WebSocket server
-10. start the save watcher
+9. optionally serve the built client bundle from `dist/client` when present
+10. start the HTTP server and WebSocket server
+11. start the save watcher
 
 This file owns process lifecycle, route registration, WebSocket broadcasting, and shutdown behavior.
 
@@ -105,6 +106,12 @@ Server-side worker entrypoints and protocol definitions used for voxel mesh gene
 1. The client requests `/api/world`, `/api/world/surface-index`, or `/api/world/chunk-index`.
 2. The route reads the relevant save metadata or directory structure.
 3. The server returns compact JSON used to bootstrap the client scene.
+
+### Player metadata and textures
+
+1. The client requests `/api/players` for current player positions, rotation, and health.
+2. The client requests `/api/assets/entities/models/:name` and `/api/assets/entities/textures/:name` for entity assets used by in-scene markers.
+3. The viewer combines the player payload with those model and texture assets client-side to render clickable player representations.
 
 ### Terrain tile rendering
 
@@ -172,6 +179,16 @@ This allows the client to refresh only the affected world data.
 - deduplicated across concurrent requests using an in-flight map
 - protected against stale writes with global and per-key epochs
 - exposed with ETags so clients can revalidate cheaply
+- can also persist generated mesh payloads on disk via `VOXEL_CACHE_DIR` for faster warm restarts and container reuse
+
+### Logs and runtime paths
+
+- `SAVE_PATH` points to the Cubyz save directory
+- `CUBYZ_PATH` points to the Cubyz project or asset root
+- `LOG_DIR` controls where Winston file logs are written
+- `VOXEL_CACHE_DIR` controls the persistent voxel mesh disk cache location
+
+In containerized deployments, save data and Cubyz assets are intended to be mounted read-only, while logs and voxel cache are intended to be mounted read-write.
 
 ## WebSocket Role
 

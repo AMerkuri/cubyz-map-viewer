@@ -152,6 +152,7 @@ export interface World3DViewProps {
   debugEnabled: boolean;
   debugSettings: MapDebugSettings;
   onCursorMove: (pos: [number, number, number] | null) => void;
+  onPlayerClick: (player: PlayerData) => void;
   onChunkStatsChange: (stats: import("../debug.js").ChunkStats) => void;
   onVoxelLoadingChange: (loading: boolean) => void;
   initialCameraState: InitialCameraState | null;

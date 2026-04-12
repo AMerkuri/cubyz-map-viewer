@@ -158,8 +158,8 @@ The client uses React for composition and state, but the 3D scene is managed imp
    - `surface-index-changed`
    - `terrain-updates-batch`
 3. `App` subscribes to those events.
-4. Query-backed data is invalidated and refetched.
-5. `World3DView` also listens for terrain and voxel region update events and refreshes loaded scene data in place, while player-list changes rebuild the player marker layer without recreating the full scene.
+4. Query-backed data is invalidated and refetched. Player data also falls back to a 30-second background refresh if no `players-updated` socket event arrives.
+5. `World3DView` also listens for terrain and voxel region update events and refreshes loaded scene data in place, while player-list changes rebuild an OBJ-model-backed player marker layer and colorized player labels without recreating the full scene.
 
 This keeps the UI responsive without a full scene rebuild.
 

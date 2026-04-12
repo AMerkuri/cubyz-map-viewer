@@ -56,6 +56,46 @@ export function cleanPlayerName(name: string): string {
   return name.replace(/[*]{1,3}|#[0-9A-Fa-f]{6}/g, "").trim() || "Player";
 }
 
+export interface FormattedPlayerNameSegment {
+  text: string;
+  color: string | null;
+}
+
+export function parseFormattedPlayerName(
+  name: string,
+): FormattedPlayerNameSegment[] {
+  const segments: FormattedPlayerNameSegment[] = [];
+  const source = name.replace(/[*]{1,3}/g, "");
+  let activeColor: string | null = null;
+  let buffer = "";
+
+  function flush() {
+    if (!buffer) return;
+    segments.push({ text: buffer, color: activeColor });
+    buffer = "";
+  }
+
+  for (let i = 0; i < source.length; ) {
+    if (source[i] === "#") {
+      const candidate = source.slice(i + 1, i + 7);
+      if (/^[0-9A-Fa-f]{6}$/.test(candidate)) {
+        flush();
+        activeColor = `#${candidate}`;
+        i += 7;
+        continue;
+      }
+    }
+    buffer += source[i] ?? "";
+    i += 1;
+  }
+
+  flush();
+
+  return segments.length > 0
+    ? segments
+    : [{ text: cleanPlayerName(name), color: null }];
+}
+
 export function parseVoxelKey(
   key: string,
 ): { lod: number; regionX: number; regionY: number } | null {

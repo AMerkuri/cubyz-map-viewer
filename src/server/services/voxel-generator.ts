@@ -31,11 +31,8 @@ const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 const VOXEL_GENERATOR_CACHE_VERSION = 11;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
-  process.cwd(),
-  "dist",
-  "server",
-  "cache",
-  "voxels",
+  process.env.VOXEL_CACHE_DIR ??
+    join(process.cwd(), "dist", "server", "cache", "voxels"),
 );
 
 type Direction = "x-" | "x+" | "y-" | "y+" | "z+" | "z-";
