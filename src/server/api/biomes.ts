@@ -4,14 +4,13 @@
  * Each region includes the biome name, centroid position, and cell count.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type Request, type Response, Router } from "express";
 import type { Palette } from "../parsers/palette.js";
 import { MAP_SIZE, parseSurfaceFile } from "../parsers/surface.js";
-import { logger } from "../services/logger.js";
-
-const VALID_LODS = [1, 2, 4, 8, 16, 32];
+import { NotFoundError } from "./errors.js";
+import { statIfExists } from "./http.js";
+import { parseTileParams } from "./validation.js";
 
 interface BiomeRegion {
   biomeId: string;
@@ -31,48 +30,34 @@ export function createBiomesRouter(
   const router = Router();
 
   router.get("/:lod/:x/:y", async (req: Request, res: Response) => {
-    try {
-      const lod = parseInt(req.params.lod as string, 10);
-      const x = parseInt(req.params.x as string, 10);
-      const y = parseInt(req.params.y as string, 10);
+    const { lod, x, y } = parseTileParams(req.params);
 
-      if (!VALID_LODS.includes(lod) || Number.isNaN(x) || Number.isNaN(y)) {
-        res.status(400).json({ error: "Invalid parameters" });
-        return;
-      }
+    const worldX = x * MAP_SIZE * lod;
+    const worldY = y * MAP_SIZE * lod;
+    const surfacePath = join(
+      savePath,
+      "maps",
+      String(lod),
+      String(worldX),
+      `${worldY}.surface`,
+    );
 
-      const worldX = x * MAP_SIZE * lod;
-      const worldY = y * MAP_SIZE * lod;
-      const surfacePath = join(
-        savePath,
-        "maps",
-        String(lod),
-        String(worldX),
-        `${worldY}.surface`,
-      );
-
-      if (!existsSync(surfacePath)) {
-        res.status(404).json({ error: "Surface data not found" });
-        return;
-      }
-
-      const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
-      const regions = extractBiomeRegions(
-        surface.biomes,
-        worldX,
-        worldY,
-        lod,
-        biomePalette,
-      );
-
-      res.set("Cache-Control", "public, max-age=60");
-      res.json({ tileX: x, tileY: y, lod, regions });
-    } catch (e) {
-      logger.error("Biome data error", {
-        error: e instanceof Error ? e.message : String(e),
-      });
-      res.status(500).json({ error: "Failed to extract biome data" });
+    const surfaceStat = await statIfExists(surfacePath);
+    if (!surfaceStat) {
+      throw new NotFoundError("Surface data not found");
     }
+
+    const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
+    const regions = extractBiomeRegions(
+      surface.biomes,
+      worldX,
+      worldY,
+      lod,
+      biomePalette,
+    );
+
+    res.set("Cache-Control", "public, max-age=60");
+    res.json({ tileX: x, tileY: y, lod, regions });
   });
 
   return router;

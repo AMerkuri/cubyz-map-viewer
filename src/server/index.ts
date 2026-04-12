@@ -14,9 +14,12 @@ import compression from "compression";
 import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
 import { createBiomesRouter } from "./api/biomes.js";
+import { errorHandler } from "./api/error-handler.js";
 import { createPlayersRouter } from "./api/players.js";
+import { requestContextMiddleware } from "./api/request-context.js";
 import { createTerrainRouter } from "./api/terrain.js";
 import { createTilesRouter } from "./api/tiles.js";
+import { parseSafeAssetName } from "./api/validation.js";
 import { createVoxelsRouter } from "./api/voxels.js";
 import { createWorldRouter } from "./api/world.js";
 import { loadAllBiomes } from "./parsers/biome.js";
@@ -47,6 +50,13 @@ interface TerrainUpdatesBatchData {
   tiles: { lod: number; tileX: number; tileY: number }[];
   regions: { lod: number; regionX: number; regionY: number }[];
 }
+
+const allowedOrigins = new Set(
+  (process.env.CORS_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
 
 async function findSavePath(): Promise<string> {
   // Check env var first
@@ -182,11 +192,27 @@ async function main() {
   // Compress all responses (gzip/deflate)
   app.use(compression());
 
-  // CORS for dev
-  app.use((_req, res, next) => {
-    res.set("Access-Control-Allow-Origin", "*");
-    res.set("Access-Control-Allow-Methods", "GET");
-    res.set("Access-Control-Allow-Headers", "Content-Type");
+  app.use(requestContextMiddleware);
+
+  // CORS for explicit cross-origin use only
+  app.use((req, res, next) => {
+    const origin = req.get("origin");
+    if (origin && allowedOrigins.has(origin)) {
+      res.set("Access-Control-Allow-Origin", origin);
+      res.set("Vary", "Origin");
+      res.set("Access-Control-Allow-Methods", "GET,OPTIONS");
+      res.set("Access-Control-Allow-Headers", "Content-Type,X-Request-Id");
+      res.set(
+        "Access-Control-Expose-Headers",
+        "X-Request-Id,X-Voxel-Source,X-Voxel-Queue-Ms,X-Voxel-Run-Ms,X-Voxel-Total-Ms,X-Voxel-Queue-Depth,X-Voxel-Running,X-Voxel-In-Flight",
+      );
+    }
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set("Cross-Origin-Resource-Policy", "same-origin");
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
     next();
   });
 
@@ -194,6 +220,7 @@ async function main() {
     const startedAt = performance.now();
     res.on("finish", () => {
       logger.http("request completed", {
+        requestId: req.requestId,
         method: req.method,
         path: req.originalUrl,
         statusCode: res.statusCode,
@@ -218,24 +245,12 @@ async function main() {
   });
 
   app.get("/api/assets/entities/textures/:name", (req, res) => {
-    const textureName = req.params.name;
-    if (
-      !textureName ||
-      textureName.includes("/") ||
-      textureName.includes("\\")
-    ) {
-      res.status(400).send("Invalid texture name");
-      return;
-    }
+    const textureName = parseSafeAssetName(req.params.name, "texture name");
     res.sendFile(join(assetsPath, "entities", "textures", textureName));
   });
 
   app.get("/api/assets/entities/models/:name", (req, res) => {
-    const modelName = req.params.name;
-    if (!modelName || modelName.includes("/") || modelName.includes("\\")) {
-      res.status(400).send("Invalid model name");
-      return;
-    }
+    const modelName = parseSafeAssetName(req.params.name, "model name");
     res.sendFile(join(assetsPath, "entities", "models", modelName));
   });
 
@@ -276,6 +291,8 @@ async function main() {
       clientDistDir,
     });
   }
+
+  app.use(errorHandler);
 
   // Create HTTP server for both Express and WebSocket
   const server = createServer(app);
@@ -361,14 +378,30 @@ async function main() {
   watcher.start();
 
   // Graceful shutdown
-  process.on("SIGINT", () => {
-    logger.info("Shutting down");
+  let shuttingDown = false;
+  const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info("Shutting down", { signal });
     watcher.stop();
-    wss.close();
-    server.close();
-    void voxelMeshService.destroy().finally(() => {
-      process.exit(0);
+    await new Promise<void>((resolveClose) => {
+      wss.close(() => resolveClose());
+      for (const client of wsClients) {
+        client.close();
+      }
     });
+    await new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
+    });
+    await voxelMeshService.destroy();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+  process.on("SIGTERM", () => {
+    void shutdown("SIGTERM");
   });
 
   // Start server

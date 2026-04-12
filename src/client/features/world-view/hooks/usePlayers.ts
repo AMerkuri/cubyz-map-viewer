@@ -9,7 +9,6 @@ export interface PlayerData {
   name: string;
   position: [number, number, number];
   rotation: [number, number, number];
-  gamemode: string;
   health: number;
   energy: number;
   spawnPos: [number, number, number];

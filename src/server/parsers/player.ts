@@ -13,7 +13,6 @@ export interface PlayerData {
   name: string;
   position: [number, number, number];
   rotation: [number, number, number];
-  gamemode: string;
   health: number;
   energy: number;
   spawnPos: [number, number, number];
@@ -42,7 +41,6 @@ export async function parsePlayerFile(filePath: string): Promise<PlayerData> {
     name: String(parsed.name ?? "Unknown"),
     position: [pos[0] ?? 0, pos[1] ?? 0, pos[2] ?? 0],
     rotation: [rot[0] ?? 0, rot[1] ?? 0, rot[2] ?? 0],
-    gamemode: String(parsed.gamemode ?? "creative"),
     health: Number(entity.health ?? 0),
     energy: Number(entity.energy ?? 0),
     spawnPos: [spawnPos[0] ?? 0, spawnPos[1] ?? 0, spawnPos[2] ?? 0],

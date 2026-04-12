@@ -10,6 +10,6 @@
     "rootDir": "src/server",
     "declaration": true
   },
-  "include": ["src/server/**/*.ts"],
+  "include": ["src/server/**/*.ts", "src/server/**/*.d.ts"],
   "exclude": ["node_modules"]
 }

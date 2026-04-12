@@ -58,7 +58,7 @@ src/client/
 Feature-facing React components:
 
 - `World3DView.tsx`: the main 3D scene root
-- `InfoPanel.tsx`: world metadata and player list
+- `InfoPanel.tsx`: world summary and player list
 - `LayerControls.tsx`: visibility toggles and voxel-mode preset entry area
 - `ViewToggle.tsx`: terrain/voxel mode switch
 - `MapDebugParameters.tsx`: runtime debug tuning controls and direct voxel rendering sliders

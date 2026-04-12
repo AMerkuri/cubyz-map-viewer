@@ -58,14 +58,20 @@ export function InfoPanel({
         <>
           <InfoRow label="World name" value={world.name} />
           <InfoRow label="Seed" value={String(world.seed)} />
-          <InfoRow label="Mode" value={world.defaultGamemode} />
-          <InfoRow label="Time" value={formatGameTime(world.gameTime)} />
+          {zoomLevel !== null && (
+            <InfoRow label="Zoom" value={String(Math.round(zoomLevel))} />
+          )}
+          <InfoRow
+            label="Last update"
+            value={lastUpdateAt !== null ? formatTime(lastUpdateAt) : "-"}
+          />
           <button
             type="button"
             onClick={onSpawnClick}
             onMouseEnter={() => setHoveredSpawn(true)}
             onMouseLeave={() => setHoveredSpawn(false)}
             style={{
+              fontSize: "12px",
               border: "none",
               borderRadius: 4,
               padding: "1px 4px",
@@ -85,13 +91,6 @@ export function InfoPanel({
               value={`${world.spawn[0]}, ${world.spawn[1]}, ${world.spawn[2]}`}
             />
           </button>
-          {zoomLevel !== null && (
-            <InfoRow label="Zoom" value={String(Math.round(zoomLevel))} />
-          )}
-          <InfoRow
-            label="Last update"
-            value={lastUpdateAt !== null ? formatTime(lastUpdateAt) : "-"}
-          />
 
           {players.length > 0 && (
             <div
@@ -158,14 +157,6 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       </span>
     </div>
   );
-}
-
-function formatGameTime(ticks: number): string {
-  // Game time is in 100ms ticks, 24000 ticks = 1 day
-  const dayTicks = ticks % 24000;
-  const hours = Math.floor(dayTicks / 1000 + 6) % 24;
-  const minutes = Math.floor(((dayTicks % 1000) / 1000) * 60);
-  return `Day ${Math.floor(ticks / 24000)}, ${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
 }
 
 /** Strip Cubyz color formatting codes from player names */

@@ -11,12 +11,13 @@ import { logger } from "../services/logger.js";
 export function createPlayersRouter(savePath: string): Router {
   const router = Router();
 
-  router.get("/", async (_req: Request, res: Response) => {
+  router.get("/", async (req: Request, res: Response) => {
     try {
       const players = await loadAllPlayers(join(savePath, "players"));
       res.json(players);
     } catch (e) {
       logger.error("Players error", {
+        requestId: req.requestId,
         error: e instanceof Error ? e.message : String(e),
       });
       res.json([]);

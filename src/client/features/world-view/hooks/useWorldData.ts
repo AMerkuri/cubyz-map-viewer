@@ -6,10 +6,6 @@ export interface WorldData {
   version: number;
   seed: number;
   spawn: [number, number, number];
-  gameTime: number;
-  doGameTimeCycle: boolean;
-  tickSpeed: number;
-  defaultGamemode: string;
   allowCheats: boolean;
   lastUsedTime: number;
 }

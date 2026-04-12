@@ -3,19 +3,17 @@
  * GET /api/tiles/:lod/:x/:y.png - Returns a 256x256 PNG tile.
  */
 
-import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type Request, type Response, Router } from "express";
 import { MAP_SIZE, parseSurfaceFile } from "../parsers/surface.js";
 import type { LRUCache } from "../services/cache.js";
 import type { ColorMapService } from "../services/color-map.js";
-import { logger } from "../services/logger.js";
 import {
   renderEmptyTile,
   renderSurfaceTile,
 } from "../services/tile-renderer.js";
-
-const VALID_LODS = [1, 2, 4, 8, 16, 32];
+import { statIfExists } from "./http.js";
+import { parseTileParams } from "./validation.js";
 
 interface CachedTile {
   buf: Buffer;
@@ -39,65 +37,50 @@ export function createTilesRouter(
   }
 
   router.get("/:lod/:x/:y.png", async (req: Request, res: Response) => {
-    try {
-      const lod = parseInt(req.params.lod as string, 10);
-      const x = parseInt(req.params.x as string, 10);
-      const y = parseInt(req.params.y as string, 10);
+    const { lod, x, y } = parseTileParams(req.params);
 
-      if (!VALID_LODS.includes(lod) || Number.isNaN(x) || Number.isNaN(y)) {
-        res.status(400).send("Invalid tile parameters");
-        return;
-      }
+    // Map tile x,y to surface file coordinates
+    const worldX = x * MAP_SIZE * lod;
+    const worldY = y * MAP_SIZE * lod;
+    const surfacePath = join(
+      savePath,
+      "maps",
+      String(lod),
+      String(worldX),
+      `${worldY}.surface`,
+    );
 
-      // Map tile x,y to surface file coordinates
-      const worldX = x * MAP_SIZE * lod;
-      const worldY = y * MAP_SIZE * lod;
-      const surfacePath = join(
-        savePath,
-        "maps",
-        String(lod),
-        String(worldX),
-        `${worldY}.surface`,
-      );
-
-      if (!existsSync(surfacePath)) {
-        // Return empty tile for unexplored areas (don't cache these —
-        // the area might be explored soon)
-        const empty = await getEmptyTile();
-        res.set("Content-Type", "image/png");
-        res.set("Cache-Control", "no-cache");
-        res.send(empty);
-        return;
-      }
-
-      // Check file modification time for cache invalidation
-      const fileMtime = statSync(surfacePath).mtimeMs;
-      const cacheKey = `${lod}/${x}/${y}`;
-      const cached = tileCache.get(cacheKey);
-
-      if (cached && cached.mtime === fileMtime) {
-        res.set("Content-Type", "image/png");
-        res.set("Cache-Control", "public, max-age=10");
-        res.send(cached.buf);
-        return;
-      }
-
-      const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
-      const tileBuf = await renderSurfaceTile(surface, colorMap);
-
-      tileCache.set(cacheKey, { buf: tileBuf, mtime: fileMtime });
-
-      res.set("Content-Type", "image/png");
-      res.set("Cache-Control", "public, max-age=10");
-      res.send(tileBuf);
-    } catch (e) {
-      logger.error("Tile render error", {
-        error: e instanceof Error ? e.message : String(e),
-      });
+    const surfaceStat = await statIfExists(surfacePath);
+    if (!surfaceStat) {
+      // Return empty tile for unexplored areas (don't cache these —
+      // the area might be explored soon)
       const empty = await getEmptyTile();
       res.set("Content-Type", "image/png");
+      res.set("Cache-Control", "no-cache");
       res.send(empty);
+      return;
     }
+
+    // Check file modification time for cache invalidation
+    const fileMtime = surfaceStat.mtimeMs;
+    const cacheKey = `${lod}/${x}/${y}`;
+    const cached = tileCache.get(cacheKey);
+
+    if (cached && cached.mtime === fileMtime) {
+      res.set("Content-Type", "image/png");
+      res.set("Cache-Control", "public, max-age=10");
+      res.send(cached.buf);
+      return;
+    }
+
+    const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
+    const tileBuf = await renderSurfaceTile(surface, colorMap);
+
+    tileCache.set(cacheKey, { buf: tileBuf, mtime: fileMtime });
+
+    res.set("Content-Type", "image/png");
+    res.set("Cache-Control", "public, max-age=10");
+    res.send(tileBuf);
   });
 
   return router;

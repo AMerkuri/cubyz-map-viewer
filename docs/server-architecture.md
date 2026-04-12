@@ -42,7 +42,7 @@ src/server/
 10. start the HTTP server and WebSocket server
 11. start the save watcher
 
-This file owns process lifecycle, route registration, WebSocket broadcasting, and shutdown behavior.
+This file owns process lifecycle, route registration, WebSocket broadcasting, request context, CORS, and shutdown behavior.
 
 ## Layer Responsibilities
 
@@ -55,6 +55,8 @@ HTTP route modules. They are responsible for:
 - shaping HTTP responses
 - setting cache headers and status codes
 - logging request-level failures
+
+Route modules share small helpers for request validation, HTTP errors, request IDs, and cache/etag behavior.
 
 Examples:
 
@@ -105,13 +107,36 @@ Server-side worker entrypoints and protocol definitions used for voxel mesh gene
 
 1. The client requests `/api/world`, `/api/world/surface-index`, or `/api/world/chunk-index`.
 2. The route reads the relevant save metadata or directory structure.
-3. The server returns compact JSON used to bootstrap the client scene.
+3. The server returns compact JSON used to bootstrap the client scene and populate the world summary in the info panel.
 
 ### Player metadata and textures
 
 1. The client requests `/api/players` for current player positions, rotation, and health.
 2. The client requests `/api/assets/entities/models/:name` and `/api/assets/entities/textures/:name` for entity assets used by in-scene markers.
 3. The viewer combines the player payload with those model and texture assets client-side to render clickable player representations.
+
+## Request Context And Errors
+
+- every request gets a request ID, echoed back as `X-Request-Id`
+- validation helpers in `api/validation.ts` throw typed `400` errors at the boundary
+- `api/error-handler.ts` is the final Express error middleware and produces structured JSON errors
+- `api/http.ts` centralizes `ETag` matching and async file-stat helpers
+
+## CORS And Security
+
+- the server does not send wildcard CORS by default
+- cross-origin access must be enabled via `CORS_ALLOWED_ORIGINS`
+- basic hardening headers include `X-Content-Type-Options: nosniff` and `Cross-Origin-Resource-Policy: same-origin`
+
+## Shutdown
+
+- `SIGINT` and `SIGTERM` both trigger graceful shutdown
+- shutdown stops the watcher, closes WebSocket clients, closes the HTTP server, and destroys the voxel mesh service
+
+## Surface Parsing
+
+- `.surface` parsing now uses async decompression on the request path
+- voxel `.region` parsing remains in worker threads
 
 ### Terrain tile rendering
 
@@ -187,6 +212,7 @@ This allows the client to refresh only the affected world data.
 - `CUBYZ_PATH` points to the Cubyz project or asset root
 - `LOG_DIR` controls where Winston file logs are written
 - `VOXEL_CACHE_DIR` controls the persistent voxel mesh disk cache location
+- `CORS_ALLOWED_ORIGINS` lists explicit browser origins allowed to call the server
 
 In containerized deployments, save data and Cubyz assets are intended to be mounted read-only, while logs and voxel cache are intended to be mounted read-write.
 

@@ -5,8 +5,11 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { inflateRawSync } from "node:zlib";
+import { promisify } from "node:util";
+import { inflateRaw } from "node:zlib";
 import { BinaryReader } from "./binary-reader.js";
+
+const inflateRawAsync = promisify(inflateRaw);
 
 export const MAP_SIZE = 256;
 
@@ -35,12 +38,12 @@ export async function parseSurfaceFile(
   return parseSurfaceBuffer(raw, worldX, worldY, voxelSize);
 }
 
-export function parseSurfaceBuffer(
+export async function parseSurfaceBuffer(
   raw: Buffer,
   worldX: number,
   worldY: number,
   voxelSize: number,
-): SurfaceData {
+): Promise<SurfaceData> {
   const reader = new BinaryReader(raw);
 
   const version = reader.readU8();
@@ -52,7 +55,7 @@ export function parseSurfaceBuffer(
 
   // Decompress the payload
   const compressedData = reader.readRemainingBytes();
-  const decompressed = inflateRawSync(compressedData);
+  const decompressed = await inflateRawAsync(compressedData);
 
   const pixelCount = MAP_SIZE * MAP_SIZE;
   const expectedSize = pixelCount * 12; // 3 arrays * 4 bytes each
