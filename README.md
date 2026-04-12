@@ -49,7 +49,11 @@ Default local URLs:
 
 ## Configuration
 
-The server auto-detects a save under `~/.cubyz/saves/` by default.
+The root `.env.example` file mirrors the full server config list below.
+
+The server does not auto-load `.env` files, so export variables in your shell or set them in your process manager.
+
+The server auto-detects a save under `~/.cubyz/saves/` and a Cubyz checkout from the repo layout when `SAVE_PATH` and `CUBYZ_PATH` are unset.
 
 Override paths with environment variables:
 
@@ -93,6 +97,7 @@ docker run --rm -p 3001:3001 \
   -e CUBYZ_PATH=/data/cubyz \
   -e VOXEL_CACHE_DIR=/data/cache/voxels \
   -e LOG_DIR=/data/logs \
+  -e LOG_LEVEL=info \
   -v /path/to/your/save:/data/save:ro \
   -v /path/to/Cubyz:/data/cubyz:ro \
   -v cubyz-map-viewer-cache:/data/cache \
@@ -135,14 +140,19 @@ Recommended volume mapping:
 
 Supported runtime env vars include:
 
-- `SAVE_PATH`
-- `CUBYZ_PATH`
-- `VOXEL_CACHE_DIR`
-- `LOG_DIR`
-- `CACHE_SIZE`
-- `VOXEL_WORKERS`
-- `TERRAIN_UPDATE_BATCH_MS`
-- `VOXEL_FULL_CLEAR_THROTTLE_MS`
+- `PORT`: HTTP bind port (`3001`)
+- `HOST`: HTTP bind address (`0.0.0.0`)
+- `CACHE_SIZE`: in-memory terrain tile cache size (`500`)
+- `VOXEL_FULL_CLEAR_THROTTLE_MS`: minimum gap in ms between full voxel cache clears after broad terrain updates (`1000`)
+- `TERRAIN_UPDATE_BATCH_MS`: save watcher batch window in ms for terrain updates (`15000`)
+- `CORS_ALLOWED_ORIGINS`: comma-separated allowlist of browser origins allowed to call the server
+- `SAVE_PATH`: Cubyz save directory; auto-detects `~/.cubyz/saves/` when unset
+- `CUBYZ_PATH`: Cubyz project root or asset source; auto-detects the repository parent containing `assets/cubyz` when unset
+- `VOXEL_WORKERS`: voxel worker pool size; defaults to up to `min(4, availableParallelism() - 1)` workers
+- `VOXEL_CACHE_DIR`: persistent voxel mesh cache directory (`dist/server/cache/voxels`)
+- `LOG_DIR`: Winston file log directory (`logs`)
+- `LOG_REQUESTS`: enables `server-requests.log` when set to `true` (default `false`)
+- `LOG_LEVEL`: Winston log level for console and general file logging (`info` by default)
 
 ## Verification
 

@@ -2,6 +2,7 @@ import type { ColorMapService } from "./color-map.js";
 
 export interface BlockColorTable {
   rgb: Uint8Array;
+  airLike: Uint8Array;
 }
 
 export function buildBlockColorTable(
@@ -9,12 +10,14 @@ export function buildBlockColorTable(
   size: number = 65536,
 ): BlockColorTable {
   const rgb = new Uint8Array(size * 3);
+  const airLike = new Uint8Array(size);
   for (let i = 0; i < size; i++) {
     const color = colorMap.getBlockColor(i);
     const off = i * 3;
     rgb[off] = color.r;
     rgb[off + 1] = color.g;
     rgb[off + 2] = color.b;
+    airLike[i] = colorMap.isBlockPaletteIndexAirLike(i) ? 1 : 0;
   }
-  return { rgb };
+  return { rgb, airLike };
 }

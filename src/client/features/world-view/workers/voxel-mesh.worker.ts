@@ -1,4 +1,10 @@
+import {
+  DAYLIGHT_MAIN_SUN_POSITION,
+  VOXEL_FACE_SHADING,
+} from "../lib/daylight.js";
 import type { WorkerIn, WorkerOut } from "../lib/types.js";
+
+const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 
 /**
  * Off-thread voxel mesh builder.
@@ -147,19 +153,13 @@ function buildMeshArrays(buf: ArrayBuffer): {
   if (!Number.isFinite(minZ)) minZ = 0;
   if (!Number.isFinite(maxZ)) maxZ = 0;
 
-  // --- Colors (per-quad → per-vertex, normalized 0–1) ---
-  const colors = new Float32Array(vertexCount * 3);
+  // --- Base colors (per quad, normalized 0–1) ---
+  const quadColors = new Float32Array(quadCount * 3);
   let colorOff = 20;
   for (let qi = 0; qi < quadCount; qi++) {
-    const r = view.getUint8(colorOff++) / 255;
-    const g = view.getUint8(colorOff++) / 255;
-    const b = view.getUint8(colorOff++) / 255;
-    const base = qi * 4;
-    for (let v = 0; v < 4; v++) {
-      colors[(base + v) * 3] = r;
-      colors[(base + v) * 3 + 1] = g;
-      colors[(base + v) * 3 + 2] = b;
-    }
+    quadColors[qi * 3] = view.getUint8(colorOff++) / 255;
+    quadColors[qi * 3 + 1] = view.getUint8(colorOff++) / 255;
+    quadColors[qi * 3 + 2] = view.getUint8(colorOff++) / 255;
   }
 
   // --- Indices (with b↔c swap to fix winding after Y-negation) ---
@@ -232,6 +232,26 @@ function buildMeshArrays(buf: ArrayBuffer): {
       normals[vi * 3] = nnx;
       normals[vi * 3 + 1] = nny;
       normals[vi * 3 + 2] = nnz;
+    }
+  }
+
+  // --- Colors (per-quad → per-vertex, with a small sun-aware face tint) ---
+  // Daytime lighting alone can still leave voxel side faces too close to top-face
+  // brightness, so preserve stronger blocky contrast with a modest baked tint.
+  const colors = new Float32Array(vertexCount * 3);
+  for (let qi = 0; qi < quadCount; qi++) {
+    const base = qi * 4;
+    const nx = normals[base * 3];
+    const ny = normals[base * 3 + 1];
+    const nz = normals[base * 3 + 2];
+    const tint = getVoxelFaceTint(nx, ny, nz);
+    const r = clamp01(quadColors[qi * 3] * tint.r);
+    const g = clamp01(quadColors[qi * 3 + 1] * tint.g);
+    const b = clamp01(quadColors[qi * 3 + 2] * tint.b);
+    for (let v = 0; v < 4; v++) {
+      colors[(base + v) * 3] = r;
+      colors[(base + v) * 3 + 1] = g;
+      colors[(base + v) * 3 + 2] = b;
     }
   }
 
@@ -367,4 +387,55 @@ function buildMeshArrays(buf: ArrayBuffer): {
     minZ,
     maxZ,
   };
+}
+
+function getVoxelFaceTint(
+  nx: number,
+  ny: number,
+  nz: number,
+): { r: number; g: number; b: number } {
+  const sunDot = Math.max(
+    0,
+    nx * MAIN_SUN_DIRECTION.x +
+      ny * MAIN_SUN_DIRECTION.y +
+      nz * MAIN_SUN_DIRECTION.z,
+  );
+  const upDot = Math.max(0, nz);
+  const shade = Math.min(
+    VOXEL_FACE_SHADING.maxShade,
+    VOXEL_FACE_SHADING.base +
+      sunDot * VOXEL_FACE_SHADING.sunStrength +
+      upDot * VOXEL_FACE_SHADING.upStrength,
+  );
+
+  if (nz >= 0.5) {
+    return {
+      r: shade * VOXEL_FACE_SHADING.topWarmTint.r,
+      g: shade * VOXEL_FACE_SHADING.topWarmTint.g,
+      b: shade * VOXEL_FACE_SHADING.topWarmTint.b,
+    };
+  }
+
+  return { r: shade, g: shade, b: shade };
+}
+
+function normalizeDirection(vector: { x: number; y: number; z: number }): {
+  x: number;
+  y: number;
+  z: number;
+} {
+  const length = Math.hypot(vector.x, vector.y, vector.z);
+  if (length === 0) {
+    return { x: 0, y: 0, z: 1 };
+  }
+
+  return {
+    x: vector.x / length,
+    y: vector.y / length,
+    z: vector.z / length,
+  };
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }

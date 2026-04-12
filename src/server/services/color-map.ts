@@ -18,8 +18,32 @@ export interface RGB {
   b: number;
 }
 
-/** Light purple fallback for blocks without a resolved texture color. */
+interface FallbackBlockColorLogDetails {
+  reason: string;
+  textureName?: string;
+  texturePath?: string;
+  paletteIndex?: number;
+  error?: unknown;
+}
+
+interface BlockTextureFailure extends FallbackBlockColorLogDetails {}
+
+/** Bright magenta fallback for blocks without a resolved texture color. */
 export const FALLBACK_BLOCK_COLOR: RGB = { r: 255, g: 0, b: 220 };
+
+const AIR_LIKE_BLOCK_COLOR: RGB = { r: 0, g: 0, b: 0 };
+const AIR_LIKE_BLOCK_PREFIXES = ["cubyz:fog/", "cubyz:glass/"];
+
+const TEXTURE_FIELD_PRIORITY: Record<string, number> = {
+  texture_top: 0,
+  texture: 1,
+  texture_side: 2,
+  texture_front: 3,
+  texture_back: 4,
+  texture_left: 5,
+  texture_right: 6,
+  texture_bottom: 7,
+};
 
 /** Water color for ocean/below-sea-level areas */
 export const WATER_COLOR: RGB = { r: 32, g: 56, b: 96 };
@@ -27,12 +51,24 @@ export const WATER_COLOR: RGB = { r: 32, g: 56, b: 96 };
 export class ColorMapService {
   /** block string ID -> RGB */
   private blockColors = new Map<string, RGB>();
-  /** block string ID -> texture name */
-  private blockTextures = new Map<string, string>();
+  /** block string ID -> top-surface RGB used for biome/terrain colors */
+  private blockTopColors = new Map<string, RGB>();
+  /** block string ID -> ordered texture candidates */
+  private blockTextures = new Map<string, string[]>();
+  /** block string ID -> ordered top-surface texture candidates */
+  private blockTopTextures = new Map<string, string[]>();
+  /** block string ID -> fallback tint derived from absorbedLight */
+  private blockAbsorptionColors = new Map<string, RGB>();
+  /** blocks that should be treated like air */
+  private airLikeBlocks = new Set<string>();
+  /** block string ID -> whether we already logged a fallback color */
+  private reportedFallbackBlocks = new Set<string>();
   /** biome string ID -> RGB */
   private biomeColors = new Map<string, RGB>();
   /** block palette index -> RGB (computed from palette + blockColors) */
   private paletteColors: RGB[] = [];
+  /** block palette index -> whether this entry should be treated like air */
+  private paletteAirLike: boolean[] = [];
   /** biome palette index -> RGB */
   private biomePaletteColors: RGB[] = [];
   /** biome palette index -> ocean flag */
@@ -63,6 +99,49 @@ export class ColorMapService {
       blockColors: this.blockColors.size,
       biomeColors: this.biomeColors.size,
     });
+  }
+
+  private reportFallbackBlockColor(
+    blockId: string,
+    details: FallbackBlockColorLogDetails,
+  ): void {
+    if (this.isAirLikeBlock(blockId)) {
+      return;
+    }
+
+    if (this.reportedFallbackBlocks.has(blockId)) {
+      return;
+    }
+
+    this.reportedFallbackBlocks.add(blockId);
+
+    const meta: Record<string, unknown> = {
+      blockId,
+      reason: details.reason,
+      fallbackColor: FALLBACK_BLOCK_COLOR,
+    };
+
+    if (details.textureName) {
+      meta.textureName = details.textureName;
+    }
+    if (details.texturePath) {
+      meta.texturePath = details.texturePath;
+    }
+    if (details.paletteIndex !== undefined) {
+      meta.paletteIndex = details.paletteIndex;
+    }
+    if (details.error !== undefined) {
+      meta.error =
+        details.error instanceof Error
+          ? {
+              name: details.error.name,
+              message: details.error.message,
+              stack: details.error.stack,
+            }
+          : String(details.error);
+    }
+
+    logger.error("Using fallback block color", meta);
   }
 
   private async loadBlockTextures(blocksDir: string): Promise<void> {
@@ -97,10 +176,26 @@ export class ColorMapService {
         try {
           const text = await readFile(fullPath, "utf-8");
           const parsed = parseZon(text) as Record<string, ZonValue>;
-          // Use texture_top or texture field
-          const texture = parsed.texture_top ?? parsed.texture;
-          if (texture && typeof texture === "string") {
-            this.blockTextures.set(blockId, texture);
+          if (this.isAirLikeBlock(blockId)) {
+            this.airLikeBlocks.add(blockId);
+            continue;
+          }
+
+          const textures = this.extractTextureCandidates(parsed);
+          if (textures.length > 0) {
+            this.blockTextures.set(blockId, textures);
+          }
+
+          const topTextures = this.extractTopTextureCandidates(parsed);
+          if (topTextures.length > 0) {
+            this.blockTopTextures.set(blockId, topTextures);
+          }
+
+          if (typeof parsed.absorbedLight === "number") {
+            this.blockAbsorptionColors.set(
+              blockId,
+              this.absorptionToColor(parsed.absorbedLight),
+            );
           }
         } catch {
           // Skip unparseable block definitions
@@ -130,8 +225,7 @@ export class ColorMapService {
       } else if (
         entry.endsWith(".png") &&
         !entry.includes("_emission") &&
-        !entry.includes("_reflectivity") &&
-        !entry.includes("_absorption")
+        !entry.includes("_reflectivity")
       ) {
         // Build texture name relative to base textures dir, e.g. "cubyz:leaves/oak"
         const rel = fullPath.slice(baseDir.length + 1).replace(/\\/g, "/");
@@ -149,20 +243,35 @@ export class ColorMapService {
     await this.scanTextureDir(texturesDir, texturesDir, textureFiles);
 
     // Compute average color for each block that has a texture
-    for (const [blockId, textureName] of this.blockTextures) {
-      const texPath = textureFiles.get(textureName);
-      if (texPath) {
-        try {
-          const color = await this.averageTextureColor(texPath);
-          this.blockColors.set(blockId, color);
-        } catch {
-          // Use fallback if available
-        }
+    for (const [blockId, textureNames] of this.blockTextures) {
+      const { color, failure } = await this.resolveBlockColor(
+        blockId,
+        textureNames,
+        textureFiles,
+      );
+      if (color) {
+        this.blockColors.set(blockId, color);
+        continue;
+      }
+
+      if (failure) {
+        this.reportFallbackBlockColor(blockId, failure);
+      }
+    }
+
+    for (const [blockId, textureNames] of this.blockTopTextures) {
+      const { color } = await this.resolveBlockColor(
+        blockId,
+        textureNames,
+        textureFiles,
+      );
+      if (color) {
+        this.blockTopColors.set(blockId, color);
       }
     }
   }
 
-  private async averageTextureColor(pngPath: string): Promise<RGB> {
+  private async averageTextureColor(pngPath: string): Promise<RGB | null> {
     const { data, info } = await sharp(pngPath)
       .raw()
       .ensureAlpha()
@@ -184,7 +293,7 @@ export class ColorMapService {
       totalAlpha += a;
     }
 
-    if (totalAlpha === 0) return FALLBACK_BLOCK_COLOR;
+    if (totalAlpha === 0) return null;
 
     return {
       r: Math.round((r / totalAlpha) ** (1 / 2.2) * 255),
@@ -198,7 +307,9 @@ export class ColorMapService {
   ): void {
     for (const [biomeId, biome] of biomeDefinitions) {
       if (biome.topBlock) {
-        const color = this.blockColors.get(biome.topBlock);
+        const color =
+          this.blockTopColors.get(biome.topBlock) ??
+          this.blockColors.get(biome.topBlock);
         if (color) {
           this.biomeColors.set(biomeId, color);
         }
@@ -208,10 +319,30 @@ export class ColorMapService {
 
   private buildPaletteColors(palette: Palette): void {
     this.paletteColors = new Array(palette.entries.length);
+    this.paletteAirLike = new Array(palette.entries.length);
     for (let i = 0; i < palette.entries.length; i++) {
       const blockId = palette.entries[i];
-      this.paletteColors[i] =
-        this.blockColors.get(blockId) ?? FALLBACK_BLOCK_COLOR;
+      const isAirLike = this.isAirLikeBlock(blockId);
+      this.paletteAirLike[i] = isAirLike;
+      if (isAirLike) {
+        this.paletteColors[i] = AIR_LIKE_BLOCK_COLOR;
+        continue;
+      }
+
+      const color = this.blockColors.get(blockId);
+      if (color) {
+        this.paletteColors[i] = color;
+        continue;
+      }
+
+      this.reportFallbackBlockColor(blockId, {
+        reason: this.blockTextures.has(blockId)
+          ? "texture color unavailable"
+          : "block has no texture mapping",
+        textureName: this.blockTextures.get(blockId)?.[0],
+        paletteIndex: i,
+      });
+      this.paletteColors[i] = FALLBACK_BLOCK_COLOR;
     }
   }
 
@@ -236,7 +367,15 @@ export class ColorMapService {
 
   /** Get color for a block palette index */
   getBlockColor(paletteIndex: number): RGB {
+    if (this.paletteAirLike[paletteIndex] === true) {
+      return AIR_LIKE_BLOCK_COLOR;
+    }
     return this.paletteColors[paletteIndex] ?? FALLBACK_BLOCK_COLOR;
+  }
+
+  /** Check if a block palette index should be treated like air */
+  isBlockPaletteIndexAirLike(paletteIndex: number): boolean {
+    return this.paletteAirLike[paletteIndex] === true;
   }
 
   /** Get color for a biome palette index */
@@ -251,7 +390,22 @@ export class ColorMapService {
 
   /** Get color for a named block */
   getBlockColorByName(blockId: string): RGB {
-    return this.blockColors.get(blockId) ?? FALLBACK_BLOCK_COLOR;
+    if (this.isAirLikeBlock(blockId)) {
+      return AIR_LIKE_BLOCK_COLOR;
+    }
+
+    const color = this.blockColors.get(blockId);
+    if (color) {
+      return color;
+    }
+
+    this.reportFallbackBlockColor(blockId, {
+      reason: this.blockTextures.has(blockId)
+        ? "texture color unavailable"
+        : "block has no texture mapping",
+      textureName: this.blockTextures.get(blockId)?.[0],
+    });
+    return FALLBACK_BLOCK_COLOR;
   }
 
   /** Get all block colors as a JSON-serializable object */
@@ -261,5 +415,221 @@ export class ColorMapService {
       result[id] = color;
     }
     return result;
+  }
+
+  private isAirLikeBlock(blockId: string): boolean {
+    return (
+      blockId === "cubyz:air" ||
+      AIR_LIKE_BLOCK_PREFIXES.some((prefix) => blockId.startsWith(prefix)) ||
+      this.airLikeBlocks.has(blockId)
+    );
+  }
+
+  private extractTextureCandidates(parsed: Record<string, ZonValue>): string[] {
+    const textures: string[] = [];
+
+    const pushTexture = (value: ZonValue | undefined) => {
+      if (typeof value === "string" && !textures.includes(value)) {
+        textures.push(value);
+      }
+    };
+
+    const prioritizedFields = [
+      parsed.texture_top,
+      parsed.texture,
+      parsed.texture_side,
+      parsed.texture_front,
+      parsed.texture_back,
+      parsed.texture_left,
+      parsed.texture_right,
+    ];
+    for (const texture of prioritizedFields) {
+      pushTexture(texture);
+    }
+
+    const numberedEntries = Object.entries(parsed)
+      .filter(
+        ([key, value]) => /^texture\d+$/.test(key) && typeof value === "string",
+      )
+      .sort(([left], [right]) => this.compareTextureFields(left, right));
+    for (const [_key, value] of numberedEntries) {
+      pushTexture(value);
+    }
+
+    if (textures.length === 0) {
+      pushTexture(parsed.texture_bottom);
+
+      const fallbackEntries = Object.entries(parsed)
+        .filter(
+          ([key, value]) =>
+            this.isTextureField(key) &&
+            typeof value === "string" &&
+            !/^texture\d+$/.test(key),
+        )
+        .sort(([left], [right]) => this.compareTextureFields(left, right));
+      for (const [_key, value] of fallbackEntries) {
+        pushTexture(value);
+      }
+    }
+
+    return textures;
+  }
+
+  private extractTopTextureCandidates(
+    parsed: Record<string, ZonValue>,
+  ): string[] {
+    const topTextures: string[] = [];
+    const pushTexture = (value: ZonValue | undefined) => {
+      if (typeof value === "string" && !topTextures.includes(value)) {
+        topTextures.push(value);
+      }
+    };
+
+    pushTexture(parsed.texture_top);
+    pushTexture(parsed.texture);
+
+    if (topTextures.length > 0) {
+      return topTextures;
+    }
+
+    const numberedTopFaces = [parsed.texture2, parsed.texture3];
+    for (const texture of numberedTopFaces) {
+      pushTexture(texture);
+    }
+
+    return topTextures;
+  }
+
+  private isTextureField(key: string): boolean {
+    return (
+      key === "texture" ||
+      key.startsWith("texture_") ||
+      /^texture\d+$/.test(key)
+    );
+  }
+
+  private compareTextureFields(left: string, right: string): number {
+    const leftPriority = this.textureFieldPriority(left);
+    const rightPriority = this.textureFieldPriority(right);
+    if (leftPriority !== rightPriority) {
+      return leftPriority - rightPriority;
+    }
+    return left.localeCompare(right);
+  }
+
+  private textureFieldPriority(key: string): number {
+    if (key in TEXTURE_FIELD_PRIORITY) {
+      return TEXTURE_FIELD_PRIORITY[key];
+    }
+
+    const numberedMatch = /^texture(\d+)$/.exec(key);
+    if (numberedMatch) {
+      return 100 + parseInt(numberedMatch[1], 10);
+    }
+
+    return 1000;
+  }
+
+  private absorptionToColor(absorbedLight: number): RGB {
+    return {
+      r: 255 - ((absorbedLight >> 16) & 0xff),
+      g: 255 - ((absorbedLight >> 8) & 0xff),
+      b: 255 - (absorbedLight & 0xff),
+    };
+  }
+
+  private async resolveBlockColor(
+    blockId: string,
+    textureNames: string[],
+    textureFiles: Map<string, string>,
+  ): Promise<{ color: RGB | null; failure?: BlockTextureFailure }> {
+    const resolvedColors: RGB[] = [];
+    let failure: BlockTextureFailure | undefined;
+
+    for (const textureName of textureNames) {
+      const texturePath = textureFiles.get(textureName);
+      if (!texturePath) {
+        failure ??= {
+          reason: "texture file not found",
+          textureName,
+        };
+        continue;
+      }
+
+      try {
+        const color = await this.averageTextureColor(texturePath);
+        if (color) {
+          resolvedColors.push(color);
+          continue;
+        }
+
+        const transparentFallback = await this.resolveTransparentTextureColor(
+          blockId,
+          textureName,
+          textureFiles,
+        );
+        if (transparentFallback) {
+          resolvedColors.push(transparentFallback);
+          continue;
+        }
+
+        failure ??= {
+          reason: "texture is fully transparent",
+          textureName,
+          texturePath,
+        };
+      } catch (error) {
+        failure ??= {
+          reason: "failed to average texture color",
+          textureName,
+          texturePath,
+          error,
+        };
+      }
+    }
+
+    if (resolvedColors.length === 0) {
+      return { color: null, failure };
+    }
+
+    return { color: this.averageResolvedColors(resolvedColors) };
+  }
+
+  private async resolveTransparentTextureColor(
+    blockId: string,
+    textureName: string,
+    textureFiles: Map<string, string>,
+  ): Promise<RGB | null> {
+    const absorptionPath = textureFiles.get(`${textureName}_absorption`);
+    if (absorptionPath) {
+      try {
+        const color = await this.averageTextureColor(absorptionPath);
+        if (color) {
+          return color;
+        }
+      } catch {
+        // Fall back to absorbedLight-derived tint below.
+      }
+    }
+
+    return this.blockAbsorptionColors.get(blockId) ?? null;
+  }
+
+  private averageResolvedColors(colors: RGB[]): RGB {
+    let r = 0;
+    let g = 0;
+    let b = 0;
+
+    for (const color of colors) {
+      r += (color.r / 255) ** 2.2;
+      g += (color.g / 255) ** 2.2;
+      b += (color.b / 255) ** 2.2;
+    }
+
+    return {
+      r: Math.round((r / colors.length) ** (1 / 2.2) * 255),
+      g: Math.round((g / colors.length) ** (1 / 2.2) * 255),
+      b: Math.round((b / colors.length) ** (1 / 2.2) * 255),
+    };
   }
 }

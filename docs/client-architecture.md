@@ -62,6 +62,7 @@ Feature-facing React components:
 - `LayerControls.tsx`: visibility toggles and voxel-mode preset entry area
 - `ViewToggle.tsx`: terrain/voxel mode switch
 - `MapDebugParameters.tsx`: runtime debug tuning controls and direct voxel rendering sliders
+- marker helpers place world-positioned entities and apply the viewer's scene-space facing for player models
 
 ### `features/world-view/hooks`
 
@@ -144,10 +145,12 @@ The client uses React for composition and state, but the 3D scene is managed imp
 1. `App` enables chunk index loading.
 2. `useWorldData` also fetches `/api/world/chunk-index`.
 3. The voxel runtime selects requested regions based on camera focus, distance, render distance, the minimum allowed voxel LOD, and any preset-applied loading or cache tuning.
-4. `/api/voxels/:lod/:regionX/:regionY` responses are fetched as binary payloads that arrive compressed over HTTP, preferring Brotli with gzip fallback, and are transparently decompressed by the browser before JavaScript sees them.
+4. `/api/voxels/:lod/:regionX/:regionY` responses are fetched as binary payloads that always require compressed transport, preferring Brotli with gzip fallback based on what the real browser path advertises, and are transparently decompressed by the browser before JavaScript sees them.
 5. The feature worker converts the raw mesh buffers into typed arrays, rebuilding triangle indices from compact per-quad winding flags from the current 20-byte voxel header format.
 6. The main thread uploads those arrays into Three.js geometries within a frame budget.
 7. A lightweight voxel-loading signal is published back to `App` so the UI can show a bottom-right loading indicator even when the debug stats panel is hidden.
+
+Voxel and terrain meshes are both rendered with lit vertex colors using a daytime-biased scene rig: restrained ambient light, a hemisphere sky fill, and directional sun and fill lights. The world is intentionally lit brighter than the dark UI backdrop while preserving stronger sun-driven shading so terrain relief and voxel shape cues remain readable. Voxel meshes also apply a small worker-side face tint that is biased by the same sun direction as the scene light, with slightly warmer top faces and slightly darker shadow-side faces so block contrast holds up under the brighter daytime lighting.
 
 When the debug panel is open, the client also keeps a rolling voxel benchmark summary based on real browser fetches. It reports average fetch time, worker decode time, combined fetch-plus-worker time, and the browser-exposed transfer and body sizes when `PerformanceResourceTiming` provides them.
 

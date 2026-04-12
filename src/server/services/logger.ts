@@ -26,6 +26,17 @@ const consoleFormat = winston.format.combine(
   }),
 );
 
+const requestLogTransport =
+  process.env.LOG_REQUESTS === "true"
+    ? [
+        new winston.transports.File({
+          filename: join(logDir, "server-requests.log"),
+          level: "http",
+          format: winston.format.combine(requestOnlyFormat, fileFormat),
+        }),
+      ]
+    : [];
+
 export const logger = winston.createLogger({
   level: process.env.LOG_LEVEL ?? "info",
   defaultMeta: { service: "cubyz-map-viewer-server" },
@@ -40,10 +51,6 @@ export const logger = winston.createLogger({
       filename: join(logDir, "server-combined.log"),
       format: fileFormat,
     }),
-    new winston.transports.File({
-      filename: join(logDir, "server-requests.log"),
-      level: "http",
-      format: winston.format.combine(requestOnlyFormat, fileFormat),
-    }),
+    ...requestLogTransport,
   ],
 });

@@ -8,6 +8,10 @@ import {
   updateKeyboardCameraMotion,
 } from "./camera.js";
 import { createCursorInteractionHandlers } from "./cursor.js";
+import {
+  DAYLIGHT_FILL_POSITION,
+  DAYLIGHT_MAIN_SUN_POSITION,
+} from "./daylight.js";
 import type { WorkerOut } from "./types.js";
 import { shouldRenderTerrainForMode } from "./utils.js";
 
@@ -130,6 +134,7 @@ export function initializeSceneRuntime(args: {
   camera.up.set(0, 0, 1);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   container.appendChild(renderer.domElement);
@@ -150,12 +155,25 @@ export function initializeSceneRuntime(args: {
     TWO: THREE.TOUCH.DOLLY_ROTATE,
   };
 
-  scene.add(new THREE.AmbientLight(0x404060, 1.5));
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
-  directionalLight.position.set(100, -100, 200);
+  // Keep the darker backdrop, but light the world itself like midday.
+  // Favor a stronger sun over flat ambient fill so terrain and voxels keep readable shading.
+  scene.add(new THREE.AmbientLight(0x43485a, 0.7));
+  const skyLight = new THREE.HemisphereLight(0xd7e7ff, 0x66704f, 0.55);
+  skyLight.position.set(0, 0, 1);
+  scene.add(skyLight);
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.75);
+  directionalLight.position.set(
+    DAYLIGHT_MAIN_SUN_POSITION.x,
+    DAYLIGHT_MAIN_SUN_POSITION.y,
+    DAYLIGHT_MAIN_SUN_POSITION.z,
+  );
   scene.add(directionalLight);
-  const fillLight = new THREE.DirectionalLight(0x8888aa, 0.4);
-  fillLight.position.set(-50, 50, 100);
+  const fillLight = new THREE.DirectionalLight(0xbec8d8, 0.18);
+  fillLight.position.set(
+    DAYLIGHT_FILL_POSITION.x,
+    DAYLIGHT_FILL_POSITION.y,
+    DAYLIGHT_FILL_POSITION.z,
+  );
   scene.add(fillLight);
 
   const terrainGroup = new THREE.Group();

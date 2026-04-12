@@ -18,7 +18,7 @@ FROM gcr.io/distroless/nodejs20-debian12:nonroot
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
-ENV PORT=3001
+ENV PORT=3000
 ENV VOXEL_CACHE_DIR=/data/cache/voxels
 ENV LOG_DIR=/data/logs
 COPY --from=runtime-base --chown=nonroot:nonroot /data /data

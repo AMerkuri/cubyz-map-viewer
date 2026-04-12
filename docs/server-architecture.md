@@ -86,7 +86,8 @@ Business logic and runtime infrastructure.
 
 Examples:
 
-- `color-map.ts`: builds block colors from textures and biome data; missing block textures fall back to a light-purple placeholder
+- `color-map.ts`: builds block colors from Cubyz block definitions and biome data; representative block colors prefer top and side textures over bottom-only faces, biome and terrain colors prefer top-surface textures, and temporary unsupported transparent blocks such as fog and glass are treated as air-like so they do not generate color errors or voxel geometry
+- `terrain-data.ts`: builds the 3D terrain mesh payload from surface data and applies a conservative elevation-based brightness adjustment so biome colors stay readable without washing out high terrain
 - `tile-renderer.ts`: converts parsed surface data into PNG tiles
 - `terrain-data.ts`: prepares terrain payloads for the client
 - `voxel-mesh-service.ts`: cache, dedupe, and orchestration for voxel mesh generation
@@ -100,6 +101,8 @@ Server-side worker entrypoints and protocol definitions used for voxel mesh gene
 
 - `voxel-worker.ts`: worker thread that parses regions and builds mesh payloads
 - `voxel-worker-protocol.ts`: message and metrics types shared with the pool/service
+
+Fallback block color use is logged at `error` level once per block or palette index so real missing textures and bad palette lookups are easy to trace without repeating the same message. Air-like entries such as `cubyz:air`, `cubyz:fog/*`, and temporary `cubyz:glass/*` handling are excluded from that error path.
 
 ## Request Flows
 
@@ -155,7 +158,9 @@ Server-side worker entrypoints and protocol definitions used for voxel mesh gene
 4. On cache miss, it submits a job to `VoxelWorkerPool`.
 5. A worker parses one or more `.region` files, generates a greedy mesh, and returns an indexless binary payload plus metrics.
 6. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
-7. The route requires compressed voxel transport, negotiates `br` first and `gzip` second, rejects requests that accept neither with `406`, and exposes timing and queue metrics through response headers.
+7. The route requires compressed voxel transport, negotiates `br` first and `gzip` second based on the request's `Accept-Encoding`, rejects requests that accept neither with `406`, and exposes timing and queue metrics through response headers.
+
+Fog and glass blocks are currently normalized to air during voxel generation, so unsupported transparent blocks are excluded from the rendered mesh even if they appear in the save palette.
 
 This design keeps expensive voxel meshing off the main server thread.
 
@@ -214,13 +219,23 @@ This allows the client to refresh only the affected world data.
 - cache raw payloads plus lazily generated `gzip` and `br` variants for repeated responses
 - can also persist generated mesh payloads on disk via `VOXEL_CACHE_DIR` for faster warm restarts and container reuse
 
-### Logs and runtime paths
+### Runtime Configuration
 
-- `SAVE_PATH` points to the Cubyz save directory
-- `CUBYZ_PATH` points to the Cubyz project or asset root
-- `LOG_DIR` controls where Winston file logs are written
-- `VOXEL_CACHE_DIR` controls the persistent voxel mesh disk cache location
-- `CORS_ALLOWED_ORIGINS` lists explicit browser origins allowed to call the server
+The root `.env.example` file mirrors the server's supported environment variables.
+
+- `PORT` sets the HTTP bind port (`3001`)
+- `HOST` sets the HTTP bind address (`0.0.0.0`)
+- `CACHE_SIZE` controls the in-memory terrain tile cache size (`500`)
+- `VOXEL_FULL_CLEAR_THROTTLE_MS` limits how often broad terrain updates can trigger a full voxel cache clear (`1000`)
+- `TERRAIN_UPDATE_BATCH_MS` controls the save watcher batching window for terrain updates (`15000`)
+- `CORS_ALLOWED_ORIGINS` is a comma-separated allowlist of browser origins allowed to call the server
+- `SAVE_PATH` points to the Cubyz save directory; if unset, the server auto-detects the newest save under `~/.cubyz/saves/`
+- `CUBYZ_PATH` points to the Cubyz project or asset root; if unset, the server auto-detects the repository parent containing `assets/cubyz`
+- `VOXEL_WORKERS` sets the voxel worker pool size; if unset, it uses up to `min(4, availableParallelism() - 1)` workers
+- `VOXEL_CACHE_DIR` controls the persistent voxel mesh disk cache location (`dist/server/cache/voxels`)
+- `LOG_DIR` controls where Winston file logs are written (`logs`)
+- `LOG_REQUESTS` enables the dedicated `server-requests.log` file when set to `true` (default `false`)
+- `LOG_LEVEL` controls Winston verbosity for console and general file logs (`info` by default)
 
 In containerized deployments, save data and Cubyz assets are intended to be mounted read-only, while logs and voxel cache are intended to be mounted read-write.
 

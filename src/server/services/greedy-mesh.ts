@@ -41,6 +41,10 @@
 
 import type { BlockColorTable } from "./block-color-table.js";
 import { FALLBACK_BLOCK_COLOR } from "./color-map.js";
+import { logger } from "./logger.js";
+
+const reportedFallbackPaletteIndices = new Set<number>();
+const AIR_LIKE_COLOR = { r: 0, g: 0, b: 0 };
 
 export interface BinaryQuad {
   v0x: number;
@@ -107,7 +111,8 @@ export function greedyMesh(
     if (x < 0 || x >= width || y < 0 || y >= depth || z < 0 || z >= height) {
       return 0; // air outside bounds
     }
-    return blockTypes[x * depth * height + y * height + z];
+    const paletteIndex = blockTypes[x * depth * height + y * height + z];
+    return isAirLikePaletteIndex(blockColors, paletteIndex) ? 0 : paletteIndex;
   }
 
   function isOpaque(x: number, y: number, z: number): boolean {
@@ -481,7 +486,8 @@ export function greedyMeshBinary(
   function getBlock(x: number, y: number, z: number): number {
     if (x < 0 || x >= width || y < 0 || y >= depth || z < 0 || z >= height)
       return 0;
-    return blockTypes[x * depth * height + y * height + z];
+    const paletteIndex = blockTypes[x * depth * height + y * height + z];
+    return isAirLikePaletteIndex(blockColors, paletteIndex) ? 0 : paletteIndex;
   }
 
   function isOpaque(x: number, y: number, z: number): boolean {
@@ -496,7 +502,8 @@ export function greedyMeshBinary(
       return false;
     }
     const flatIndex = x * depth * height + y * height + z;
-    if (blockTypes[flatIndex] !== 0) return false;
+    if (!isAirLikePaletteIndex(blockColors, blockTypes[flatIndex]))
+      return false;
     if (!exteriorAirMask) return true;
     return (exteriorAirMask[flatIndex >>> 5] & (1 << (flatIndex & 31))) !== 0;
   }
@@ -940,8 +947,21 @@ function getBlockColor(
   blockColors: BlockColorTable,
   paletteIndex: number,
 ): { r: number; g: number; b: number } {
+  if (isAirLikePaletteIndex(blockColors, paletteIndex)) {
+    return AIR_LIKE_COLOR;
+  }
+
   const off = paletteIndex * 3;
   if (off + 2 >= blockColors.rgb.length) {
+    if (!reportedFallbackPaletteIndices.has(paletteIndex)) {
+      reportedFallbackPaletteIndices.add(paletteIndex);
+      logger.error("Using fallback block color for palette index", {
+        paletteIndex,
+        availableColorEntries: Math.floor(blockColors.rgb.length / 3),
+        fallbackColor: FALLBACK_BLOCK_COLOR,
+        reason: "palette index out of range",
+      });
+    }
     return FALLBACK_BLOCK_COLOR;
   }
   return {
@@ -949,4 +969,11 @@ function getBlockColor(
     g: blockColors.rgb[off + 1],
     b: blockColors.rgb[off + 2],
   };
+}
+
+function isAirLikePaletteIndex(
+  blockColors: BlockColorTable,
+  paletteIndex: number,
+): boolean {
+  return paletteIndex === 0 || blockColors.airLike[paletteIndex] === 1;
 }

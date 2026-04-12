@@ -57,7 +57,7 @@ export function buildTerrainData(
 
       const factor = isWater
         ? 1.0
-        : Math.max(0.5, Math.min(1.3, 1.0 + (h - 30) * 0.003));
+        : Math.max(0.75, Math.min(1.12, 1.0 + (h - 30) * 0.0015));
 
       colors[outIdx * 3] = Math.round(
         Math.max(0, Math.min(255, color.r * factor)),

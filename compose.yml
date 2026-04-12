@@ -5,10 +5,10 @@ services:
       dockerfile: Dockerfile
     image: cubyz-map-viewer:latest
     ports:
-      - "3001:3001"
+      - "3000:3000"
     environment:
       HOST: 0.0.0.0
-      PORT: 3001
+      PORT: 3000
       SAVE_PATH: /data/save
       CUBYZ_PATH: /data/cubyz
       VOXEL_CACHE_DIR: /data/cache/voxels

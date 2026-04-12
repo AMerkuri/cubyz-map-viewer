@@ -75,7 +75,8 @@ export function rebuildPlayerMarkers(args: {
 
     const marker = createPlayerMarkerModel();
     marker.position.set(px, py, pz);
-    marker.rotation.z = -(player.rotation[2] ?? 0);
+    // Scene Y is mirrored, so player yaw needs a half-turn offset to stay aligned.
+    marker.rotation.z = (player.rotation[2] ?? 0) + Math.PI;
     marker.userData.player = player;
     marker.userData.playerMarker = true;
     markerGroup.add(marker);

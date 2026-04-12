@@ -28,7 +28,7 @@ const VALID_LODS = [1, 2, 4, 8, 16, 32];
 const COLUMN_VOXELS = VOXEL_REGION_SIZE;
 const CHUNK_COLUMNS_PER_AXIS = COLUMN_VOXELS / CHUNK_SIZE;
 const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
-const VOXEL_GENERATOR_CACHE_VERSION = 13;
+const VOXEL_GENERATOR_CACHE_VERSION = 14;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??
@@ -172,6 +172,21 @@ export async function generateVoxelMesh(
   let regionsParsed = 0;
   let chunksMeshed = 0;
   let visitedAirCells = 0;
+
+  function isAir(chunk: ChunkData | null, idx: number): boolean {
+    if (!chunk) return true;
+    return isAirType(chunk.blocks[idx] & 0xffff);
+  }
+
+  function getType(chunk: ChunkData | null, idx: number): number {
+    if (!chunk) return 0;
+    const typ = chunk.blocks[idx] & 0xffff;
+    return isAirType(typ) ? 0 : typ;
+  }
+
+  function isAirType(paletteIndex: number): boolean {
+    return paletteIndex === 0 || blockColors.airLike[paletteIndex] === 1;
+  }
 
   await seedTopBoundary();
   await seedRegionBoundaries();
@@ -928,16 +943,6 @@ async function computeSurfaceHeightsWithSignature(
 
 function localIndex(x: number, y: number, z: number): number {
   return x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z;
-}
-
-function isAir(chunk: ChunkData | null, idx: number): boolean {
-  if (!chunk) return true;
-  return (chunk.blocks[idx] & 0xffff) === 0;
-}
-
-function getType(chunk: ChunkData | null, idx: number): number {
-  if (!chunk) return 0;
-  return chunk.blocks[idx] & 0xffff;
 }
 
 function isVisibleSolid(
