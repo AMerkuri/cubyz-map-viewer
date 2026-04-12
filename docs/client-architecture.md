@@ -189,3 +189,4 @@ Other client components are currently feature-specific rather than generic share
 - `npm run check` runs Biome over the repository.
 - `npm run typecheck` runs TypeScript against both the shared and server-specific configs.
 - `npm run build` produces the client bundle and server output.
+- The Vite build splits the heavy Three.js and React Query dependencies into vendor chunks so the app entry stays smaller.

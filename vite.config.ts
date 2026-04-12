@@ -7,6 +7,26 @@ export default defineConfig({
   publicDir: "public",
   build: {
     outDir: "dist/client",
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (
+            id.includes("node_modules/three/examples/") ||
+            id.includes("node_modules/three/addons/")
+          ) {
+            return "vendor-three-addons";
+          }
+
+          if (id.includes("node_modules/three/")) {
+            return "vendor-three";
+          }
+
+          if (id.includes("node_modules/@tanstack/react-query/")) {
+            return "vendor-react-query";
+          }
+        },
+      },
+    },
   },
   server: {
     host: "0.0.0.0",
