@@ -232,7 +232,7 @@ export function updateTerrainVisibility(args: {
   }
 }
 
-export async function syncTerrainLod(args: {
+export function syncTerrainLod(args: {
   target: THREE.Vector3;
   camDist: number;
   surfaceIndex: SurfaceIndexEntry[];

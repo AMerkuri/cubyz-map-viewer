@@ -8,6 +8,7 @@ import type { TerrainUpdatesBatchEvent } from "../hooks/useWebSocket.js";
 import type {
   ChunkIndexEntry,
   SurfaceIndexEntry,
+  useWorldData,
 } from "../hooks/useWorldData.js";
 import {
   applyInitialCameraState,
@@ -46,7 +47,7 @@ export function useWorld3DSceneRuntime(args: {
   debugEnabledRef: { current: boolean };
   keysHeldRef: { current: Set<string> };
   worldDataRef: {
-    current: { worldData?: { spawn?: [number, number, number] | null } };
+    current: ReturnType<typeof useWorldData>;
   };
   onCursorMoveRef: { current: (pos: [number, number, number] | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };

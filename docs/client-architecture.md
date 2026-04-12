@@ -183,3 +183,9 @@ Other client components are currently feature-specific rather than generic share
 - prefer direct imports over barrels
 - use workers and bounded queues for heavy voxel processing
 - avoid React re-renders for high-frequency cursor and frame-loop updates
+
+## Validation
+
+- `npm run check` runs Biome over the repository.
+- `npm run typecheck` runs TypeScript against both the shared and server-specific configs.
+- `npm run build` produces the client bundle and server output.

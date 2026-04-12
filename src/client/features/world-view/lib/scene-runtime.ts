@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
+import type { useWorldData } from "../hooks/useWorldData.js";
 import {
   focusCameraOnWorldPosition,
   updateKeyboardCameraMotion,
@@ -38,7 +39,7 @@ export function initializeSceneRuntime(args: {
   debugEnabledRef: { current: boolean };
   keysHeldRef: { current: Set<string> };
   worldDataRef: {
-    current: { worldData?: { spawn?: [number, number, number] | null } };
+    current: ReturnType<typeof useWorldData>;
   };
   onCursorMoveRef: { current: (pos: [number, number, number] | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };

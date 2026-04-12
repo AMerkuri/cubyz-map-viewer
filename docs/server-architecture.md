@@ -206,3 +206,9 @@ The client still fetches fresh data through HTTP. This keeps responsibilities cl
 - prefer targeted invalidation over full rebuilds
 - batch filesystem churn before broadcasting it to clients
 - expose enough metrics to debug voxel throughput and latency
+
+## Validation
+
+- `npm run check` runs Biome over the repository.
+- `npm run typecheck` runs TypeScript against both the shared and server-specific configs.
+- `npm run build` produces the client bundle and server output.

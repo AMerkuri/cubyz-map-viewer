@@ -6,6 +6,7 @@
   "scripts": {
     "check": "biome check .",
     "check:write": "biome check --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:client": "vite",

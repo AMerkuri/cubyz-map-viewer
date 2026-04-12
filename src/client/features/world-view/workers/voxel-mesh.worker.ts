@@ -1,3 +1,5 @@
+import type { WorkerIn, WorkerOut } from "../lib/types.js";
+
 /**
  * Off-thread voxel mesh builder.
  *
@@ -20,38 +22,11 @@
  *     u32[] – 6 indices per quad, two CCW triangles
  */
 
-interface WorkerIn {
-  buffer: ArrayBuffer;
-  lod: number;
-  regionX: number;
-  regionY: number;
-  version?: number;
-}
-
-interface WorkerOut {
-  lod?: number;
-  regionX: number;
-  regionY: number;
-  version?: number;
-  quadrantMeshes?: {
-    quadrantIndex: number;
-    positions: Float32Array;
-    normals: Float32Array;
-    colors: Float32Array;
-    indices: Uint32Array;
-  }[];
-  /** 16-bit bitmask: bit (cx*4+cy) set ↔ chunk column (cx,cy) has ≥1 non-air block. */
-  chunkCoverage?: number;
-  /** Max visible voxel Z per 32×32 chunk column; -Infinity means no exposed faces. */
-  chunkTopHeights?: Float32Array;
-  voxelSize?: number;
-  minZ?: number;
-  maxZ?: number;
-  error?: string;
-}
-
 self.onmessage = (e: MessageEvent<WorkerIn>) => {
   const { buffer, lod, regionX, regionY, version } = e.data;
+  const workerGlobal = globalThis as unknown as {
+    postMessage(message: WorkerOut, transfer?: Transferable[]): void;
+  };
 
   try {
     const result = buildMeshArrays(buffer);
@@ -65,10 +40,7 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
       );
     }
     const out: WorkerOut = { lod, regionX, regionY, version, ...result };
-    (self as unknown as DedicatedWorkerGlobalScope).postMessage(
-      out,
-      transferables,
-    );
+    workerGlobal.postMessage(out, transferables);
   } catch (err) {
     const out: WorkerOut = {
       regionX,
@@ -77,7 +49,7 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
       version,
       error: err instanceof Error ? err.message : String(err),
     };
-    (self as unknown as DedicatedWorkerGlobalScope).postMessage(out);
+    workerGlobal.postMessage(out);
   }
 };
 

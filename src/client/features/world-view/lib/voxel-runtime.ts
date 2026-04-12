@@ -468,6 +468,11 @@ export function handleVoxelWorkerMessage(args: {
       ? chunkTopHeights
       : new Float32Array(16).fill(Number.NEGATIVE_INFINITY);
 
+  const resolvedMinZ =
+    typeof minZ === "number" && Number.isFinite(minZ) ? minZ : 0;
+  const resolvedMaxZ =
+    typeof maxZ === "number" && Number.isFinite(maxZ) ? maxZ : 0;
+
   pendingVoxelMeshQueueRef.current.push({
     key,
     lod: resolvedLod,
@@ -477,8 +482,8 @@ export function handleVoxelWorkerMessage(args: {
     chunkCoverage: chunkCoverage ?? 0,
     chunkTopHeights: topHeights,
     voxelSize: voxelSize ?? resolvedLod,
-    minZ: Number.isFinite(minZ) ? minZ : 0,
-    maxZ: Number.isFinite(maxZ) ? maxZ : 0,
+    minZ: resolvedMinZ,
+    maxZ: resolvedMaxZ,
     version: resolvedVersion,
   });
 }

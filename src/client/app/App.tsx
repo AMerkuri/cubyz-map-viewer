@@ -18,7 +18,10 @@ import {
 } from "../features/world-view/debug.js";
 import type { PlayerData } from "../features/world-view/hooks/usePlayers.js";
 import { usePlayers } from "../features/world-view/hooks/usePlayers.js";
-import { useWebSocket } from "../features/world-view/hooks/useWebSocket.js";
+import {
+  type TerrainUpdatesBatchEvent,
+  useWebSocket,
+} from "../features/world-view/hooks/useWebSocket.js";
 import { useWorldData } from "../features/world-view/hooks/useWorldData.js";
 import {
   GRAPHICS_PRESETS,
@@ -355,11 +358,11 @@ export function App() {
 
     unsubs.push(
       subscribe("terrain-updates-batch", (event) => {
-        if (event.type !== "terrain-updates-batch") return;
-        if (event.data.tiles.length > 0) {
+        const batch = event as TerrainUpdatesBatchEvent;
+        if (batch.data.tiles.length > 0) {
           worldData.refreshSurfaceIndex();
         }
-        if (event.data.regions.length > 0) {
+        if (batch.data.regions.length > 0) {
           if (chunkIndexEnabled) {
             worldData.refreshChunkIndex();
           }

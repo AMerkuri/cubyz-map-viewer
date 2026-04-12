@@ -3,7 +3,7 @@ import type {
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
   VoxelRefreshState,
-  WorkerOut,
+  WorkerIn,
 } from "./types.js";
 
 export function compareVoxelFetchRequests(
@@ -213,7 +213,7 @@ export async function fetchVoxelRegion(args: {
     }
 
     workerRef.current.postMessage(
-      { buffer, lod, regionX, regionY, version } satisfies WorkerOut,
+      { buffer, lod, regionX, regionY, version } satisfies WorkerIn,
       [buffer],
     );
   } catch (e) {

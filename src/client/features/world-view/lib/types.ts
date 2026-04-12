@@ -60,6 +60,14 @@ export interface PendingVoxelFetchRequest {
   version: number;
 }
 
+export interface WorkerIn {
+  buffer: ArrayBuffer;
+  lod: number;
+  regionX: number;
+  regionY: number;
+  version?: number;
+}
+
 export interface WorkerOut {
   lod?: number;
   regionX: number;
