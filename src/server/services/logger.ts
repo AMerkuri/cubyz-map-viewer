@@ -6,6 +6,12 @@ import winston from "winston";
 const logDir = process.env.LOG_DIR ?? join(process.cwd(), "logs");
 mkdirSync(logDir, { recursive: true });
 
+const rotatingFileTransportOptions = {
+  maxsize: 20 * 1024 * 1024,
+  maxFiles: 14,
+  zippedArchive: true,
+};
+
 const fileFormat = winston.format.combine(
   winston.format.timestamp(),
   winston.format.errors({ stack: true }),
@@ -33,6 +39,7 @@ const requestLogTransport =
           filename: join(logDir, "server-requests.log"),
           level: "http",
           format: winston.format.combine(requestOnlyFormat, fileFormat),
+          ...rotatingFileTransportOptions,
         }),
       ]
     : [];
@@ -46,10 +53,12 @@ export const logger = winston.createLogger({
       filename: join(logDir, "server-error.log"),
       level: "error",
       format: fileFormat,
+      ...rotatingFileTransportOptions,
     }),
     new winston.transports.File({
       filename: join(logDir, "server-combined.log"),
       format: fileFormat,
+      ...rotatingFileTransportOptions,
     }),
     ...requestLogTransport,
   ],

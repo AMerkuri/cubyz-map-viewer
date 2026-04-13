@@ -44,9 +44,11 @@ The root `.env.example` mirrors the server config list.
 - `CUBYZ_PATH`: Cubyz project root or asset source; auto-detects the repository parent containing `assets/cubyz` when unset
 - `VOXEL_WORKERS`: voxel worker pool size; defaults to up to `min(4, availableParallelism() - 1)` workers
 - `VOXEL_CACHE_DIR`: persistent voxel mesh cache directory (`dist/server/cache/voxels`)
-- `LOG_DIR`: Winston file log directory (`logs`)
-- `LOG_REQUESTS`: enables `server-requests.log` when set to `true`
+- `LOG_DIR`: Winston file log directory for rotated logs (`logs`)
+- `LOG_REQUESTS`: enables the rotated `server-requests.log` transport when set to `true`
 - `LOG_LEVEL`: Winston log level (`info`)
+
+The server rotates file logs at 20 MiB, keeps 14 archives per transport, and gzip-compresses rotated files.
 
 ## Commands
 
@@ -66,7 +68,7 @@ The production container serves the built client and API/WebSocket server from a
 - save data mounted read-only at `/data/save`
 - Cubyz assets mounted read-only at `/data/cubyz`
 - persistent voxel cache mounted read-write at `/data/cache`
-- logs mounted read-write at `/data/logs`
+- logs mounted read-write at `/data/logs`; rotated archives are gzip-compressed
 
 Build the image:
 

@@ -63,6 +63,12 @@ Examples:
 - `watcher.ts`: monitors the save directory and emits typed watch events
 - `cache.ts`: LRU cache used by terrain and voxel pipelines
 
+### Logging
+
+- `src/server/services/logger.ts` writes console output plus rotated file logs in `LOG_DIR`
+- `server-error.log` and `server-combined.log` rotate at 20 MiB, keep 14 archives, and gzip-compress rotated files
+- `LOG_REQUESTS=true` adds the same rotation/compression policy for `server-requests.log`
+
 ### `workers/`
 
 Server-side worker entry points and protocol definitions used for voxel mesh generation.
