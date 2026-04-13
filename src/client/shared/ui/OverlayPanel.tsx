@@ -55,6 +55,7 @@ export function OverlayPanel({
   const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(
     null,
   );
+  const [dragging, setDragging] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
     pointerId: number;
@@ -83,7 +84,7 @@ export function OverlayPanel({
   }, [absolute, panelPosition]);
 
   useEffect(() => {
-    if (!absolute) return;
+    if (!absolute || !dragging) return;
 
     const handlePointerMove = (event: PointerEvent) => {
       const dragState = dragStateRef.current;
@@ -103,6 +104,7 @@ export function OverlayPanel({
       const dragState = dragStateRef.current;
       if (!dragState || dragState.pointerId !== event.pointerId) return;
       dragStateRef.current = null;
+      setDragging(false);
     };
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -114,7 +116,7 @@ export function OverlayPanel({
       window.removeEventListener("pointerup", stopDragging);
       window.removeEventListener("pointercancel", stopDragging);
     };
-  }, [absolute]);
+  }, [absolute, dragging]);
 
   const moved = panelPosition !== null;
   const panelContainerStyle: React.CSSProperties = {
@@ -158,6 +160,7 @@ export function OverlayPanel({
             startLeft: rect.left,
             startTop: rect.top,
           };
+          setDragging(true);
           (event.currentTarget as HTMLDivElement).setPointerCapture(
             event.pointerId,
           );

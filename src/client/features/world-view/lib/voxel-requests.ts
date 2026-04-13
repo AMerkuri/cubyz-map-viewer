@@ -248,7 +248,6 @@ export async function fetchVoxelRegion(args: {
       return;
     }
 
-    console.error(`Failed to load voxel region ${key}:`, e);
     if (activeVoxelRequestKeysRef.current.has(key)) {
       failedVoxelsRef.current.set(
         key,

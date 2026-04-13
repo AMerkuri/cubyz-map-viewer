@@ -2,6 +2,7 @@ import { useState } from "react";
 import { OverlayPanel } from "../../../shared/ui/OverlayPanel.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
+import { cleanPlayerName } from "../lib/utils.js";
 
 const infoPanelTheme = {
   border: "rgba(255,255,255,0.12)",
@@ -157,11 +158,6 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       </span>
     </div>
   );
-}
-
-/** Strip Cubyz color formatting codes from player names */
-function cleanPlayerName(name: string): string {
-  return name.replace(/[*]{1,3}|#[0-9A-Fa-f]{6}/g, "").trim() || "Player";
 }
 
 function formatTime(timestamp: number): string {

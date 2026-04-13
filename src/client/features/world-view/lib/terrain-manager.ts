@@ -92,6 +92,8 @@ export async function loadTerrainTile(args: {
   lod: number;
   tileX: number;
   tileY: number;
+  generation?: number;
+  getCurrentGeneration?: () => number;
   queryClient: QueryClient;
   loadingTerrain: Set<string>;
   loadedTerrain: Map<string, LoadedTerrainTile>;
@@ -107,6 +109,8 @@ export async function loadTerrainTile(args: {
     lod,
     tileX,
     tileY,
+    generation,
+    getCurrentGeneration,
     queryClient,
     loadingTerrain,
     loadedTerrain,
@@ -121,6 +125,12 @@ export async function loadTerrainTile(args: {
   const key = terrainTileKey(lod, tileX, tileY);
   if (loadingTerrain.has(key) || loadedTerrain.has(key)) return;
   loadingTerrain.add(key);
+
+  const canCommit =
+    generation === undefined || !getCurrentGeneration
+      ? () => true
+      : () => generation === getCurrentGeneration();
+
   try {
     const meshData = await queryClient.fetchQuery<TerrainMeshData>({
       queryKey: ["terrain", lod, tileX, tileY],
@@ -131,6 +141,7 @@ export async function loadTerrainTile(args: {
       },
       staleTime: Infinity,
     });
+    if (!canCommit()) return;
     if (loadedTerrain.has(key)) return;
 
     const mesh = buildFullTileMesh(meshData, terrainMaterial);
@@ -162,7 +173,9 @@ export async function loadTerrainTile(args: {
     biomeLabelsDirtyRef.current = true;
     debugLabelsDirtyRef.current = true;
   } finally {
-    loadingTerrain.delete(key);
+    if (canCommit()) {
+      loadingTerrain.delete(key);
+    }
   }
 }
 

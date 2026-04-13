@@ -46,6 +46,7 @@ export function useWorld3DSceneRuntime(args: {
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
   keysHeldRef: { current: Set<string> };
+  terrainLoadGenerationRef: { current: number };
   worldDataRef: {
     current: ReturnType<typeof useWorldData>;
   };
@@ -103,6 +104,7 @@ export function useWorld3DSceneRuntime(args: {
     showBiomeLabelsRef,
     debugEnabledRef,
     keysHeldRef,
+    terrainLoadGenerationRef,
     worldDataRef,
     onCursorMoveRef,
     onPlayerClickRef,
@@ -162,6 +164,7 @@ export function useWorld3DSceneRuntime(args: {
       showBiomeLabelsRef,
       debugEnabledRef,
       keysHeldRef,
+      terrainLoadGenerationRef,
       worldDataRef,
       onCursorMoveRef,
       onPlayerClickRef,
@@ -203,6 +206,7 @@ export function useWorld3DSceneRuntime(args: {
     showBiomeLabelsRef,
     debugEnabledRef,
     keysHeldRef,
+    terrainLoadGenerationRef,
     worldDataRef,
     onCursorMoveRef,
     onPlayerClickRef,
@@ -457,10 +461,7 @@ export function useWorld3DDisplayEffects(args: {
   const onCheckAndUpdateLOD = useEffectEvent(checkAndUpdateLOD);
 
   useEffect(() => {
-    if (players.length === 0) {
-      onUpdatePlayerMarkers();
-      return;
-    }
+    void players;
     onUpdatePlayerMarkers();
   }, [players]);
 

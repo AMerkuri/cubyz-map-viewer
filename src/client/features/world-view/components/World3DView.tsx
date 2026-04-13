@@ -91,19 +91,6 @@ import {
   updateVoxelLod as updateVoxelLodManaged,
 } from "../lib/voxel-runtime.js";
 
-const terrainMaterial = new THREE.MeshLambertMaterial({
-  vertexColors: true,
-  side: THREE.DoubleSide,
-  polygonOffset: true,
-  polygonOffsetFactor: 1,
-  polygonOffsetUnits: 1,
-});
-
-const voxelMaterial = new THREE.MeshLambertMaterial({
-  vertexColors: true,
-  side: THREE.FrontSide,
-});
-
 export type { InitialCameraState } from "../lib/types.js";
 
 export function World3DView({
@@ -131,6 +118,28 @@ export function World3DView({
   onShareStateChange,
   flyToRequest,
 }: World3DViewProps) {
+  const terrainMaterialRef = useRef<THREE.MeshLambertMaterial | null>(null);
+  if (!terrainMaterialRef.current) {
+    terrainMaterialRef.current = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
+    });
+  }
+
+  const voxelMaterialRef = useRef<THREE.MeshLambertMaterial | null>(null);
+  if (!voxelMaterialRef.current) {
+    voxelMaterialRef.current = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      side: THREE.FrontSide,
+    });
+  }
+
+  const terrainMaterial = terrainMaterialRef.current;
+  const voxelMaterial = voxelMaterialRef.current;
+
   const queryClient = useQueryClient();
   const queryClientRef = useRef<QueryClient>(queryClient);
   queryClientRef.current = queryClient;
@@ -214,6 +223,7 @@ export function World3DView({
   onChunkStatsChangeRef.current = onChunkStatsChange;
   const onVoxelLoadingChangeRef = useRef(onVoxelLoadingChange);
   onVoxelLoadingChangeRef.current = onVoxelLoadingChange;
+  const lastPublishedVoxelLoadingRef = useRef(false);
   const debugEnabledRef = useRef(debugEnabled);
   debugEnabledRef.current = debugEnabled;
   const debugSettingsRef = useRef(debugSettings);
@@ -245,6 +255,7 @@ export function World3DView({
   const terrainVisibilityDirtyRef = useRef(false);
   const debugLabelsDirtyRef = useRef(false);
   const biomeLabelsDirtyRef = useRef(false);
+  const terrainLoadGenerationRef = useRef(0);
   const biomeRefreshTokenRef = useRef(0);
   const lastChunkStatsRef = useRef("");
   const voxelBenchmarkRef = useRef<RollingVoxelBenchmarkStats>({
@@ -260,6 +271,7 @@ export function World3DView({
   });
   const playerMarkerModelTemplateRef = useRef<THREE.Object3D | null>(null);
   const playerMarkerTextureRef = useRef<THREE.Texture | null>(null);
+  const playerAssetsRequestedRef = useRef(false);
   const activeFocusLodRef = useRef<number>(1);
   const voxelFocusStateRef = useRef<VoxelFocusState>({
     point: new THREE.Vector3(),
@@ -269,6 +281,12 @@ export function World3DView({
   });
 
   useEffect(() => {
+    const shouldLoadPlayerAssets = showPlayers || players.length > 0;
+    if (!shouldLoadPlayerAssets || playerAssetsRequestedRef.current) {
+      return;
+    }
+
+    playerAssetsRequestedRef.current = true;
     const textureLoader = new THREE.TextureLoader();
     const objLoader = new OBJLoader();
     let disposed = false;
@@ -299,11 +317,8 @@ export function World3DView({
 
     return () => {
       disposed = true;
-      playerMarkerModelTemplateRef.current = null;
-      playerMarkerTextureRef.current?.dispose();
-      playerMarkerTextureRef.current = null;
     };
-  }, []);
+  }, [showPlayers, players.length]);
 
   function rebuildVoxelIndexCache(entries: ChunkIndexEntry[]) {
     const { availableKeys, roots } = rebuildVoxelIndex(entries);
@@ -858,13 +873,6 @@ export function World3DView({
             nextSamples,
           ),
         };
-
-        if (debugEnabledRef.current) {
-          console.debug("voxel benchmark", {
-            key: `${data.lod ?? 1}/${data.regionX}/${data.regionY}`,
-            ...sample,
-          });
-        }
       },
     });
   }
@@ -932,7 +940,12 @@ export function World3DView({
     const loading =
       loadingVoxelsRef.current.size + pendingVoxelFetchQueueRef.current.length >
       0;
-    onVoxelLoadingChangeRef.current(modeRef.current === "voxel" && loading);
+    const nextLoading = modeRef.current === "voxel" && loading;
+    if (lastPublishedVoxelLoadingRef.current === nextLoading) {
+      return;
+    }
+    lastPublishedVoxelLoadingRef.current = nextLoading;
+    onVoxelLoadingChangeRef.current(nextLoading);
   }
 
   useWorld3DSceneRuntime({
@@ -954,6 +967,7 @@ export function World3DView({
     showBiomeLabelsRef,
     debugEnabledRef,
     keysHeldRef,
+    terrainLoadGenerationRef,
     worldDataRef,
     onCursorMoveRef,
     onPlayerClickRef,

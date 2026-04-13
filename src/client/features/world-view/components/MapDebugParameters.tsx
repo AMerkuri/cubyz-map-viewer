@@ -26,6 +26,13 @@ interface MapDebugParametersProps {
 const SECTION_ORDER = ["Loading", "LOD", "Focus", "Memory"] as const;
 const RESET_GLYPH_SIZE = 12;
 
+type DebugSection = (typeof SECTION_ORDER)[number];
+
+interface ControlSection {
+  title: string;
+  content: React.ReactNode;
+}
+
 export function MapDebugParameters({
   view,
   settings,
@@ -42,10 +49,7 @@ export function MapDebugParameters({
   onVoxelHeightsChange,
 }: MapDebugParametersProps) {
   const definitionsBySection = useMemo(() => {
-    const grouped = new Map<
-      (typeof SECTION_ORDER)[number],
-      MapDebugParameterDefinition[]
-    >();
+    const grouped = new Map<DebugSection, MapDebugParameterDefinition[]>();
     for (const section of SECTION_ORDER) grouped.set(section, []);
     for (const definition of MAP_DEBUG_PARAMETER_DEFINITIONS) {
       grouped.get(definition.section)?.push(definition);
@@ -53,27 +57,32 @@ export function MapDebugParameters({
     return grouped;
   }, []);
 
-  return (
-    <>
-      <style>{rangeSliderCss}</style>
-      <div style={{ display: "grid", gap: 14 }}>
-        <div style={{ display: "grid", gap: 8 }}>
-          <div style={sectionTitleStyle}>Visual Debug</div>
-          <ToggleRow
-            label="Chunk Borders"
-            active={chunkBorders}
-            onToggle={() => onChunkBordersChange(!chunkBorders)}
-          />
-          <ToggleRow
-            label="Voxel Heights"
-            active={voxelHeights}
-            onToggle={() => onVoxelHeightsChange(!voxelHeights)}
-          />
-        </div>
+  const sections = useMemo<ControlSection[]>(() => {
+    const baseSections: ControlSection[] = [
+      {
+        title: "Visual Debug",
+        content: (
+          <>
+            <ToggleRow
+              label="Chunk Borders"
+              active={chunkBorders}
+              onToggle={() => onChunkBordersChange(!chunkBorders)}
+            />
+            <ToggleRow
+              label="Voxel Heights"
+              active={voxelHeights}
+              onToggle={() => onVoxelHeightsChange(!voxelHeights)}
+            />
+          </>
+        ),
+      },
+    ];
 
-        {view === "voxel" && (
-          <div style={{ display: "grid", gap: 10 }}>
-            <div style={sectionTitleStyle}>Voxel Rendering</div>
+    if (view === "voxel") {
+      baseSections.push({
+        title: "Voxel Rendering",
+        content: (
+          <>
             <SliderRow
               label="Render Distance"
               description="Maximum distance around the camera where voxel regions remain eligible for loading and rendering."
@@ -108,34 +117,63 @@ export function MapDebugParameters({
               defaultValue={LOD_LEVELS[0]}
               onChange={onMinRenderedVoxelLodChange}
             />
-          </div>
-        )}
+          </>
+        ),
+      });
+    }
 
-        {SECTION_ORDER.map((section) => {
-          const items = definitionsBySection.get(section) ?? [];
-          if (items.length === 0) return null;
-          return (
-            <div key={section} style={{ display: "grid", gap: 10 }}>
-              <div style={sectionTitleStyle}>{section}</div>
-              {items.map((definition) => (
-                <ParameterRow
-                  key={definition.key}
-                  definition={definition}
-                  value={settings[definition.key]}
-                  onChange={(value) =>
-                    onChange({ ...settings, [definition.key]: value })
-                  }
-                  onReset={() =>
-                    onChange({
-                      ...settings,
-                      [definition.key]: definition.defaultValue,
-                    })
-                  }
-                />
-              ))}
-            </div>
-          );
-        })}
+    for (const section of SECTION_ORDER) {
+      const items = definitionsBySection.get(section) ?? [];
+      if (items.length === 0) continue;
+      baseSections.push({
+        title: section,
+        content: items.map((definition) => (
+          <ParameterRow
+            key={definition.key}
+            definition={definition}
+            value={settings[definition.key]}
+            onChange={(value) =>
+              onChange({ ...settings, [definition.key]: value })
+            }
+            onReset={() =>
+              onChange({
+                ...settings,
+                [definition.key]: definition.defaultValue,
+              })
+            }
+          />
+        )),
+      });
+    }
+
+    return baseSections;
+  }, [
+    chunkBorders,
+    definitionsBySection,
+    minRenderedVoxelLod,
+    onChange,
+    onChunkBordersChange,
+    onMinRenderedVoxelLodChange,
+    onRenderDistanceChange,
+    onVoxelHeightsChange,
+    onVoxelLod1MaxDistChange,
+    renderDistance,
+    settings,
+    view,
+    voxelHeights,
+    voxelLod1MaxDist,
+  ]);
+
+  return (
+    <>
+      <style>{rangeSliderCss}</style>
+      <div style={{ display: "grid", gap: 14 }}>
+        {sections.map((section) => (
+          <div key={section.title} style={{ display: "grid", gap: 10 }}>
+            <div style={sectionTitleStyle}>{section.title}</div>
+            {section.content}
+          </div>
+        ))}
       </div>
     </>
   );
@@ -278,7 +316,39 @@ function SimpleParameterRow({
   disabled?: boolean;
   children: React.ReactNode;
 }) {
+  return (
+    <ParameterChrome
+      label={label}
+      description={description}
+      valueText={valueText}
+      isChanged={isChanged}
+      onReset={onReset}
+      disabled={disabled}
+    >
+      {children}
+    </ParameterChrome>
+  );
+}
+
+function ParameterChrome({
+  label,
+  description,
+  valueText,
+  isChanged,
+  onReset,
+  disabled = false,
+  children,
+}: {
+  label: string;
+  description: string;
+  valueText: string;
+  isChanged: boolean;
+  onReset: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
   const [showHelp, setShowHelp] = useState(false);
+
   return (
     <div style={{ display: "grid", gap: 6, position: "relative" }}>
       <div
@@ -358,7 +428,6 @@ function ParameterRow({
   onChange: (value: number) => void;
   onReset: () => void;
 }) {
-  const [showHelp, setShowHelp] = useState(false);
   const displayValue = definition.toDisplay
     ? definition.toDisplay(value)
     : value;
@@ -388,67 +457,13 @@ function ParameterRow({
   };
 
   return (
-    <div style={{ display: "grid", gap: 6, position: "relative" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-        }}
-      >
-        <div
-          style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}
-        >
-          <span
-            style={{
-              color: uiTheme.text.secondary,
-              fontSize: 12,
-              fontWeight: 600,
-            }}
-          >
-            {definition.label}
-          </span>
-          <button
-            type="button"
-            onMouseEnter={() => setShowHelp(true)}
-            onMouseLeave={() => setShowHelp(false)}
-            onFocus={() => setShowHelp(true)}
-            onBlur={() => setShowHelp(false)}
-            style={helpButtonStyle}
-            title={definition.description}
-            aria-label={`${definition.label} help`}
-          >
-            ?
-          </button>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span
-            style={{
-              color: uiTheme.accent.text,
-              fontSize: 12,
-              fontWeight: 700,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {valueText}
-          </span>
-          {isChanged && (
-            <button
-              type="button"
-              onClick={onReset}
-              style={resetButtonStyle}
-              title={`Reset ${definition.label}`}
-              aria-label={`Reset ${definition.label}`}
-            >
-              <ResetGlyph />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {showHelp && <div style={tooltipStyle}>{definition.description}</div>}
-
+    <ParameterChrome
+      label={definition.label}
+      description={definition.description}
+      valueText={valueText}
+      isChanged={isChanged}
+      onReset={onReset}
+    >
       <RangeSlider
         min={definition.min}
         max={definition.max}
@@ -456,7 +471,7 @@ function ParameterRow({
         value={displayValue}
         onChange={commitValue}
       />
-    </div>
+    </ParameterChrome>
   );
 }
 

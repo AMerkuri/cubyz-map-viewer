@@ -42,6 +42,7 @@ export function initializeSceneRuntime(args: {
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
   keysHeldRef: { current: Set<string> };
+  terrainLoadGenerationRef: { current: number };
   worldDataRef: {
     current: ReturnType<typeof useWorldData>;
   };
@@ -99,6 +100,7 @@ export function initializeSceneRuntime(args: {
     showBiomeLabelsRef,
     debugEnabledRef,
     keysHeldRef,
+    terrainLoadGenerationRef,
     worldDataRef,
     onCursorMoveRef,
     onPlayerClickRef,
@@ -223,9 +225,7 @@ export function initializeSceneRuntime(args: {
     handleWorkerMessage(e.data as WorkerOut);
   };
 
-  worker.onerror = (e) => {
-    console.error("voxel-mesh worker error:", e.message);
-  };
+  worker.onerror = () => {};
 
   const cursorHandlers = createCursorInteractionHandlers({
     renderer,
@@ -482,6 +482,7 @@ export function initializeSceneRuntime(args: {
     debugLabelGroupRef.current = null;
     biomeLabelGroupRef.current = null;
     initializedRef.current = false;
+    terrainLoadGenerationRef.current += 1;
     keysHeldRef.current.clear();
   };
 }

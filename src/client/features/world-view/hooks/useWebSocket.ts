@@ -33,9 +33,6 @@ export interface TerrainUpdatesBatchEvent {
   sentAt?: number;
 }
 
-export type TerrainTileBatchUpdate = TerrainTileUpdate;
-export type TerrainRegionBatchUpdate = TerrainRegionUpdate;
-
 type EventHandler = (event: WatchEvent | TerrainUpdatesBatchEvent) => void;
 
 /**
@@ -43,11 +40,9 @@ type EventHandler = (event: WatchEvent | TerrainUpdatesBatchEvent) => void;
  * file change notifications. Automatically reconnects on disconnection.
  *
  * Returns:
- *   - connected: whether the WebSocket is currently open
  *   - subscribe: register a handler for a specific event type
  */
 export function useWebSocket() {
-  const [connected, setConnected] = useState(false);
   const [lastUpdateAt, setLastUpdateAt] = useState<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<Map<WatchEventType, Set<EventHandler>>>(new Map());
@@ -86,8 +81,6 @@ export function useWebSocket() {
           ws.close();
           return;
         }
-        setConnected(true);
-        console.log("WebSocket connected");
       };
 
       ws.onmessage = (msg) => {
@@ -102,13 +95,10 @@ export function useWebSocket() {
               handler(event);
             }
           }
-        } catch (e) {
-          console.warn("Invalid WebSocket message:", e);
-        }
+        } catch {}
       };
 
       ws.onclose = () => {
-        setConnected(false);
         wsRef.current = null;
         if (!disposed) {
           // Reconnect after a delay
@@ -135,5 +125,5 @@ export function useWebSocket() {
     };
   }, []);
 
-  return { connected, lastUpdateAt, subscribe };
+  return { lastUpdateAt, subscribe };
 }

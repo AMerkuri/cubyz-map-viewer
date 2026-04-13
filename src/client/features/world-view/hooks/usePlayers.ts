@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 
 import type { WatchEvent, WatchEventType } from "./useWebSocket.js";
 
@@ -37,10 +37,6 @@ export function usePlayers(
     staleTime: PLAYERS_STALE_AFTER_MS,
   });
 
-  const refresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["players"] });
-  }, [queryClient]);
-
   const scheduleSilenceRefresh = useEffectEvent(() => {
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
@@ -67,5 +63,5 @@ export function usePlayers(
     });
   }, [subscribe, queryClient]);
 
-  return { data: query.data ?? [], refresh };
+  return { data: query.data ?? [] };
 }

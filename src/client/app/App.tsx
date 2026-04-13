@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { InfoPanel } from "../features/world-view/components/InfoPanel.js";
 import {
   LayerControls,
   type LayerVisibility,
 } from "../features/world-view/components/LayerControls.js";
-import { MapDebugParameters } from "../features/world-view/components/MapDebugParameters.js";
 import { ViewToggle } from "../features/world-view/components/ViewToggle.js";
 import {
   type InitialCameraState,
@@ -49,6 +56,37 @@ type ShareLocationState =
 
 const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
+const MapDebugParameters = lazy(async () =>
+  import("../features/world-view/components/MapDebugParameters.js").then(
+    ({ MapDebugParameters }) => ({ default: MapDebugParameters }),
+  ),
+);
+
+function readInitialMode(): "terrain" | "voxel" {
+  const p = new URLSearchParams(window.location.search);
+  return p.get("mode") === "voxel" ? "voxel" : "terrain";
+}
+
+function readInitialCameraState(): InitialCameraState | null {
+  const p = new URLSearchParams(window.location.search);
+  const x = parseFloat(p.get("x") ?? "");
+  const y = parseFloat(p.get("y") ?? "");
+  const z = parseFloat(p.get("z") ?? "");
+  const zoom = parseFloat(p.get("zoom") ?? "");
+  const theta = parseFloat(p.get("theta") ?? "");
+  const phi = parseFloat(p.get("phi") ?? "");
+  if (
+    !Number.isNaN(x) &&
+    !Number.isNaN(y) &&
+    !Number.isNaN(z) &&
+    !Number.isNaN(zoom) &&
+    !Number.isNaN(theta) &&
+    !Number.isNaN(phi)
+  ) {
+    return { pos: [x, y, z], zoom, theta, phi };
+  }
+  return null;
+}
 
 function formatMemoryBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -116,34 +154,376 @@ function LoadingIndicator({ visible }: { visible: boolean }) {
   );
 }
 
-export function App() {
-  // Parse URL params once on mount — lazy initializer so it never re-runs.
-  const initialMode = useMemo<"terrain" | "voxel">(() => {
-    const p = new URLSearchParams(window.location.search);
-    return p.get("mode") === "voxel" ? "voxel" : "terrain";
-  }, []);
+function StatsSectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        color: uiTheme.accent.text,
+        fontWeight: 700,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-  const initialCameraState = useMemo<InitialCameraState | null>(() => {
-    const p = new URLSearchParams(window.location.search);
-    const x = parseFloat(p.get("x") ?? "");
-    const y = parseFloat(p.get("y") ?? "");
-    const z = parseFloat(p.get("z") ?? "");
-    const zoom = parseFloat(p.get("zoom") ?? "");
-    const theta = parseFloat(p.get("theta") ?? "");
-    const phi = parseFloat(p.get("phi") ?? "");
-    if (
-      !Number.isNaN(x) &&
-      !Number.isNaN(y) &&
-      !Number.isNaN(z) &&
-      !Number.isNaN(zoom) &&
-      !Number.isNaN(theta) &&
-      !Number.isNaN(phi)
-    ) {
-      return { pos: [x, y, z], zoom, theta, phi };
-    }
-    // Partial URL (x/y/z only, no camera angles) — not enough to restore full state.
-    return null;
-  }, []);
+function DebugStatsPanel({ chunkStats }: { chunkStats: ChunkStats }) {
+  return (
+    <OverlayPanel
+      title="Stats"
+      position={{ top: 54, right: 12 }}
+      minWidth={280}
+      maxWidth={360}
+      collapsible={true}
+      defaultCollapsed={true}
+      contentStyle={{
+        fontSize: 12,
+        lineHeight: 1.55,
+        color: uiTheme.text.secondary,
+      }}
+    >
+      <div style={{ display: "grid", gap: 6 }}>
+        <div>Mode: {chunkStats.mode === "terrain" ? "Terrain" : "Voxel"}</div>
+        <div>Focus LOD: {chunkStats.focusLod}</div>
+        <div>FPS: {chunkStats.fps}</div>
+        <div>Loading chunks: {chunkStats.loading}</div>
+        <div>Loaded chunks: {chunkStats.loaded}</div>
+
+        <StatsSectionTitle>Loading breakdown</StatsSectionTitle>
+        <div>Terrain loading: {chunkStats.loadingBreakdown.terrain}</div>
+        <div>Voxel loading: {chunkStats.loadingBreakdown.voxels}</div>
+        <div>Fetch queue: {chunkStats.loadingBreakdown.fetchQueue}</div>
+        <div>Mesh queue: {chunkStats.loadingBreakdown.meshQueue}</div>
+
+        <StatsSectionTitle>Voxel health</StatsSectionTitle>
+        <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
+        <div>Failed regions: {chunkStats.voxelHealth.failed}</div>
+
+        <StatsSectionTitle>Loaded by LOD</StatsSectionTitle>
+        <div>
+          {([1, 2, 4, 8, 16, 32] as const)
+            .map((lod) => `L${lod}:${chunkStats.loadedByLod[lod] ?? 0}`)
+            .join("  ")}
+        </div>
+
+        <StatsSectionTitle>Estimated Memory</StatsSectionTitle>
+        <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
+        <div>
+          Terrain: {formatMemoryBytes(chunkStats.memoryBreakdown.terrain)}
+        </div>
+        <div>
+          Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}
+        </div>
+        <div>
+          Warm cache: {formatMemoryBytes(chunkStats.memoryBreakdown.cached)} (
+          {chunkStats.warmCacheCount})
+        </div>
+        <div>
+          Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}
+        </div>
+        <div>
+          JS heap:{" "}
+          {chunkStats.jsHeapBytes === null
+            ? "n/a"
+            : formatMemoryBytes(chunkStats.jsHeapBytes)}
+        </div>
+
+        <StatsSectionTitle>Memory by LOD</StatsSectionTitle>
+        <div>
+          {([1, 2, 4, 8, 16, 32] as const)
+            .map(
+              (lod) =>
+                `L${lod}:${formatMemoryBytes(chunkStats.memoryByLod[lod] ?? 0)}`,
+            )
+            .join("  ")}
+        </div>
+
+        <StatsSectionTitle>Voxel Benchmark</StatsSectionTitle>
+        <div>Samples: {chunkStats.voxelBenchmark.samples}</div>
+        <div>
+          Encoding: {chunkStats.voxelBenchmark.contentEncoding ?? "n/a"}
+        </div>
+        <div>
+          Avg fetch: {chunkStats.voxelBenchmark.avgFetchMs.toFixed(1)} ms
+        </div>
+        <div>
+          Avg decode: {chunkStats.voxelBenchmark.avgDecodeMs.toFixed(1)} ms
+        </div>
+        <div>
+          Avg total: {chunkStats.voxelBenchmark.avgTotalMs.toFixed(1)} ms
+        </div>
+        <div>
+          Avg transfer:{" "}
+          {formatNullableBytes(chunkStats.voxelBenchmark.avgTransferBytes)}
+        </div>
+        <div>
+          Avg encoded:{" "}
+          {formatNullableBytes(chunkStats.voxelBenchmark.avgEncodedBodyBytes)}
+        </div>
+        <div>
+          Avg decoded:{" "}
+          {formatNullableBytes(chunkStats.voxelBenchmark.avgDecodedBodyBytes)}
+        </div>
+        <div>
+          Avg worker input:{" "}
+          {formatNullableBytes(chunkStats.voxelBenchmark.avgRawBufferBytes)}
+        </div>
+      </div>
+    </OverlayPanel>
+  );
+}
+
+function InstructionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        color: uiTheme.accent.text,
+        fontWeight: 700,
+        marginBottom: 2,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function MapControlsPanel(args: {
+  view: "terrain" | "voxel";
+  activeGraphicsPresetId: string | null;
+  applyGraphicsPreset: (preset: GraphicsPreset) => void;
+  layerVisibility: LayerVisibility;
+  handleLayerVisibilityChange: (visibility: LayerVisibility) => void;
+}) {
+  const {
+    view,
+    activeGraphicsPresetId,
+    applyGraphicsPreset,
+    layerVisibility,
+    handleLayerVisibilityChange,
+  } = args;
+
+  return (
+    <OverlayPanel
+      title="Map Controls"
+      position={{ top: 12, left: 12 }}
+      minWidth={250}
+      maxWidth={350}
+      collapsible={true}
+      contentStyle={{ fontSize: 12, lineHeight: 1.55 }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {view === "voxel" && (
+          <div style={{ display: "grid", gap: 6 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <span style={{ color: uiTheme.accent.text, fontWeight: 700 }}>
+                Graphics Presets
+              </span>
+              <span style={{ color: uiTheme.text.muted, fontSize: 11 }}>
+                {activeGraphicsPresetId === null ? "Custom" : ""}
+              </span>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 6,
+              }}
+            >
+              {GRAPHICS_PRESETS.map((preset) => {
+                const active = preset.id === activeGraphicsPresetId;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyGraphicsPreset(preset)}
+                    title={preset.description}
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 6,
+                      border: active
+                        ? `1px solid ${uiTheme.accent.border}`
+                        : `1px solid ${uiTheme.panel.buttonBorderMuted}`,
+                      background: active
+                        ? uiTheme.accent.surfaceActive
+                        : uiTheme.panel.buttonBackgroundMuted,
+                      color: active
+                        ? uiTheme.text.onAccent
+                        : uiTheme.text.secondary,
+                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      textAlign: "center",
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        <LayerControls
+          visibility={layerVisibility}
+          onChange={handleLayerVisibilityChange}
+          view={view}
+        />
+        <div
+          style={{
+            fontSize: 12,
+            lineHeight: 1.55,
+            color: uiTheme.text.secondary,
+            display: "grid",
+            gap: 8,
+          }}
+        >
+          <div>
+            <InstructionTitle>Mouse</InstructionTitle>
+            <div>Left drag: pan</div>
+            <div>Right drag: orbit</div>
+            <div>Wheel / middle drag: zoom</div>
+          </div>
+          <div>
+            <InstructionTitle>Keyboard</InstructionTitle>
+            <div>W/A/S/D or arrows: move camera target</div>
+            <div>Q / E: rotate around center</div>
+            <div>Space: focus spawn</div>
+          </div>
+        </div>
+      </div>
+    </OverlayPanel>
+  );
+}
+
+function TopRightToolbar(args: {
+  shareCopied: boolean;
+  onShareLocation: () => void;
+  view: "terrain" | "voxel";
+  onViewChange: (next: "terrain" | "voxel") => void;
+}) {
+  const { shareCopied, onShareLocation, view, onViewChange } = args;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 12,
+        right: 12,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        gap: 10,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onShareLocation}
+        style={{
+          padding: "8px 14px",
+          border: "none",
+          borderRadius: 6,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+          background: shareCopied
+            ? uiTheme.accent.surfaceActive
+            : uiTheme.panel.buttonBackgroundMuted,
+          backdropFilter: "blur(2px)",
+          color: shareCopied ? uiTheme.text.onAccent : uiTheme.text.muted,
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: "pointer",
+          transition: "all 0.2s",
+        }}
+      >
+        {shareCopied ? "Copied" : "Copy Location"}
+      </button>
+      <ViewToggle view={view} onViewChange={onViewChange} />
+    </div>
+  );
+}
+
+function DebugParametersPanel(args: {
+  view: "terrain" | "voxel";
+  mapDebugSettings: MapDebugSettings;
+  setMapDebugSettings: React.Dispatch<React.SetStateAction<MapDebugSettings>>;
+  renderDistance: number;
+  setRenderDistance: React.Dispatch<React.SetStateAction<number>>;
+  voxelLod1MaxDist: number;
+  setVoxelLod1MaxDist: React.Dispatch<React.SetStateAction<number>>;
+  minRenderedVoxelLod: number;
+  setMinRenderedVoxelLod: React.Dispatch<React.SetStateAction<number>>;
+  layerVisibility: LayerVisibility;
+  setLayerVisibility: React.Dispatch<React.SetStateAction<LayerVisibility>>;
+}) {
+  const {
+    view,
+    mapDebugSettings,
+    setMapDebugSettings,
+    renderDistance,
+    setRenderDistance,
+    voxelLod1MaxDist,
+    setVoxelLod1MaxDist,
+    minRenderedVoxelLod,
+    setMinRenderedVoxelLod,
+    layerVisibility,
+    setLayerVisibility,
+  } = args;
+
+  return (
+    <OverlayPanel
+      title="Parameters"
+      position={{ top: 108, right: 12 }}
+      minWidth={280}
+      maxWidth={360}
+      collapsible={true}
+      defaultCollapsed={true}
+      contentStyle={{
+        fontSize: 12,
+        lineHeight: 1.55,
+        color: uiTheme.text.secondary,
+      }}
+    >
+      <Suspense fallback={<div>Loading parameters...</div>}>
+        <MapDebugParameters
+          view={view}
+          settings={mapDebugSettings}
+          onChange={setMapDebugSettings}
+          renderDistance={renderDistance}
+          onRenderDistanceChange={setRenderDistance}
+          voxelLod1MaxDist={voxelLod1MaxDist}
+          onVoxelLod1MaxDistChange={setVoxelLod1MaxDist}
+          minRenderedVoxelLod={minRenderedVoxelLod}
+          onMinRenderedVoxelLodChange={setMinRenderedVoxelLod}
+          chunkBorders={layerVisibility.chunkBorders}
+          voxelHeights={layerVisibility.voxelHeightLabels}
+          onChunkBordersChange={(active) =>
+            setLayerVisibility((prev) => ({
+              ...prev,
+              chunkBorders: active,
+            }))
+          }
+          onVoxelHeightsChange={(active) =>
+            setLayerVisibility((prev) => ({
+              ...prev,
+              voxelHeightLabels: active,
+            }))
+          }
+        />
+      </Suspense>
+    </OverlayPanel>
+  );
+}
+
+export function App() {
+  const initialMode = readInitialMode();
+  const initialCameraState = readInitialCameraState();
 
   const [view, setView] = useState<"terrain" | "voxel">(initialMode);
   const [flyToRequest, setFlyToRequest] = useState<{
@@ -414,41 +794,12 @@ export function App() {
         flyToRequest={flyToRequest}
       />
 
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          right: 12,
-          zIndex: 1000,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "flex-end",
-          gap: 10,
-        }}
-      >
-        <button
-          type="button"
-          onClick={handleShareLocation}
-          style={{
-            padding: "8px 14px",
-            border: "none",
-            borderRadius: 6,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
-            background: shareCopied
-              ? uiTheme.accent.surfaceActive
-              : uiTheme.panel.buttonBackgroundMuted,
-            backdropFilter: "blur(2px)",
-            color: shareCopied ? uiTheme.text.onAccent : uiTheme.text.muted,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: "pointer",
-            transition: "all 0.2s",
-          }}
-        >
-          {shareCopied ? "Copied" : "Copy Location"}
-        </button>
-        <ViewToggle view={view} onViewChange={handleViewChange} />
-      </div>
+      <TopRightToolbar
+        shareCopied={shareCopied}
+        onShareLocation={handleShareLocation}
+        view={view}
+        onViewChange={handleViewChange}
+      />
 
       <LoadingIndicator
         visible={layerVisibility.debug ? false : voxelLoading}
@@ -456,207 +807,20 @@ export function App() {
 
       {layerVisibility.debug && (
         <>
-          <OverlayPanel
-            title="Stats"
-            position={{ top: 54, right: 12 }}
-            minWidth={280}
-            maxWidth={360}
-            collapsible={true}
-            defaultCollapsed={true}
-            contentStyle={{
-              fontSize: 12,
-              lineHeight: 1.55,
-              color: uiTheme.text.secondary,
-            }}
-          >
-            <div style={{ display: "grid", gap: 6 }}>
-              <div>
-                Mode: {chunkStats.mode === "terrain" ? "Terrain" : "Voxel"}
-              </div>
-              <div>Focus LOD: {chunkStats.focusLod}</div>
-              <div>FPS: {chunkStats.fps}</div>
-              <div>Loading chunks: {chunkStats.loading}</div>
-              <div>Loaded chunks: {chunkStats.loaded}</div>
-
-              <div
-                style={{
-                  marginTop: 4,
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                }}
-              >
-                Loading breakdown
-              </div>
-              <div>Terrain loading: {chunkStats.loadingBreakdown.terrain}</div>
-              <div>Voxel loading: {chunkStats.loadingBreakdown.voxels}</div>
-              <div>Fetch queue: {chunkStats.loadingBreakdown.fetchQueue}</div>
-              <div>Mesh queue: {chunkStats.loadingBreakdown.meshQueue}</div>
-
-              <div
-                style={{
-                  marginTop: 4,
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                }}
-              >
-                Voxel health
-              </div>
-              <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
-              <div>Failed regions: {chunkStats.voxelHealth.failed}</div>
-
-              <div
-                style={{
-                  marginTop: 4,
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                }}
-              >
-                Loaded by LOD
-              </div>
-              <div>
-                {([1, 2, 4, 8, 16, 32] as const)
-                  .map((lod) => `L${lod}:${chunkStats.loadedByLod[lod] ?? 0}`)
-                  .join("  ")}
-              </div>
-
-              <div
-                style={{
-                  marginTop: 4,
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                }}
-              >
-                Estimated Memory
-              </div>
-              <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
-              <div>
-                Terrain: {formatMemoryBytes(chunkStats.memoryBreakdown.terrain)}
-              </div>
-              <div>
-                Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}
-              </div>
-              <div>
-                Warm cache:{" "}
-                {formatMemoryBytes(chunkStats.memoryBreakdown.cached)} (
-                {chunkStats.warmCacheCount})
-              </div>
-              <div>
-                Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}
-              </div>
-              <div>
-                JS heap:{" "}
-                {chunkStats.jsHeapBytes === null
-                  ? "n/a"
-                  : formatMemoryBytes(chunkStats.jsHeapBytes)}
-              </div>
-
-              <div
-                style={{
-                  marginTop: 4,
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                }}
-              >
-                Memory by LOD
-              </div>
-              <div>
-                {([1, 2, 4, 8, 16, 32] as const)
-                  .map(
-                    (lod) =>
-                      `L${lod}:${formatMemoryBytes(chunkStats.memoryByLod[lod] ?? 0)}`,
-                  )
-                  .join("  ")}
-              </div>
-
-              <div
-                style={{
-                  marginTop: 4,
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                }}
-              >
-                Voxel Benchmark
-              </div>
-              <div>Samples: {chunkStats.voxelBenchmark.samples}</div>
-              <div>
-                Encoding: {chunkStats.voxelBenchmark.contentEncoding ?? "n/a"}
-              </div>
-              <div>
-                Avg fetch: {chunkStats.voxelBenchmark.avgFetchMs.toFixed(1)} ms
-              </div>
-              <div>
-                Avg decode: {chunkStats.voxelBenchmark.avgDecodeMs.toFixed(1)}{" "}
-                ms
-              </div>
-              <div>
-                Avg total: {chunkStats.voxelBenchmark.avgTotalMs.toFixed(1)} ms
-              </div>
-              <div>
-                Avg transfer:{" "}
-                {formatNullableBytes(
-                  chunkStats.voxelBenchmark.avgTransferBytes,
-                )}
-              </div>
-              <div>
-                Avg encoded:{" "}
-                {formatNullableBytes(
-                  chunkStats.voxelBenchmark.avgEncodedBodyBytes,
-                )}
-              </div>
-              <div>
-                Avg decoded:{" "}
-                {formatNullableBytes(
-                  chunkStats.voxelBenchmark.avgDecodedBodyBytes,
-                )}
-              </div>
-              <div>
-                Avg worker input:{" "}
-                {formatNullableBytes(
-                  chunkStats.voxelBenchmark.avgRawBufferBytes,
-                )}
-              </div>
-            </div>
-          </OverlayPanel>
-
-          <OverlayPanel
-            title="Parameters"
-            position={{ top: 108, right: 12 }}
-            minWidth={280}
-            maxWidth={360}
-            collapsible={true}
-            defaultCollapsed={true}
-            contentStyle={{
-              fontSize: 12,
-              lineHeight: 1.55,
-              color: uiTheme.text.secondary,
-            }}
-          >
-            <MapDebugParameters
-              view={view}
-              settings={mapDebugSettings}
-              onChange={setMapDebugSettings}
-              renderDistance={renderDistance}
-              onRenderDistanceChange={setRenderDistance}
-              voxelLod1MaxDist={voxelLod1MaxDist}
-              onVoxelLod1MaxDistChange={setVoxelLod1MaxDist}
-              minRenderedVoxelLod={minRenderedVoxelLod}
-              onMinRenderedVoxelLodChange={setMinRenderedVoxelLod}
-              chunkBorders={layerVisibility.chunkBorders}
-              voxelHeights={layerVisibility.voxelHeightLabels}
-              onChunkBordersChange={(active) =>
-                setLayerVisibility((prev) => ({
-                  ...prev,
-                  chunkBorders: active,
-                }))
-              }
-              onVoxelHeightsChange={(active) =>
-                setLayerVisibility((prev) => ({
-                  ...prev,
-                  voxelHeightLabels: active,
-                }))
-              }
-            />
-          </OverlayPanel>
+          <DebugStatsPanel chunkStats={chunkStats} />
+          <DebugParametersPanel
+            view={view}
+            mapDebugSettings={mapDebugSettings}
+            setMapDebugSettings={setMapDebugSettings}
+            renderDistance={renderDistance}
+            setRenderDistance={setRenderDistance}
+            voxelLod1MaxDist={voxelLod1MaxDist}
+            setVoxelLod1MaxDist={setVoxelLod1MaxDist}
+            minRenderedVoxelLod={minRenderedVoxelLod}
+            setMinRenderedVoxelLod={setMinRenderedVoxelLod}
+            layerVisibility={layerVisibility}
+            setLayerVisibility={setLayerVisibility}
+          />
         </>
       )}
 
@@ -683,117 +847,13 @@ export function App() {
         }}
       />
 
-      <OverlayPanel
-        title="Map Controls"
-        position={{ top: 12, left: 12 }}
-        minWidth={250}
-        maxWidth={350}
-        collapsible={true}
-        contentStyle={{ fontSize: 12, lineHeight: 1.55 }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {view === "voxel" && (
-            <div style={{ display: "grid", gap: 6 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <span style={{ color: uiTheme.accent.text, fontWeight: 700 }}>
-                  Graphics Presets
-                </span>
-                <span style={{ color: uiTheme.text.muted, fontSize: 11 }}>
-                  {activeGraphicsPresetId === null ? "Custom" : ""}
-                </span>
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: 6,
-                }}
-              >
-                {GRAPHICS_PRESETS.map((preset) => {
-                  const active = preset.id === activeGraphicsPresetId;
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => applyGraphicsPreset(preset)}
-                      title={preset.description}
-                      style={{
-                        padding: "8px 10px",
-                        borderRadius: 6,
-                        border: active
-                          ? `1px solid ${uiTheme.accent.border}`
-                          : `1px solid ${uiTheme.panel.buttonBorderMuted}`,
-                        background: active
-                          ? uiTheme.accent.surfaceActive
-                          : uiTheme.panel.buttonBackgroundMuted,
-                        color: active
-                          ? uiTheme.text.onAccent
-                          : uiTheme.text.secondary,
-                        cursor: "pointer",
-                        fontSize: 11,
-                        fontWeight: 700,
-                        textAlign: "center",
-                      }}
-                    >
-                      {preset.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          <LayerControls
-            visibility={layerVisibility}
-            onChange={handleLayerVisibilityChange}
-            view={view}
-          />
-          <div
-            style={{
-              fontSize: 12,
-              lineHeight: 1.55,
-              color: uiTheme.text.secondary,
-              display: "grid",
-              gap: 8,
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                  marginBottom: 2,
-                }}
-              >
-                Mouse
-              </div>
-              <div>Left drag: pan</div>
-              <div>Right drag: orbit</div>
-              <div>Wheel / middle drag: zoom</div>
-            </div>
-            <div>
-              <div
-                style={{
-                  color: uiTheme.accent.text,
-                  fontWeight: 700,
-                  marginBottom: 2,
-                }}
-              >
-                Keyboard
-              </div>
-              <div>W/A/S/D or arrows: move camera target</div>
-              <div>Q / E: rotate around center</div>
-              <div>Space: focus spawn</div>
-            </div>
-          </div>
-        </div>
-      </OverlayPanel>
+      <MapControlsPanel
+        view={view}
+        activeGraphicsPresetId={activeGraphicsPresetId}
+        applyGraphicsPreset={applyGraphicsPreset}
+        layerVisibility={layerVisibility}
+        handleLayerVisibilityChange={handleLayerVisibilityChange}
+      />
 
       <style>{`@keyframes cubyz-half-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 

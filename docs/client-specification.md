@@ -26,11 +26,12 @@ src/client/
 ## Entry Points
 
 - `src/client/main.tsx`: boots React and creates the shared React Query client
-- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, debug state, and overlay placement
+- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, debug state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes smaller local helpers for the toolbar, stats panel, controls panel, and debug-parameters panel around the main scene.
 
 ## World-View Feature
 
 - `features/world-view/components`: scene UI, info panel, controls, mode toggle, and debug parameters
+- `MapDebugParameters.tsx` is section-driven and reuses a shared parameter-row chrome for sliders and resets
 - `features/world-view/hooks`: world data, player data, and WebSocket hooks
 - `features/world-view/lib`: scene bootstrap, camera behavior, terrain loading, voxel scheduling, labels, markers, and feature types
 - `features/world-view/workers`: `voxel-mesh.worker.ts` decodes mesh data off the main thread
@@ -41,6 +42,7 @@ src/client/
 - React handles composition, data fetching, overlays, and socket subscription
 - Three.js handles the renderer, scene, camera, controls, meshes, labels, markers, and animation loop
 - `World3DView.tsx` is the boundary between those two layers
+- `App.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
 
 ## Data Flow
 
@@ -50,6 +52,7 @@ src/client/
 2. `App` loads world data, players, and the WebSocket connection.
 3. `World3DView` initializes once world data is available.
 4. Terrain and voxel resources load from camera position and the current mode.
+5. Player marker model/texture assets load only once the player layer is visible or player data is present.
 
 ### Terrain Mode
 
@@ -69,7 +72,7 @@ src/client/
 
 ## Live Updates
 
-1. `useWebSocket` connects to `/ws`.
+1. `useWebSocket` connects to `/ws` and exposes the last server update time plus typed subscriptions.
 2. The server broadcasts `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`.
 3. `App` invalidates query-backed data and falls back to a 30-second refresh for players if no socket event arrives.
 4. `World3DView` refreshes loaded scene data in place, and player updates rebuild the marker layer without recreating the full scene.
@@ -77,6 +80,7 @@ src/client/
 ## Shared UI
 
 - `OverlayPanel.tsx` provides draggable, collapsible, snapping overlay panels with shared styling.
+- Drag listeners are only attached while a panel is actively being moved.
 
 ## Design Principles
 
@@ -85,3 +89,4 @@ src/client/
 - prefer direct imports over barrels
 - use workers and bounded queues for heavy voxel processing
 - avoid React re-renders for high-frequency cursor and frame-loop updates
+- avoid publishing React state from the render loop unless the value actually changed
