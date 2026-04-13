@@ -733,6 +733,7 @@ export function World3DView({
         lodUnloadHysteresis: debugSettingsRef.current.lodUnloadHysteresis,
         voxelLodHysteresisRatio:
           debugSettingsRef.current.voxelLodHysteresisRatio,
+        voxelAoIntensity: debugSettingsRef.current.voxelAoIntensity,
         voxelUnloadGraceMs: debugSettingsRef.current.voxelUnloadGraceMs,
       },
       pendingVoxelDetailRequestsRef,

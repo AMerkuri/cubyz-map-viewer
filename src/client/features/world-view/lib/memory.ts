@@ -22,6 +22,7 @@ export function estimateLoadedVoxelTileBytes(tile: LoadedVoxelTile): number {
     estimateGeometryBytes(tile.borderLines.geometry);
   for (const sm of tile.subMeshes) {
     total += estimateGeometryBytes(sm.mesh.geometry);
+    total += sm.baseColors.byteLength + sm.faceAo.byteLength;
   }
   return total;
 }

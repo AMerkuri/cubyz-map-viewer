@@ -307,6 +307,7 @@ export function updateVoxelLod(args: {
     voxelBehindCameraMaxMultiplier: number;
     lodUnloadHysteresis: number;
     voxelLodHysteresisRatio: number;
+    voxelAoIntensity: number;
     voxelUnloadGraceMs: number;
   };
   pendingVoxelDetailRequestsRef: {

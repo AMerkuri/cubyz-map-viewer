@@ -23,6 +23,7 @@ export type GraphicsPreset = {
       | "terrainMeshBuildBudgetMs"
       | "maxTerrainMeshesPerFrame"
       | "maxConcurrentVoxelFetches"
+      | "voxelAoIntensity"
       | "terrainLodHysteresisRatio"
       | "voxelDetailRequestDebounceMs"
       | "voxelUnloadGraceMs"
@@ -50,6 +51,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       terrainMeshBuildBudgetMs: 8,
       maxTerrainMeshesPerFrame: 4,
       maxConcurrentVoxelFetches: 20,
+      voxelAoIntensity: 1,
       terrainLodHysteresisRatio: 0.08,
       voxelDetailRequestDebounceMs: 0,
       voxelUnloadGraceMs: 2000,
@@ -73,6 +75,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       terrainMeshBuildBudgetMs: 6,
       maxTerrainMeshesPerFrame: 3,
       maxConcurrentVoxelFetches: 12,
+      voxelAoIntensity: 1,
       terrainLodHysteresisRatio: 0.1,
       voxelDetailRequestDebounceMs: 80,
       voxelUnloadGraceMs: 1200,
@@ -96,6 +99,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       terrainMeshBuildBudgetMs: 4,
       maxTerrainMeshesPerFrame: 2,
       maxConcurrentVoxelFetches: 8,
+      voxelAoIntensity: 1,
       terrainLodHysteresisRatio: 0.12,
       voxelDetailRequestDebounceMs: 180,
       voxelUnloadGraceMs: 750,
@@ -120,6 +124,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       terrainMeshBuildBudgetMs: 3,
       maxTerrainMeshesPerFrame: 2,
       maxConcurrentVoxelFetches: 6,
+      voxelAoIntensity: 1,
       terrainLodHysteresisRatio: 0.16,
       voxelDetailRequestDebounceMs: 320,
       voxelUnloadGraceMs: 400,
@@ -143,6 +148,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       terrainMeshBuildBudgetMs: 2,
       maxTerrainMeshesPerFrame: 1,
       maxConcurrentVoxelFetches: 4,
+      voxelAoIntensity: 1,
       terrainLodHysteresisRatio: 0.2,
       voxelDetailRequestDebounceMs: 450,
       voxelUnloadGraceMs: 200,

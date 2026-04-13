@@ -117,6 +117,19 @@ export function MapDebugParameters({
               defaultValue={LOD_LEVELS[0]}
               onChange={onMinRenderedVoxelLodChange}
             />
+            <SliderRow
+              label="AO Intensity"
+              description="Scales seam-aware top-face voxel ambient occlusion for L1 and L2 after visible LOD coverage is resolved."
+              value={settings.voxelAoIntensity}
+              displayValue={settings.voxelAoIntensity.toFixed(2)}
+              min={0}
+              max={1.5}
+              step={0.05}
+              defaultValue={1}
+              onChange={(value) =>
+                onChange({ ...settings, voxelAoIntensity: value })
+              }
+            />
           </>
         ),
       });

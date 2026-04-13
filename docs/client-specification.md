@@ -68,8 +68,8 @@ src/client/
 2. `useWorldData` fetches `/api/world/chunk-index`.
 3. The voxel runtime selects regions based on camera focus, distance, render distance, minimum voxel LOD, and preset tuning.
 4. `/api/voxels/:lod/:regionX/:regionY` returns compressed binary payloads.
-5. The worker converts mesh buffers into typed arrays.
-6. The main thread uploads the data to Three.js geometries within a frame budget.
+5. The worker converts mesh buffers into typed arrays, bakes voxel face shading plus a wall depth gradient into base vertex colors, and keeps raw per-face AO separate from those base colors.
+6. The main thread uploads the data to Three.js geometries within a frame budget and applies final seam-aware AO after voxel LOD visibility and parent/child fallback coverage are resolved: top-face AO runs on `L1` and `L2`, while side faces currently rely on the baked face tint and depth cue only; the Parameters panel exposes a runtime AO intensity control for tuning the top-face effect.
 7. Cursor hover prefers voxel meshes and falls back to the terrain underlay when enabled, converting the underlay hit back to the terrain's real world height.
 
 ## Live Updates

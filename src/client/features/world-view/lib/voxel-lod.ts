@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { ChunkIndexEntry } from "../hooks/useWorldData.js";
 
 import { LOD_LEVELS } from "./constants.js";
+import { VOXEL_TOP_AO } from "./daylight.js";
 import {
   getLodForDistanceWithHysteresis,
   getUnloadDistForLod,
@@ -17,7 +18,12 @@ import {
   regionWorldSize,
   voxelQuadrantBit,
 } from "./utils.js";
-import { getImmediateFinerVoxelChildren, voxelTileKey } from "./voxel-index.js";
+import {
+  getImmediateFinerVoxelChildren,
+  getVoxelParentRegion,
+  voxelTileKey,
+  voxelTileKeyAtWorld,
+} from "./voxel-index.js";
 import { compareVoxelFetchRequests } from "./voxel-requests.js";
 
 export function addVisibleQuadrant(
@@ -190,6 +196,7 @@ export function runVoxelLodSelection(args: {
     voxelBehindCameraMaxMultiplier: number;
     lodUnloadHysteresis: number;
     voxelLodHysteresisRatio: number;
+    voxelAoIntensity: number;
     voxelUnloadGraceMs: number;
   };
   getVoxelRefreshVersion: (key: string) => number;
@@ -435,6 +442,16 @@ export function runVoxelLodSelection(args: {
     for (const sm of tile.subMeshes) {
       const smVisible =
         (quadrantMask & voxelQuadrantBit(sm.quadrantIndex)) !== 0;
+      if (smVisible) {
+        applyTopAoToSubMesh(
+          tile,
+          sm,
+          debugSettings.voxelAoIntensity,
+          visibleQuadrantMasks,
+          loadedVoxels,
+          requestedVoxelRequests,
+        );
+      }
       if (sm.mesh.visible !== smVisible) {
         sm.mesh.visible = smVisible;
         debugLabelsDirty = true;
@@ -488,4 +505,200 @@ export function runVoxelLodSelection(args: {
     requestedVoxelRequests,
     debugLabelsDirty,
   };
+}
+
+function applyTopAoToSubMesh(
+  tile: LoadedVoxelTile,
+  subMesh: LoadedVoxelTile["subMeshes"][number],
+  aoIntensity: number,
+  visibleQuadrantMasks: Map<string, number>,
+  loadedVoxels: Map<string, LoadedVoxelTile>,
+  requestedVoxelRequests: Map<string, PendingVoxelFetchRequest>,
+): void {
+  const topAoEnabled = VOXEL_TOP_AO.enabledLods.includes(
+    tile.lod as (typeof VOXEL_TOP_AO.enabledLods)[number],
+  );
+  if (!topAoEnabled || aoIntensity <= 0) {
+    restoreSubMeshBaseColors(subMesh);
+    return;
+  }
+
+  const geometry = subMesh.mesh.geometry;
+  const colorAttr = geometry.getAttribute("color");
+  const positionAttr = geometry.getAttribute("position");
+  const normalAttr = geometry.getAttribute("normal");
+  if (!colorAttr || !positionAttr || !normalAttr) return;
+
+  const boundaryState = getAoBoundaryState(
+    tile,
+    subMesh.quadrantIndex,
+    visibleQuadrantMasks,
+    loadedVoxels,
+    requestedVoxelRequests,
+  );
+  const intensityKey = Math.round(aoIntensity * 100);
+  const signature = `${boundaryState.west}${boundaryState.east}${boundaryState.south}${boundaryState.north}:${intensityKey}`;
+  if (subMesh.aoBoundarySignature === signature) {
+    return;
+  }
+
+  const colors = colorAttr.array as Float32Array;
+  colors.set(subMesh.baseColors);
+  const regionSize = regionWorldSize(tile.lod);
+  const blendWorld = VOXEL_TOP_AO.seamBlendCells * tile.voxelSize;
+
+  for (let i = 0; i < positionAttr.count; i++) {
+    const normalZ = normalAttr.getZ(i);
+    if (normalZ < 0.5) continue;
+    const aoLevel = subMesh.faceAo[i] ?? 0;
+    if (aoLevel <= 0) continue;
+
+    const worldX = positionAttr.getX(i);
+    const worldY = positionAttr.getY(i);
+    const localX = worldX - tile.regionX;
+    const localY = worldY - tile.regionY;
+    const seamLift = getAoSeamLift(
+      localX,
+      localY,
+      regionSize,
+      blendWorld,
+      boundaryState,
+    );
+    const minShade = THREE.MathUtils.lerp(
+      VOXEL_TOP_AO.minShade,
+      VOXEL_TOP_AO.seamMinShade,
+      seamLift,
+    );
+    const shade = THREE.MathUtils.lerp(
+      1,
+      minShade,
+      Math.min(1, (aoLevel / 3) * aoIntensity),
+    );
+    colors[i * 3] *= shade;
+    colors[i * 3 + 1] *= shade;
+    colors[i * 3 + 2] *= shade;
+  }
+
+  colorAttr.needsUpdate = true;
+  subMesh.aoBoundarySignature = signature;
+}
+
+function restoreSubMeshBaseColors(
+  subMesh: LoadedVoxelTile["subMeshes"][number],
+): void {
+  if (subMesh.aoBoundarySignature === "") return;
+  const colorAttr = subMesh.mesh.geometry.getAttribute("color");
+  if (!colorAttr) return;
+  (colorAttr.array as Float32Array).set(subMesh.baseColors);
+  colorAttr.needsUpdate = true;
+  subMesh.aoBoundarySignature = "";
+}
+
+function getAoBoundaryState(
+  tile: LoadedVoxelTile,
+  quadrantIndex: number,
+  visibleQuadrantMasks: Map<string, number>,
+  loadedVoxels: Map<string, LoadedVoxelTile>,
+  requestedVoxelRequests: Map<string, PendingVoxelFetchRequest>,
+): { west: number; east: number; south: number; north: number } {
+  const regionSize = regionWorldSize(tile.lod);
+  const halfSize = regionSize / 2;
+  const offsetX = quadrantIndex % 2 === 1 ? halfSize : 0;
+  const offsetY = quadrantIndex >= 2 ? halfSize : 0;
+
+  return {
+    west: getAoEdgeState(
+      tile,
+      visibleQuadrantMasks,
+      loadedVoxels,
+      requestedVoxelRequests,
+      tile.regionX + offsetX - 1,
+      tile.regionY + offsetY,
+    ),
+    east: getAoEdgeState(
+      tile,
+      visibleQuadrantMasks,
+      loadedVoxels,
+      requestedVoxelRequests,
+      tile.regionX + offsetX + halfSize,
+      tile.regionY + offsetY,
+    ),
+    south: getAoEdgeState(
+      tile,
+      visibleQuadrantMasks,
+      loadedVoxels,
+      requestedVoxelRequests,
+      tile.regionX + offsetX,
+      tile.regionY + offsetY - 1,
+    ),
+    north: getAoEdgeState(
+      tile,
+      visibleQuadrantMasks,
+      loadedVoxels,
+      requestedVoxelRequests,
+      tile.regionX + offsetX,
+      tile.regionY + offsetY + halfSize,
+    ),
+  };
+}
+
+function getAoEdgeState(
+  tile: LoadedVoxelTile,
+  visibleQuadrantMasks: Map<string, number>,
+  loadedVoxels: Map<string, LoadedVoxelTile>,
+  requestedVoxelRequests: Map<string, PendingVoxelFetchRequest>,
+  sampleX: number,
+  sampleY: number,
+): number {
+  const sameKey = voxelTileKeyAtWorld(tile.lod, sampleX, sampleY);
+  const sameMask = visibleQuadrantMasks.get(sameKey) ?? 0;
+  if (sameMask !== 0 && loadedVoxels.has(sameKey)) {
+    return 0;
+  }
+
+  const parent = getVoxelParentRegion(tile.lod, tile.regionX, tile.regionY);
+  if (parent) {
+    const parentKey = voxelTileKeyAtWorld(parent.lod, sampleX, sampleY);
+    if ((visibleQuadrantMasks.get(parentKey) ?? 0) !== 0) {
+      return 1;
+    }
+  }
+
+  const childKey =
+    tile.lod > 1 ? voxelTileKeyAtWorld(tile.lod / 2, sampleX, sampleY) : null;
+  if (childKey && (visibleQuadrantMasks.get(childKey) ?? 0) !== 0) {
+    return 1;
+  }
+
+  return requestedVoxelRequests.has(sameKey) ? 1 : 0;
+}
+
+function getAoSeamLift(
+  localX: number,
+  localY: number,
+  regionSize: number,
+  blendWorld: number,
+  boundaryState: { west: number; east: number; south: number; north: number },
+): number {
+  let lift = 0;
+
+  if (boundaryState.west !== 0) {
+    lift = Math.max(lift, edgeBlend(localX, blendWorld));
+  }
+  if (boundaryState.east !== 0) {
+    lift = Math.max(lift, edgeBlend(regionSize - localX, blendWorld));
+  }
+  if (boundaryState.south !== 0) {
+    lift = Math.max(lift, edgeBlend(localY, blendWorld));
+  }
+  if (boundaryState.north !== 0) {
+    lift = Math.max(lift, edgeBlend(regionSize - localY, blendWorld));
+  }
+
+  return lift;
+}
+
+function edgeBlend(distanceToEdge: number, blendWorld: number): number {
+  if (blendWorld <= 0) return 1;
+  return 1 - THREE.MathUtils.clamp(distanceToEdge / blendWorld, 0, 1);
 }

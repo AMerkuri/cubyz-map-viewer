@@ -1,5 +1,6 @@
 import {
   DAYLIGHT_MAIN_SUN_POSITION,
+  VOXEL_DEPTH_CUE,
   VOXEL_FACE_SHADING,
 } from "../lib/daylight.js";
 import type { WorkerIn, WorkerOut } from "../lib/types.js";
@@ -21,6 +22,8 @@ const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
  *     i32 worldX, i32 worldY, i32 worldZBase, u32 quadCount, u32 voxelSize
  *   Per-quad color section (quadCount × 3 bytes, padded to 4-byte alignment):
  *     u8 r, u8 g, u8 b per quad
+ *   Per-quad top-face AO section (quadCount bytes, padded to 4-byte alignment):
+ *     u8 packedAo per quad: 2 bits per corner for z+ faces, 0 for others
  *   Per-quad winding section (quadCount bytes, padded to 4-byte alignment):
  *     u8 dir per quad: 1 = standard winding, 0 = flipped winding
  *   Per-vertex position section (quadCount × 4 × 4 bytes):
@@ -42,7 +45,8 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
       transferables.push(
         quadrant.positions.buffer,
         quadrant.normals.buffer,
-        quadrant.colors.buffer,
+        quadrant.baseColors.buffer,
+        quadrant.faceAo.buffer,
         quadrant.indices.buffer,
       );
     }
@@ -95,7 +99,8 @@ function buildMeshArrays(buf: ArrayBuffer): {
     quadrantIndex: number;
     positions: Float32Array;
     normals: Float32Array;
-    colors: Float32Array;
+    baseColors: Float32Array;
+    faceAo: Uint8Array;
     indices: Uint32Array;
   }[];
   chunkCoverage: number;
@@ -117,8 +122,10 @@ function buildMeshArrays(buf: ArrayBuffer): {
 
   // Color section: 3 bytes per quad, padded to 4-byte boundary
   const colorPadded = (quadCount * 3 + 3) & ~3;
+  const aoPadded = (quadCount + 3) & ~3;
   const directionPadded = (quadCount + 3) & ~3;
-  const expectedSize = 20 + colorPadded + directionPadded + vertexCount * 4;
+  const expectedSize =
+    20 + colorPadded + aoPadded + directionPadded + vertexCount * 4;
   if (buf.byteLength < expectedSize) throw new Error("buffer truncated");
 
   // The server appends a u32 LE chunk-coverage bitmask after the mesh data.
@@ -130,8 +137,9 @@ function buildMeshArrays(buf: ArrayBuffer): {
       ? view.getUint32(expectedSize, true)
       : 0xffff;
 
-  let directionOff = 20 + colorPadded;
-  const positionOffset = 20 + colorPadded + directionPadded;
+  const aoOffset = 20 + colorPadded;
+  let directionOff = 20 + colorPadded + aoPadded;
+  const positionOffset = 20 + colorPadded + aoPadded + directionPadded;
 
   // --- Positions ---
   const positions = new Float32Array(vertexCount * 3);
@@ -159,6 +167,12 @@ function buildMeshArrays(buf: ArrayBuffer): {
     quadColors[qi * 3] = view.getUint8(colorOff++) / 255;
     quadColors[qi * 3 + 1] = view.getUint8(colorOff++) / 255;
     quadColors[qi * 3 + 2] = view.getUint8(colorOff++) / 255;
+  }
+
+  const quadAo = new Uint8Array(quadCount);
+  let aoOff = aoOffset;
+  for (let qi = 0; qi < quadCount; qi++) {
+    quadAo[qi] = view.getUint8(aoOff++);
   }
 
   // --- Indices ---
@@ -232,23 +246,33 @@ function buildMeshArrays(buf: ArrayBuffer): {
     }
   }
 
-  // --- Colors (per-quad → per-vertex, with a small sun-aware face tint) ---
+  // --- Colors (per-quad -> per-vertex, with baked depth cues) ---
   // Daytime lighting alone can still leave voxel side faces too close to top-face
-  // brightness, so preserve stronger blocky contrast with a modest baked tint.
-  const colors = new Float32Array(vertexCount * 3);
+  // brightness, so preserve stronger blocky contrast with a modest baked tint
+  // and a local top-to-bottom wall gradient on vertical faces.
+  const baseColors = new Float32Array(vertexCount * 3);
+  const faceAo = new Uint8Array(vertexCount);
+  const depthCueRange = Math.max(maxZ - minZ, voxelSize);
   for (let qi = 0; qi < quadCount; qi++) {
     const base = qi * 4;
     const nx = normals[base * 3];
     const ny = normals[base * 3 + 1];
     const nz = normals[base * 3 + 2];
     const tint = getVoxelFaceTint(nx, ny, nz);
-    const r = clamp01(quadColors[qi * 3] * tint.r);
-    const g = clamp01(quadColors[qi * 3 + 1] * tint.g);
-    const b = clamp01(quadColors[qi * 3 + 2] * tint.b);
     for (let v = 0; v < 4; v++) {
-      colors[(base + v) * 3] = r;
-      colors[(base + v) * 3 + 1] = g;
-      colors[(base + v) * 3 + 2] = b;
+      const vertexIndex = base + v;
+      const vertexZ = positions[vertexIndex * 3 + 2];
+      const depthCue = getVoxelDepthCue(nz, vertexZ, minZ, depthCueRange);
+      baseColors[vertexIndex * 3] = clamp01(
+        quadColors[qi * 3] * tint.r * depthCue,
+      );
+      baseColors[vertexIndex * 3 + 1] = clamp01(
+        quadColors[qi * 3 + 1] * tint.g * depthCue,
+      );
+      baseColors[vertexIndex * 3 + 2] = clamp01(
+        quadColors[qi * 3 + 2] * tint.b * depthCue,
+      );
+      faceAo[vertexIndex] = Math.min(3, (quadAo[qi] >> (v * 2)) & 0b11);
     }
   }
 
@@ -338,7 +362,8 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const indexMap = new Map<number, number>();
     const localPos: number[] = [];
     const localNorm: number[] = [];
-    const localCol: number[] = [];
+    const localBaseCol: number[] = [];
+    const localFaceAo: number[] = [];
     const localIdx: number[] = [];
 
     for (let i = 0; i < tri.length; i++) {
@@ -358,11 +383,12 @@ function buildMeshArrays(buf: ArrayBuffer): {
           normals[src * 3 + 1],
           normals[src * 3 + 2],
         );
-        localCol.push(
-          colors[src * 3],
-          colors[src * 3 + 1],
-          colors[src * 3 + 2],
+        localBaseCol.push(
+          baseColors[src * 3],
+          baseColors[src * 3 + 1],
+          baseColors[src * 3 + 2],
         );
+        localFaceAo.push(faceAo[src]);
       }
       localIdx.push(dst);
     }
@@ -371,7 +397,8 @@ function buildMeshArrays(buf: ArrayBuffer): {
       quadrantIndex,
       positions: new Float32Array(localPos),
       normals: new Float32Array(localNorm),
-      colors: new Float32Array(localCol),
+      baseColors: new Float32Array(localBaseCol),
+      faceAo: new Uint8Array(localFaceAo),
       indices: new Uint32Array(localIdx),
     };
   });
@@ -416,6 +443,20 @@ function getVoxelFaceTint(
   return { r: shade, g: shade, b: shade };
 }
 
+function getVoxelDepthCue(
+  nz: number,
+  vertexZ: number,
+  minZ: number,
+  depthCueRange: number,
+): number {
+  if (Math.abs(nz) >= 0.5 || depthCueRange <= 0) {
+    return 1;
+  }
+
+  const t = smoothstep(clamp01((vertexZ - minZ) / depthCueRange));
+  return lerp(VOXEL_DEPTH_CUE.sideBottom, VOXEL_DEPTH_CUE.sideTop, t);
+}
+
 function normalizeDirection(vector: { x: number; y: number; z: number }): {
   x: number;
   y: number;
@@ -435,4 +476,12 @@ function normalizeDirection(vector: { x: number; y: number; z: number }): {
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function lerp(start: number, end: number, t: number): number {
+  return start + (end - start) * t;
+}
+
+function smoothstep(t: number): number {
+  return t * t * (3 - 2 * t);
 }

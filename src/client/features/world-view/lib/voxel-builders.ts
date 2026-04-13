@@ -56,6 +56,9 @@ export function buildVoxelQuadrantSubMeshes(
   subMeshes: {
     quadrantIndex: number;
     mesh: THREE.Mesh;
+    baseColors: Float32Array;
+    faceAo: Uint8Array;
+    aoBoundarySignature: string;
   }[];
   minZ: number;
   maxZ: number;
@@ -63,6 +66,9 @@ export function buildVoxelQuadrantSubMeshes(
   const subMeshes: {
     quadrantIndex: number;
     mesh: THREE.Mesh;
+    baseColors: Float32Array;
+    faceAo: Uint8Array;
+    aoBoundarySignature: string;
   }[] = [];
 
   for (const quadrant of item.quadrantMeshes) {
@@ -73,7 +79,10 @@ export function buildVoxelQuadrantSubMeshes(
       new THREE.BufferAttribute(quadrant.positions, 3),
     );
     geom.setAttribute("normal", new THREE.BufferAttribute(quadrant.normals, 3));
-    geom.setAttribute("color", new THREE.BufferAttribute(quadrant.colors, 3));
+    geom.setAttribute(
+      "color",
+      new THREE.BufferAttribute(quadrant.baseColors.slice(), 3),
+    );
     geom.setIndex(new THREE.BufferAttribute(quadrant.indices, 1));
     geom.computeBoundingBox();
     geom.computeBoundingSphere();
@@ -82,6 +91,9 @@ export function buildVoxelQuadrantSubMeshes(
     subMeshes.push({
       quadrantIndex: quadrant.quadrantIndex,
       mesh,
+      baseColors: quadrant.baseColors,
+      faceAo: quadrant.faceAo,
+      aoBoundarySignature: "",
     });
   }
 

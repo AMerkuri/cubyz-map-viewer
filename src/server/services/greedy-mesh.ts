@@ -24,6 +24,9 @@
  * Per-quad colors  (3 × quadCount bytes, padded to 4-byte alignment)
  *   u8 r, u8 g, u8 b   — one entry per quad (client expands to 4 vertices)
  *
+ * Per-quad face AO (quadCount bytes, padded to 4-byte alignment)
+ *   u8 packedAo — 2 bits per corner, 0 for faces without AO
+ *
  * Per-quad winding flags (quadCount bytes, padded to 4-byte alignment)
  *   u8 dir   — 1 for standard winding, 0 for flipped winding
  *
@@ -61,6 +64,7 @@ export interface BinaryQuad {
   v3z: number;
   typ: number;
   dir: number;
+  packedAo: number;
 }
 
 export interface VoxelMeshData {
@@ -455,6 +459,7 @@ export function greedyMeshBinary(
 
   // Per-quad: r, g, b
   let quadColors = new Uint8Array(capacity * 3);
+  let quadAo = new Uint8Array(capacity);
   let quadDirections = new Uint8Array(capacity);
   // Per-vertex (4 per quad): x (u8), y (u8), z_lo (u8), z_hi (u8)
   let vertPosX = new Uint8Array(capacity * 4);
@@ -467,6 +472,9 @@ export function greedyMeshBinary(
     const qc2 = new Uint8Array(capacity * 3);
     qc2.set(quadColors);
     quadColors = qc2;
+    const qa2 = new Uint8Array(capacity);
+    qa2.set(quadAo);
+    quadAo = qa2;
     const qd2 = new Uint8Array(capacity);
     qd2.set(quadDirections);
     quadDirections = qd2;
@@ -542,6 +550,7 @@ export function greedyMeshBinary(
     g: number,
     b: number,
     dir: number,
+    packedAo = 0,
   ) {
     ensureCapacity();
 
@@ -551,6 +560,7 @@ export function greedyMeshBinary(
     quadColors[qi * 3] = r;
     quadColors[qi * 3 + 1] = g;
     quadColors[qi * 3 + 2] = b;
+    quadAo[qi] = packedAo;
     quadDirections[qi] = dir === 1 ? 1 : 0;
 
     vertPosX[vi] = v0x;
@@ -792,6 +802,10 @@ export function greedyMeshBinary(
   const colorBytes = quadCount * 3;
   const colorPadded = (colorBytes + 3) & ~3;
 
+  // AO section: 1 byte per quad, padded to 4-byte alignment
+  const aoBytes = quadCount;
+  const aoPadded = (aoBytes + 3) & ~3;
+
   // Direction section: 1 byte per quad, padded to 4-byte alignment
   const directionBytes = quadCount;
   const directionPadded = (directionBytes + 3) & ~3;
@@ -800,7 +814,8 @@ export function greedyMeshBinary(
   const posBytes = vertexCount * 4;
 
   // Trailer: 4 bytes (u32 chunkCoverage)
-  const totalBytes = 20 + colorPadded + directionPadded + posBytes + 4;
+  const totalBytes =
+    20 + colorPadded + aoPadded + directionPadded + posBytes + 4;
   const buf = new ArrayBuffer(totalBytes);
   const view = new DataView(buf);
 
@@ -818,12 +833,17 @@ export function greedyMeshBinary(
     view.setUint8(off++, quadColors[qi * 3 + 1]);
     view.setUint8(off++, quadColors[qi * 3 + 2]);
   }
-  off = 20 + colorPadded; // skip padding
+  off = 20 + colorPadded;
+
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadAo[qi]);
+  }
+  off = 20 + colorPadded + aoPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadDirections[qi]);
   }
-  off = 20 + colorPadded + directionPadded;
+  off = 20 + colorPadded + aoPadded + directionPadded;
 
   // Per-vertex positions (4 per quad)
   for (let vi = 0; vi < vertexCount; vi++) {
@@ -851,6 +871,7 @@ export function encodeBinaryQuads(
   let capacity = Math.max(4096, quads.length || 1);
   let quadCount = 0;
   let quadColors = new Uint8Array(capacity * 3);
+  let quadAo = new Uint8Array(capacity);
   let quadDirections = new Uint8Array(capacity);
   let vertPosX = new Uint8Array(capacity * 4);
   let vertPosY = new Uint8Array(capacity * 4);
@@ -862,6 +883,9 @@ export function encodeBinaryQuads(
     const qc2 = new Uint8Array(capacity * 3);
     qc2.set(quadColors);
     quadColors = qc2;
+    const qa2 = new Uint8Array(capacity);
+    qa2.set(quadAo);
+    quadAo = qa2;
     const qd2 = new Uint8Array(capacity);
     qd2.set(quadDirections);
     quadDirections = qd2;
@@ -884,6 +908,7 @@ export function encodeBinaryQuads(
     quadColors[qi * 3] = rgb.r;
     quadColors[qi * 3 + 1] = rgb.g;
     quadColors[qi * 3 + 2] = rgb.b;
+    quadAo[qi] = quad.packedAo;
     quadDirections[qi] = quad.dir === 1 ? 1 : 0;
 
     vertPosX[vi] = quad.v0x;
@@ -905,10 +930,13 @@ export function encodeBinaryQuads(
   const vertexCount = quadCount * 4;
   const colorBytes = quadCount * 3;
   const colorPadded = (colorBytes + 3) & ~3;
+  const aoBytes = quadCount;
+  const aoPadded = (aoBytes + 3) & ~3;
   const directionBytes = quadCount;
   const directionPadded = (directionBytes + 3) & ~3;
   const posBytes = vertexCount * 4;
-  const totalBytes = 20 + colorPadded + directionPadded + posBytes + 4;
+  const totalBytes =
+    20 + colorPadded + aoPadded + directionPadded + posBytes + 4;
   const buf = new ArrayBuffer(totalBytes);
   const view = new DataView(buf);
 
@@ -927,9 +955,14 @@ export function encodeBinaryQuads(
   off = 20 + colorPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadAo[qi]);
+  }
+  off = 20 + colorPadded + aoPadded;
+
+  for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadDirections[qi]);
   }
-  off = 20 + colorPadded + directionPadded;
+  off = 20 + colorPadded + aoPadded + directionPadded;
 
   for (let vi = 0; vi < vertexCount; vi++) {
     view.setUint8(off++, vertPosX[vi]);

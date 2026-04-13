@@ -113,8 +113,8 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 2. `voxels.ts` validates region alignment and delegates to `VoxelMeshService`.
 3. `VoxelMeshService` checks its in-memory cache first.
 4. On cache miss, it submits a job to `VoxelWorkerPool`.
-5. A worker parses one or more `.region` files, generates a greedy mesh, and returns an indexless binary payload plus metrics.
-6. The binary mesh payload preserves direct world `X/Y/Z` coordinates so the client does not mirror an axis during decode.
+5. A worker parses one or more `.region` files, generates a greedy mesh, computes packed top-face AO with same-LOD neighbor sampling across region edges for `L1` and `L2`, and returns an indexless binary payload plus metrics.
+6. The binary mesh payload preserves direct world `X/Y/Z` coordinates and carries separate per-quad color, packed face AO, winding, and vertex-position sections so the client can defer final top-face AO application until after LOD visibility is known.
 7. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
 8. The route negotiates compressed voxel transport and exposes timing and queue metrics through response headers.
 

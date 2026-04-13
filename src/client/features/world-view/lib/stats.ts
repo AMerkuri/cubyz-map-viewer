@@ -108,7 +108,8 @@ export function publishChunkStats(args: {
     for (const quadrant of item.quadrantMeshes) {
       queuedMemoryBytes += quadrant.positions.byteLength;
       queuedMemoryBytes += quadrant.normals.byteLength;
-      queuedMemoryBytes += quadrant.colors.byteLength;
+      queuedMemoryBytes += quadrant.baseColors.byteLength;
+      queuedMemoryBytes += quadrant.faceAo.byteLength;
       queuedMemoryBytes += quadrant.indices.byteLength;
     }
     queuedMemoryBytes += item.chunkTopHeights.byteLength;

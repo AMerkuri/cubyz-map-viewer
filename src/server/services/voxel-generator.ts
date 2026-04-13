@@ -28,7 +28,7 @@ const VALID_LODS = [1, 2, 4, 8, 16, 32];
 const COLUMN_VOXELS = VOXEL_REGION_SIZE;
 const CHUNK_COLUMNS_PER_AXIS = COLUMN_VOXELS / CHUNK_SIZE;
 const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
-const VOXEL_GENERATOR_CACHE_VERSION = 14;
+const VOXEL_GENERATOR_CACHE_VERSION = 17;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??
@@ -64,7 +64,12 @@ interface ChunkState {
 
 interface SparsePlaneGroup {
   plane: number;
-  rows: Map<number, Map<number, number>>;
+  rows: Map<number, Map<number, FaceEntry>>;
+}
+
+interface FaceEntry {
+  typ: number;
+  packedAo: number;
 }
 
 const OPPOSITE_FACE: Record<Direction, Direction> = {
@@ -167,7 +172,8 @@ export async function generateVoxelMesh(
   const chunkStates = new Map<string, ChunkState>();
   const chunkQueue: ChunkState[] = [];
   const regionLoaders = new Map<number, Promise<RegionData | null>>();
-  const faces = new Map<string, number>();
+  const occupancyCache = new Map<string, Promise<boolean>>();
+  const faces = new Map<string, FaceEntry>();
   const visibleChunkColumns = new Set<number>();
   let regionsParsed = 0;
   let chunksMeshed = 0;
@@ -456,14 +462,10 @@ export async function generateVoxelMesh(
                 lod,
               )
             ) {
-              addFace(
-                faces,
-                solidX,
-                solidY,
-                solidZ,
-                face,
-                getType(chunk, neighborIdx),
-              );
+              addFace(faces, solidX, solidY, solidZ, face, {
+                typ: getType(chunk, neighborIdx),
+                packedAo: await getPackedFaceAo(face, solidX, solidY, solidZ),
+              });
             }
           }
           continue;
@@ -524,14 +526,10 @@ export async function generateVoxelMesh(
             lod,
           )
         ) {
-          addFace(
-            faces,
-            solidX,
-            solidY,
-            solidZ,
-            face,
-            getType(neighborChunk, wrappedIdx),
-          );
+          addFace(faces, solidX, solidY, solidZ, face, {
+            typ: getType(neighborChunk, wrappedIdx),
+            packedAo: await getPackedFaceAo(face, solidX, solidY, solidZ),
+          });
         }
       }
     }
@@ -704,7 +702,10 @@ export async function generateVoxelMesh(
         const neighborIdx = localIndex(neighborLocalX, neighborLocalY, lz);
         if (!isAir(neighborChunk, neighborIdx)) continue;
 
-        addFace(faces, gx, gy, gz, face, typ);
+        addFace(faces, gx, gy, gz, face, {
+          typ,
+          packedAo: await getPackedFaceAo(face, gx, gy, gz),
+        });
       }
     }
   }
@@ -763,6 +764,94 @@ export async function generateVoxelMesh(
       });
       return null;
     }
+  }
+
+  async function getPackedFaceAo(
+    face: Direction,
+    x: number,
+    y: number,
+    z: number,
+  ): Promise<number> {
+    if ((lod !== 1 && lod !== 2) || face !== "z+") return 0;
+    return getPackedTopFaceAo(x, y, z);
+  }
+
+  async function getPackedTopFaceAo(
+    x: number,
+    y: number,
+    z: number,
+  ): Promise<number> {
+    const corners: Array<[number, number, number, number]> = [
+      [-1, 0, 0, -1],
+      [1, 0, 0, -1],
+      [1, 0, 0, 1],
+      [-1, 0, 0, 1],
+    ];
+
+    let packed = 0;
+    for (let i = 0; i < corners.length; i++) {
+      const corner = corners[i];
+      if (!corner) continue;
+      const [sideAx, sideAy, sideBx, sideBy] = corner;
+      const sideA = await isSolidCellWorld(x + sideAx, y + sideAy, z + 1);
+      const sideB = await isSolidCellWorld(x + sideBx, y + sideBy, z + 1);
+      const diagonal = await isSolidCellWorld(
+        x + sideAx + sideBx,
+        y + sideAy + sideBy,
+        z + 1,
+      );
+      packed |= computeCornerAo(sideA, sideB, diagonal) << (i * 2);
+    }
+
+    return packed;
+  }
+
+  function computeCornerAo(
+    sideA: boolean,
+    sideB: boolean,
+    diagonal: boolean,
+  ): number {
+    if (sideA && sideB) return 3;
+    return Number(sideA) + Number(sideB) + Number(diagonal);
+  }
+
+  async function isSolidCellWorld(
+    x: number,
+    y: number,
+    z: number,
+  ): Promise<boolean> {
+    const cacheKey = `${x}/${y}/${z}`;
+    const cached = occupancyCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const pending = (async () => {
+      if (z < minChunkZ * CHUNK_SIZE || z > (maxChunkZ + 1) * CHUNK_SIZE - 1) {
+        return false;
+      }
+
+      const chunkX = Math.floor(x / CHUNK_SIZE);
+      const chunkY = Math.floor(y / CHUNK_SIZE);
+      const chunkZ = Math.floor(z / CHUNK_SIZE);
+      const localX = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+      const localY = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+      const localZ = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+
+      const chunk =
+        chunkX >= 0 &&
+        chunkX < CHUNK_COLUMNS_PER_AXIS &&
+        chunkY >= 0 &&
+        chunkY < CHUNK_COLUMNS_PER_AXIS
+          ? await loadChunk(chunkX, chunkY, chunkZ)
+          : await loadExternalChunk(chunkX, chunkY, chunkZ);
+
+      if (!chunk) return false;
+      return !isAir(chunk, localIndex(localX, localY, localZ));
+    })();
+
+    occupancyCache.set(cacheKey, pending);
+    return pending;
   }
 }
 
@@ -1023,22 +1112,22 @@ function isWithinEntranceDepth(
 }
 
 function addFace(
-  faceMap: Map<string, number>,
+  faceMap: Map<string, FaceEntry>,
   x: number,
   y: number,
   z: number,
   face: Direction,
-  typ: number,
+  entry: FaceEntry,
 ): void {
   const key = `${x}/${y}/${z}/${face}`;
   if (!faceMap.has(key)) {
-    faceMap.set(key, typ);
+    faceMap.set(key, entry);
   }
 }
 
-function buildMergedQuads(faceMap: Map<string, number>): BinaryQuad[] {
+function buildMergedQuads(faceMap: Map<string, FaceEntry>): BinaryQuad[] {
   const groups = new Map<string, SparsePlaneGroup>();
-  for (const [key, typ] of faceMap) {
+  for (const [key, entry] of faceMap) {
     const [xStr, yStr, zStr, face] = key.split("/") as [
       string,
       string,
@@ -1061,7 +1150,7 @@ function buildMergedQuads(faceMap: Map<string, number>): BinaryQuad[] {
       row = new Map();
       group.rows.set(u, row);
     }
-    row.set(v, typ);
+    row.set(v, entry);
   }
 
   const quads: BinaryQuad[] = [];
@@ -1076,11 +1165,22 @@ function buildMergedQuads(faceMap: Map<string, number>): BinaryQuad[] {
       const isSideFace =
         face === "x+" || face === "x-" || face === "y+" || face === "y-";
       for (const v of vValues) {
-        const typ = row.get(v);
-        if (typ === undefined) continue;
+        const entry = row.get(v);
+        if (!entry) continue;
         if (isTopFace) {
           row.delete(v);
-          quads.push(createMergedQuad(face, group.plane, u, v, 1, 1, typ));
+          quads.push(
+            createMergedQuad(
+              face,
+              group.plane,
+              u,
+              v,
+              1,
+              1,
+              entry.typ,
+              entry.packedAo,
+            ),
+          );
           continue;
         }
         const maxV =
@@ -1088,7 +1188,7 @@ function buildMergedQuads(faceMap: Map<string, number>): BinaryQuad[] {
             ? Math.min(COLUMN_VOXELS, v + cellsUntilChunkBoundary(v))
             : Number.MAX_SAFE_INTEGER;
         let dv = 1;
-        while (v + dv < maxV && row.get(v + dv) === typ) {
+        while (v + dv < maxV && row.get(v + dv)?.typ === entry.typ) {
           dv++;
         }
 
@@ -1099,7 +1199,7 @@ function buildMergedQuads(faceMap: Map<string, number>): BinaryQuad[] {
             const nextRow = group.rows.get(u + du);
             if (!nextRow) break;
             for (let vv = v; vv < v + dv; vv++) {
-              if (nextRow.get(vv) !== typ) break outer;
+              if (nextRow.get(vv)?.typ !== entry.typ) break outer;
             }
             du++;
           }
@@ -1113,7 +1213,9 @@ function buildMergedQuads(faceMap: Map<string, number>): BinaryQuad[] {
           }
         }
 
-        quads.push(createMergedQuad(face, group.plane, u, v, du, dv, typ));
+        quads.push(
+          createMergedQuad(face, group.plane, u, v, du, dv, entry.typ, 0),
+        );
       }
     }
   }
@@ -1170,6 +1272,7 @@ function createMergedQuad(
   du: number,
   dv: number,
   typ: number,
+  packedAo: number,
 ): BinaryQuad {
   switch (face) {
     case "x+":
@@ -1188,6 +1291,7 @@ function createMergedQuad(
         v3z: v + dv,
         typ,
         dir: 1,
+        packedAo,
       };
     case "x-":
       return {
@@ -1205,6 +1309,7 @@ function createMergedQuad(
         v3z: v + dv,
         typ,
         dir: -1,
+        packedAo,
       };
     case "y+":
       return {
@@ -1222,6 +1327,7 @@ function createMergedQuad(
         v3z: v + dv,
         typ,
         dir: -1,
+        packedAo,
       };
     case "y-":
       return {
@@ -1239,6 +1345,7 @@ function createMergedQuad(
         v3z: v + dv,
         typ,
         dir: 1,
+        packedAo,
       };
     case "z+":
       return {
@@ -1256,6 +1363,7 @@ function createMergedQuad(
         v3z: plane,
         typ,
         dir: 1,
+        packedAo,
       };
     case "z-":
       return {
@@ -1273,6 +1381,7 @@ function createMergedQuad(
         v3z: plane,
         typ,
         dir: -1,
+        packedAo,
       };
   }
 }
@@ -1286,7 +1395,7 @@ function _createQuadVertices(
   y: number,
   z: number,
   face: Direction,
-): Omit<BinaryQuad, "typ" | "dir"> {
+): Omit<BinaryQuad, "typ" | "dir" | "packedAo"> {
   switch (face) {
     case "x+":
       return {

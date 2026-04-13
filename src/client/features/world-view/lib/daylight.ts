@@ -21,3 +21,15 @@ export const VOXEL_FACE_SHADING = {
     b: 0.98,
   },
 } as const;
+
+export const VOXEL_DEPTH_CUE = {
+  sideBottom: 0.88,
+  sideTop: 1,
+} as const;
+
+export const VOXEL_TOP_AO = {
+  enabledLods: [1, 2],
+  minShade: 0.78,
+  seamMinShade: 0.92,
+  seamBlendCells: 3,
+} as const;

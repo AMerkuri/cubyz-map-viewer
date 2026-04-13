@@ -42,6 +42,7 @@ export interface MapDebugSettings {
   lodUnloadHysteresis: number;
   maxConcurrentVoxelFetches: number;
   maxConcurrentTerrainFetches: number;
+  voxelAoIntensity: number;
   voxelFocusStickyMs: number;
   voxelFocusSmoothAlpha: number;
   voxelLodHysteresisRatio: number;
@@ -78,6 +79,7 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   lodUnloadHysteresis: 1.5,
   maxConcurrentVoxelFetches: 8,
   maxConcurrentTerrainFetches: 4,
+  voxelAoIntensity: 1,
   voxelFocusStickyMs: 1500,
   voxelFocusSmoothAlpha: 0.6,
   voxelLodHysteresisRatio: 0.12,
@@ -227,6 +229,18 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     max: 32,
     step: 1,
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.maxVoxelMeshesPerFrame,
+  },
+  {
+    key: "voxelAoIntensity",
+    section: "LOD",
+    label: "Voxel AO Intensity",
+    description:
+      "Scales top-face voxel ambient occlusion strength after LOD visibility is resolved. Lower values flatten shading, higher values deepen creases.",
+    min: 0,
+    max: 1.5,
+    step: 0.05,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelAoIntensity,
+    decimals: 2,
   },
   {
     key: "terrainLodHysteresisRatio",

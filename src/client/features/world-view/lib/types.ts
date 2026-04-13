@@ -50,7 +50,8 @@ export interface WorkerQuadrantMesh {
   quadrantIndex: number;
   positions: Float32Array;
   normals: Float32Array;
-  colors: Float32Array;
+  baseColors: Float32Array;
+  faceAo: Uint8Array;
   indices: Uint32Array;
 }
 
@@ -140,6 +141,9 @@ export interface LoadedVoxelTile {
   subMeshes: {
     quadrantIndex: number;
     mesh: THREE.Mesh;
+    baseColors: Float32Array;
+    faceAo: Uint8Array;
+    aoBoundarySignature: string;
   }[];
   minZ: number;
   maxZ: number;
