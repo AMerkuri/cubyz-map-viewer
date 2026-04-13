@@ -41,10 +41,14 @@ export type ChunkStats = {
 export interface MapDebugSettings {
   lodUnloadHysteresis: number;
   maxConcurrentVoxelFetches: number;
+  maxConcurrentTerrainFetches: number;
   voxelFocusStickyMs: number;
   voxelFocusSmoothAlpha: number;
   voxelLodHysteresisRatio: number;
   voxelBehindCameraDotStart: number;
+  terrainLodHysteresisRatio: number;
+  terrainMeshBuildBudgetMs: number;
+  maxTerrainMeshesPerFrame: number;
   voxelBehindCameraMaxMultiplier: number;
   voxelDetailRequestDebounceMs: number;
   voxelUnloadGraceMs: number;
@@ -73,10 +77,14 @@ const MB = 1024 * 1024;
 export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   lodUnloadHysteresis: 1.5,
   maxConcurrentVoxelFetches: 8,
+  maxConcurrentTerrainFetches: 4,
   voxelFocusStickyMs: 1500,
   voxelFocusSmoothAlpha: 0.6,
   voxelLodHysteresisRatio: 0.12,
   voxelBehindCameraDotStart: -0.15,
+  terrainLodHysteresisRatio: 0.12,
+  terrainMeshBuildBudgetMs: 4,
+  maxTerrainMeshesPerFrame: 2,
   voxelBehindCameraMaxMultiplier: 1.75,
   voxelDetailRequestDebounceMs: 180,
   voxelUnloadGraceMs: 750,
@@ -128,6 +136,40 @@ export function createEmptyChunkStats(mode: "terrain" | "voxel"): ChunkStats {
 }
 
 export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
+  {
+    key: "maxConcurrentTerrainFetches",
+    section: "Loading",
+    label: "Concurrent Terrain Fetches",
+    description:
+      "Limits how many terrain tile requests can be in flight at the same time. Lower values reduce zoom spikes from simultaneous JSON and mesh work.",
+    min: 1,
+    max: 16,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.maxConcurrentTerrainFetches,
+  },
+  {
+    key: "terrainMeshBuildBudgetMs",
+    section: "Loading",
+    label: "Terrain Build Budget",
+    description:
+      "Per-frame time budget for turning fetched terrain payloads into Three.js meshes. Lower values improve frame pacing at the cost of slower refinement.",
+    min: 1,
+    max: 20,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.terrainMeshBuildBudgetMs,
+    formatDisplay: (value) => `${Math.round(value)} ms`,
+  },
+  {
+    key: "maxTerrainMeshesPerFrame",
+    section: "Loading",
+    label: "Terrain Meshes Per Frame",
+    description:
+      "Caps how many queued terrain meshes may be built in a single frame. Lower values avoid large zoom-time stalls.",
+    min: 1,
+    max: 12,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.maxTerrainMeshesPerFrame,
+  },
   {
     key: "maxConcurrentVoxelFetches",
     section: "Loading",
@@ -185,6 +227,18 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     max: 32,
     step: 1,
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.maxVoxelMeshesPerFrame,
+  },
+  {
+    key: "terrainLodHysteresisRatio",
+    section: "LOD",
+    label: "Terrain LOD Hysteresis",
+    description:
+      "How much terrain LOD transitions resist small distance changes. Higher values reduce zoom churn before terrain tiles are replaced.",
+    min: 0,
+    max: 0.5,
+    step: 0.01,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.terrainLodHysteresisRatio,
+    decimals: 2,
   },
   {
     key: "lodUnloadHysteresis",

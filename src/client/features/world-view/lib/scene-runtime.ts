@@ -56,6 +56,7 @@ export function initializeSceneRuntime(args: {
     controls: OrbitControls,
   ) => void;
   handleWorkerMessage: (data: WorkerOut) => void;
+  buildQueuedTerrainMeshes: () => boolean;
   buildQueuedVoxelMeshes: (
     renderer: THREE.WebGLRenderer,
     preUploadTarget: THREE.WebGLRenderTarget,
@@ -109,6 +110,7 @@ export function initializeSceneRuntime(args: {
     biomeLabelsDirtyRef,
     updateMarkerScales,
     handleWorkerMessage,
+    buildQueuedTerrainMeshes,
     buildQueuedVoxelMeshes,
     checkAndUpdateLOD,
     updateTerrainVisibility,
@@ -145,7 +147,7 @@ export function initializeSceneRuntime(args: {
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
   controls.maxPolarAngle = Math.PI * 0.49;
-  controls.maxDistance = 10000;
+  controls.maxDistance = 15_000;
   controls.screenSpacePanning = false;
   controls.mouseButtons = {
     LEFT: THREE.MOUSE.PAN,
@@ -293,13 +295,14 @@ export function initializeSceneRuntime(args: {
     controls.update();
     updateMarkerScales(camera, controls);
 
+    const builtTerrainTile = buildQueuedTerrainMeshes();
     const builtVoxelTile = buildQueuedVoxelMeshes(
       renderer,
       preUploadTarget,
       preUploadScene,
       preUploadCamera,
     );
-    if (builtVoxelTile) {
+    if (builtTerrainTile || builtVoxelTile) {
       checkAndUpdateLOD(camera, controls);
     }
 

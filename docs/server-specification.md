@@ -93,6 +93,14 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 5. The result is cached by tile coordinates and source mtime.
 6. If the surface file does not exist, the server returns an empty tile.
 
+### Terrain Mesh Data
+
+1. The client requests `/api/terrain/:lod/:x/:y` for 3D terrain payloads.
+2. `terrain.ts` validates the tile params, resolves the backing `.surface` file, and revalidates with an ETag.
+3. `parseSurfaceFile` decodes the height and biome arrays.
+4. `terrain-data.ts` down-samples the surface into JSON height and color arrays for the client mesh builder.
+5. The client now schedules those payloads through a bounded fetch queue and a per-frame mesh-build queue so zooming does not try to build every refined terrain tile immediately.
+
 ### Voxel Mesh Generation
 
 1. The client requests `/api/voxels/:lod/:regionX/:regionY`.

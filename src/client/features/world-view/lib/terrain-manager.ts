@@ -6,12 +6,20 @@ import {
   TERRAIN_LOD_DISTANCE_THRESHOLDS,
   TERRAIN_UNDERLAY_OFFSET_Z,
 } from "./constants.js";
-import { getLodForDistance } from "./lod-utils.js";
+import {
+  getLodForDistance,
+  getLodForDistanceWithHysteresis,
+} from "./lod-utils.js";
 import {
   buildFullTileMesh,
   buildSurfaceTileBorderLines,
 } from "./terrain-builders.js";
-import type { LoadedTerrainTile, TerrainMeshData } from "./types.js";
+import type {
+  LoadedTerrainTile,
+  PendingTerrainFetchRequest,
+  PendingTerrainMeshItem,
+  TerrainMeshData,
+} from "./types.js";
 import { regionWorldSize, shouldRenderTerrainForMode } from "./utils.js";
 
 export function terrainTileKey(
@@ -61,6 +69,53 @@ export function hasAllImmediateFinerTerrainChildrenLoaded(
   return true;
 }
 
+function compareTerrainFetchRequests(
+  a: PendingTerrainFetchRequest,
+  b: PendingTerrainFetchRequest,
+): number {
+  if (a.priority !== b.priority) {
+    return a.priority - b.priority;
+  }
+  return b.generation - a.generation;
+}
+
+function getPendingTerrainParentKey(
+  tile: LoadedTerrainTile,
+  desiredLod: number,
+  loadingTerrain: Set<string>,
+): string | null {
+  if (tile.lod >= desiredLod || desiredLod <= 0) {
+    return null;
+  }
+
+  let currentLod = desiredLod;
+  let currentTileX = Math.floor(tile.worldX / (256 * desiredLod));
+  let currentTileY = Math.floor(tile.worldY / (256 * desiredLod));
+  while (currentLod > tile.lod) {
+    const key = terrainTileKey(currentLod, currentTileX, currentTileY);
+    if (loadingTerrain.has(key)) {
+      return key;
+    }
+    currentLod /= 2;
+    currentTileX = Math.floor(currentTileX / 2);
+    currentTileY = Math.floor(currentTileY / 2);
+  }
+  return null;
+}
+
+export function queueTerrainFetchRequest(
+  queue: PendingTerrainFetchRequest[],
+  request: PendingTerrainFetchRequest,
+): void {
+  const existingIndex = queue.findIndex((item) => item.key === request.key);
+  if (existingIndex !== -1) {
+    queue[existingIndex] = request;
+  } else {
+    queue.push(request);
+  }
+  queue.sort(compareTerrainFetchRequests);
+}
+
 export function disposeTerrainTile(
   tile: LoadedTerrainTile,
   terrainGroup: THREE.Group | null,
@@ -88,68 +143,205 @@ export function clearTerrainTiles(
   loadedTerrain.clear();
 }
 
-export async function loadTerrainTile(args: {
-  lod: number;
-  tileX: number;
-  tileY: number;
-  generation?: number;
-  getCurrentGeneration?: () => number;
+export function finishTerrainFetch(args: {
+  key: string;
+  activeTerrainFetchCountRef: { current: number };
+  terrainFetchControllersRef: { current: Map<string, AbortController> };
+  drainTerrainFetchQueue: () => void;
+}): void {
+  const {
+    key,
+    activeTerrainFetchCountRef,
+    terrainFetchControllersRef,
+    drainTerrainFetchQueue,
+  } = args;
+
+  terrainFetchControllersRef.current.delete(key);
+  activeTerrainFetchCountRef.current = Math.max(
+    0,
+    activeTerrainFetchCountRef.current - 1,
+  );
+  drainTerrainFetchQueue();
+}
+
+export function drainTerrainFetchQueue(args: {
+  pendingTerrainFetchQueueRef: { current: PendingTerrainFetchRequest[] };
+  activeTerrainFetchCountRef: { current: number };
+  maxConcurrentTerrainFetches: number;
+  activeTerrainRequestKeysRef: { current: Set<string> };
+  loadedTerrainRef: { current: Map<string, LoadedTerrainTile> };
+  loadingTerrainRef: { current: Set<string> };
+  terrainFetchControllersRef: { current: Map<string, AbortController> };
+  fetchTerrainTile: (
+    request: PendingTerrainFetchRequest,
+    controller: AbortController,
+  ) => void;
+}): void {
+  const {
+    pendingTerrainFetchQueueRef,
+    activeTerrainFetchCountRef,
+    maxConcurrentTerrainFetches,
+    activeTerrainRequestKeysRef,
+    loadedTerrainRef,
+    loadingTerrainRef,
+    terrainFetchControllersRef,
+    fetchTerrainTile,
+  } = args;
+
+  pendingTerrainFetchQueueRef.current.sort(compareTerrainFetchRequests);
+
+  while (
+    activeTerrainFetchCountRef.current < maxConcurrentTerrainFetches &&
+    pendingTerrainFetchQueueRef.current.length > 0
+  ) {
+    const next = pendingTerrainFetchQueueRef.current.shift();
+    if (!next) continue;
+    if (!activeTerrainRequestKeysRef.current.has(next.key)) {
+      loadingTerrainRef.current.delete(next.key);
+      continue;
+    }
+    if (loadedTerrainRef.current.has(next.key)) {
+      loadingTerrainRef.current.delete(next.key);
+      continue;
+    }
+    if (terrainFetchControllersRef.current.has(next.key)) {
+      continue;
+    }
+    if (!loadingTerrainRef.current.has(next.key)) {
+      continue;
+    }
+
+    activeTerrainFetchCountRef.current++;
+    const controller = new AbortController();
+    terrainFetchControllersRef.current.set(next.key, controller);
+    fetchTerrainTile(next, controller);
+  }
+}
+
+export async function fetchTerrainTile(args: {
+  request: PendingTerrainFetchRequest;
+  controller: AbortController;
   queryClient: QueryClient;
-  loadingTerrain: Set<string>;
-  loadedTerrain: Map<string, LoadedTerrainTile>;
-  terrainGroup: THREE.Group | null;
-  chunkBorderGroup: THREE.Group | null;
-  terrainMaterial: THREE.Material;
-  terrainVisibilityDirtyRef: { current: boolean };
-  biomeLabelsDirtyRef: { current: boolean };
-  debugLabelsDirtyRef: { current: boolean };
-  showChunkBorders: boolean;
+  activeTerrainRequestKeysRef: { current: Set<string> };
+  loadedTerrainRef: { current: Map<string, LoadedTerrainTile> };
+  loadingTerrainRef: { current: Set<string> };
+  pendingTerrainMeshQueueRef: { current: PendingTerrainMeshItem[] };
+  onFinally: (key: string) => void;
 }): Promise<void> {
   const {
-    lod,
-    tileX,
-    tileY,
-    generation,
-    getCurrentGeneration,
+    request,
+    controller,
     queryClient,
-    loadingTerrain,
-    loadedTerrain,
-    terrainGroup,
-    chunkBorderGroup,
-    terrainMaterial,
-    terrainVisibilityDirtyRef,
-    biomeLabelsDirtyRef,
-    debugLabelsDirtyRef,
-    showChunkBorders,
+    activeTerrainRequestKeysRef,
+    loadedTerrainRef,
+    loadingTerrainRef,
+    pendingTerrainMeshQueueRef,
+    onFinally,
   } = args;
-  const key = terrainTileKey(lod, tileX, tileY);
-  if (loadingTerrain.has(key) || loadedTerrain.has(key)) return;
-  loadingTerrain.add(key);
-
-  const canCommit =
-    generation === undefined || !getCurrentGeneration
-      ? () => true
-      : () => generation === getCurrentGeneration();
+  const { key, lod, tileX, tileY, generation } = request;
 
   try {
     const meshData = await queryClient.fetchQuery<TerrainMeshData>({
       queryKey: ["terrain", lod, tileX, tileY],
       queryFn: async () => {
-        const res = await fetch(`/api/terrain/${lod}/${tileX}/${tileY}`);
+        const res = await fetch(`/api/terrain/${lod}/${tileX}/${tileY}`, {
+          signal: controller.signal,
+        });
         if (!res.ok) throw new Error(`Terrain fetch failed (${res.status})`);
         return res.json() as Promise<TerrainMeshData>;
       },
       staleTime: Infinity,
     });
-    if (!canCommit()) return;
-    if (loadedTerrain.has(key)) return;
 
-    const mesh = buildFullTileMesh(meshData, terrainMaterial);
+    if (
+      !activeTerrainRequestKeysRef.current.has(key) ||
+      loadedTerrainRef.current.has(key)
+    ) {
+      loadingTerrainRef.current.delete(key);
+      return;
+    }
+
+    pendingTerrainMeshQueueRef.current =
+      pendingTerrainMeshQueueRef.current.filter((item) => item.key !== key);
+    pendingTerrainMeshQueueRef.current.push({
+      key,
+      lod,
+      tileX,
+      tileY,
+      generation,
+      meshData,
+    });
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === "AbortError")) {
+      loadingTerrainRef.current.delete(key);
+    }
+  } finally {
+    onFinally(key);
+  }
+}
+
+export function buildQueuedTerrainMeshes(args: {
+  pendingTerrainMeshQueueRef: { current: PendingTerrainMeshItem[] };
+  maxTerrainMeshesPerFrame: number;
+  terrainMeshBuildBudgetMs: number;
+  activeTerrainRequestKeysRef: { current: Set<string> };
+  loadedTerrainRef: { current: Map<string, LoadedTerrainTile> };
+  loadingTerrainRef: { current: Set<string> };
+  terrainGroup: THREE.Group | null;
+  chunkBorderGroup: THREE.Group | null;
+  terrainMaterial: THREE.Material;
+  showChunkBorders: boolean;
+  debugLabelsDirtyRef: { current: boolean };
+  biomeLabelsDirtyRef: { current: boolean };
+  terrainVisibilityDirtyRef: { current: boolean };
+}): boolean {
+  const {
+    pendingTerrainMeshQueueRef,
+    maxTerrainMeshesPerFrame,
+    terrainMeshBuildBudgetMs,
+    activeTerrainRequestKeysRef,
+    loadedTerrainRef,
+    loadingTerrainRef,
+    terrainGroup,
+    chunkBorderGroup,
+    terrainMaterial,
+    showChunkBorders,
+    debugLabelsDirtyRef,
+    biomeLabelsDirtyRef,
+    terrainVisibilityDirtyRef,
+  } = args;
+
+  let builtTerrainTile = false;
+  if (pendingTerrainMeshQueueRef.current.length === 0) {
+    return builtTerrainTile;
+  }
+
+  const buildStart = performance.now();
+  let processed = 0;
+
+  while (
+    pendingTerrainMeshQueueRef.current.length > 0 &&
+    processed < maxTerrainMeshesPerFrame &&
+    performance.now() - buildStart < terrainMeshBuildBudgetMs
+  ) {
+    const item = pendingTerrainMeshQueueRef.current.shift();
+    if (!item) continue;
+    processed++;
+
+    if (
+      !activeTerrainRequestKeysRef.current.has(item.key) ||
+      loadedTerrainRef.current.has(item.key)
+    ) {
+      loadingTerrainRef.current.delete(item.key);
+      continue;
+    }
+
+    const mesh = buildFullTileMesh(item.meshData, terrainMaterial);
     mesh.visible = false;
     const { lines, label } = buildSurfaceTileBorderLines(
-      meshData.worldX,
-      meshData.worldY,
-      lod,
+      item.meshData.worldX,
+      item.meshData.worldY,
+      item.lod,
       mesh,
     );
     lines.visible = showChunkBorders;
@@ -158,25 +350,30 @@ export async function loadTerrainTile(args: {
     terrainGroup?.add(mesh);
     chunkBorderGroup?.add(lines);
     chunkBorderGroup?.add(label);
-    loadedTerrain.set(key, {
-      key,
-      lod,
-      tileX,
-      tileY,
-      worldX: meshData.worldX,
-      worldY: meshData.worldY,
+    loadedTerrainRef.current.set(item.key, {
+      key: item.key,
+      lod: item.lod,
+      tileX: item.tileX,
+      tileY: item.tileY,
+      worldX: item.meshData.worldX,
+      worldY: item.meshData.worldY,
       mesh,
       borderLines: lines,
       borderLabel: label,
     });
+    loadingTerrainRef.current.delete(item.key);
     terrainVisibilityDirtyRef.current = true;
     biomeLabelsDirtyRef.current = true;
     debugLabelsDirtyRef.current = true;
-  } finally {
-    if (canCommit()) {
-      loadingTerrain.delete(key);
-    }
+    builtTerrainTile = true;
   }
+
+  pendingTerrainMeshQueueRef.current =
+    pendingTerrainMeshQueueRef.current.filter((item) =>
+      activeTerrainRequestKeysRef.current.has(item.key),
+    );
+
+  return builtTerrainTile;
 }
 
 export function updateTerrainVisibility(args: {
@@ -186,6 +383,9 @@ export function updateTerrainVisibility(args: {
   showTerrain: boolean;
   showVoxelTerrain: boolean;
   loadedTerrain: Map<string, LoadedTerrainTile>;
+  loadingTerrain: Set<string>;
+  terrainLodHysteresisRatio: number;
+  activeFocusLod: number;
   loadedVoxels: Iterable<{
     regionX: number;
     regionY: number;
@@ -201,6 +401,9 @@ export function updateTerrainVisibility(args: {
     showTerrain,
     showVoxelTerrain,
     loadedTerrain,
+    loadingTerrain,
+    terrainLodHysteresisRatio,
+    activeFocusLod,
     loadedVoxels,
   } = args;
   const renderTerrain = shouldRenderTerrainForMode(
@@ -215,8 +418,22 @@ export function updateTerrainVisibility(args: {
     const centerY = tile.worldY + tileWorldSize / 2;
     const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
     const dist = Math.max(xyDist, camDist);
-    const desiredLod = getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
-    const visible = renderTerrain && tile.lod === desiredLod;
+    const desiredLod = getLodForDistanceWithHysteresis(
+      dist,
+      activeFocusLod,
+      TERRAIN_LOD_DISTANCE_THRESHOLDS,
+      terrainLodHysteresisRatio,
+    );
+    const visibleByDistance = tile.lod === desiredLod;
+    const keepCoarseFallback =
+      tile.lod > desiredLod &&
+      !hasAllImmediateFinerTerrainChildrenLoaded(loadedTerrain, tile);
+    const keepFineFallback =
+      tile.lod < desiredLod &&
+      getPendingTerrainParentKey(tile, desiredLod, loadingTerrain) !== null;
+    const visible =
+      renderTerrain &&
+      (visibleByDistance || keepCoarseFallback || keepFineFallback);
     tile.mesh.visible = visible;
 
     const underlay = mode === "voxel" && showVoxelTerrain;
@@ -251,12 +468,19 @@ export function syncTerrainLod(args: {
   surfaceIndex: SurfaceIndexEntry[];
   loadedTerrain: Map<string, LoadedTerrainTile>;
   loadingTerrain: Set<string>;
-  loadTerrainTile: (lod: number, tileX: number, tileY: number) => void;
+  queueTerrainTileLoad: (
+    lod: number,
+    tileX: number,
+    tileY: number,
+    priority: number,
+  ) => void;
   disposeTerrainTile: (tile: LoadedTerrainTile) => void;
   updateTerrainVisibility: (target: THREE.Vector3, camDist: number) => void;
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
   terrainVisibilityDirtyRef: { current: boolean };
+  activeFocusLodRef: { current: number };
+  terrainLodHysteresisRatio: number;
 }): void {
   const {
     target,
@@ -264,13 +488,23 @@ export function syncTerrainLod(args: {
     surfaceIndex,
     loadedTerrain,
     loadingTerrain,
-    loadTerrainTile,
+    queueTerrainTileLoad,
     disposeTerrainTile,
     updateTerrainVisibility,
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,
     terrainVisibilityDirtyRef,
+    activeFocusLodRef,
+    terrainLodHysteresisRatio,
   } = args;
+
+  const desiredCameraLod = getLodForDistanceWithHysteresis(
+    camDist,
+    activeFocusLodRef.current,
+    TERRAIN_LOD_DISTANCE_THRESHOLDS,
+    terrainLodHysteresisRatio,
+  );
+  activeFocusLodRef.current = desiredCameraLod;
 
   if (surfaceIndex.length > 0) {
     for (const entry of surfaceIndex) {
@@ -279,14 +513,21 @@ export function syncTerrainLod(args: {
       const centerY = entry.worldY + tileWorldSize / 2;
       const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
       const dist = Math.max(xyDist, camDist);
-      const desiredLod = getLodForDistance(
+      const desiredLod = getLodForDistanceWithHysteresis(
         dist,
+        desiredCameraLod,
         TERRAIN_LOD_DISTANCE_THRESHOLDS,
+        terrainLodHysteresisRatio,
       );
       if (entry.lod !== desiredLod) continue;
       const key = terrainTileKey(entry.lod, entry.tileX, entry.tileY);
       if (loadedTerrain.has(key) || loadingTerrain.has(key)) continue;
-      loadTerrainTile(entry.lod, entry.tileX, entry.tileY);
+      queueTerrainTileLoad(
+        entry.lod,
+        entry.tileX,
+        entry.tileY,
+        Math.round(dist),
+      );
     }
   }
 
@@ -296,7 +537,12 @@ export function syncTerrainLod(args: {
     const centerWorldY = tile.worldY + tileWorldSize / 2;
     const xyDist = Math.hypot(centerWorldX - target.x, centerWorldY - target.y);
     const dist = Math.max(xyDist, camDist);
-    const desiredLod = getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
+    const desiredLod = getLodForDistanceWithHysteresis(
+      dist,
+      desiredCameraLod,
+      TERRAIN_LOD_DISTANCE_THRESHOLDS,
+      terrainLodHysteresisRatio,
+    );
 
     let replacedByPriority = false;
     if (desiredLod > tile.lod) {
@@ -323,4 +569,23 @@ export function syncTerrainLod(args: {
 
   updateTerrainVisibility(target, camDist);
   terrainVisibilityDirtyRef.current = false;
+}
+
+export function getTerrainLodForDistance(
+  dist: number,
+  previousLod: number,
+  terrainLodHysteresisRatio: number,
+): number {
+  return getLodForDistanceWithHysteresis(
+    dist,
+    previousLod,
+    TERRAIN_LOD_DISTANCE_THRESHOLDS,
+    terrainLodHysteresisRatio,
+  );
+}
+
+export function getTerrainLodForDistanceWithoutHysteresis(
+  dist: number,
+): number {
+  return getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
 }

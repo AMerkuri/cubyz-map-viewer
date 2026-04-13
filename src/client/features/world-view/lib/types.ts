@@ -16,6 +16,24 @@ export interface TerrainMeshData {
   maxHeight: number;
 }
 
+export interface PendingTerrainFetchRequest {
+  key: string;
+  lod: number;
+  tileX: number;
+  tileY: number;
+  priority: number;
+  generation: number;
+}
+
+export interface PendingTerrainMeshItem {
+  key: string;
+  lod: number;
+  tileX: number;
+  tileY: number;
+  generation: number;
+  meshData: TerrainMeshData;
+}
+
 export interface BiomesResponse {
   tileX: number;
   tileY: number;

@@ -60,6 +60,7 @@ export function useWorld3DSceneRuntime(args: {
     controls: OrbitControls,
   ) => void;
   handleWorkerMessage: (data: import("./types.js").WorkerOut) => void;
+  buildQueuedTerrainMeshes: () => boolean;
   buildQueuedVoxelMeshes: (
     renderer: THREE.WebGLRenderer,
     preUploadTarget: THREE.WebGLRenderTarget,
@@ -113,6 +114,7 @@ export function useWorld3DSceneRuntime(args: {
     biomeLabelsDirtyRef,
     updateMarkerScales,
     handleWorkerMessage,
+    buildQueuedTerrainMeshes,
     buildQueuedVoxelMeshes,
     checkAndUpdateLOD,
     updateTerrainVisibility,
@@ -130,6 +132,7 @@ export function useWorld3DSceneRuntime(args: {
 
   const onUpdateMarkerScales = useEffectEvent(updateMarkerScales);
   const onHandleWorkerMessage = useEffectEvent(handleWorkerMessage);
+  const onBuildQueuedTerrainMeshes = useEffectEvent(buildQueuedTerrainMeshes);
   const onBuildQueuedVoxelMeshes = useEffectEvent(buildQueuedVoxelMeshes);
   const onCheckAndUpdateLOD = useEffectEvent(checkAndUpdateLOD);
   const onUpdateTerrainVisibility = useEffectEvent(updateTerrainVisibility);
@@ -173,6 +176,7 @@ export function useWorld3DSceneRuntime(args: {
       biomeLabelsDirtyRef,
       updateMarkerScales: onUpdateMarkerScales,
       handleWorkerMessage: onHandleWorkerMessage,
+      buildQueuedTerrainMeshes: onBuildQueuedTerrainMeshes,
       buildQueuedVoxelMeshes: onBuildQueuedVoxelMeshes,
       checkAndUpdateLOD: onCheckAndUpdateLOD,
       updateTerrainVisibility: onUpdateTerrainVisibility,

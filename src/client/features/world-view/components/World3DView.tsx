@@ -36,9 +36,13 @@ import {
 import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
 import { publishChunkStats } from "../lib/stats.js";
 import {
+  buildQueuedTerrainMeshes as buildQueuedTerrainMeshesManaged,
   clearTerrainTiles as clearTerrainTilesManaged,
   disposeTerrainTile as disposeTerrainTileManaged,
-  loadTerrainTile as loadTerrainTileManaged,
+  drainTerrainFetchQueue as drainTerrainFetchQueueManaged,
+  fetchTerrainTile as fetchTerrainTileManaged,
+  finishTerrainFetch as finishTerrainFetchManaged,
+  queueTerrainFetchRequest as queueTerrainFetchRequestManaged,
   syncTerrainLod as syncTerrainLodManaged,
   terrainTileKey,
   updateTerrainVisibility as updateTerrainVisibilityManaged,
@@ -46,6 +50,8 @@ import {
 import type {
   LoadedTerrainTile,
   LoadedVoxelTile,
+  PendingTerrainFetchRequest,
+  PendingTerrainMeshItem,
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
   VoxelFocusState,
@@ -171,6 +177,13 @@ export function World3DView({
 
   const loadedTerrainRef = useRef<Map<string, LoadedTerrainTile>>(new Map());
   const loadingTerrainRef = useRef<Set<string>>(new Set());
+  const pendingTerrainFetchQueueRef = useRef<PendingTerrainFetchRequest[]>([]);
+  const pendingTerrainMeshQueueRef = useRef<PendingTerrainMeshItem[]>([]);
+  const activeTerrainFetchCountRef = useRef(0);
+  const terrainFetchControllersRef = useRef<Map<string, AbortController>>(
+    new Map(),
+  );
+  const activeTerrainRequestKeysRef = useRef<Set<string>>(new Set());
 
   const loadedVoxelsRef = useRef<Map<string, LoadedVoxelTile>>(new Map());
   const warmCachedVoxelsRef = useRef<Map<string, WarmCachedVoxelTile>>(
@@ -273,6 +286,7 @@ export function World3DView({
   const playerMarkerTextureRef = useRef<THREE.Texture | null>(null);
   const playerAssetsRequestedRef = useRef(false);
   const activeFocusLodRef = useRef<number>(1);
+  const activeTerrainLodRef = useRef<number>(1);
   const voxelFocusStateRef = useRef<VoxelFocusState>({
     point: new THREE.Vector3(),
     zoomDist: 0,
@@ -335,6 +349,14 @@ export function World3DView({
   }
 
   function clearTerrainTiles() {
+    for (const controller of terrainFetchControllersRef.current.values()) {
+      controller.abort();
+    }
+    terrainFetchControllersRef.current.clear();
+    pendingTerrainFetchQueueRef.current = [];
+    pendingTerrainMeshQueueRef.current = [];
+    activeTerrainFetchCountRef.current = 0;
+    activeTerrainRequestKeysRef.current.clear();
     clearTerrainTilesManaged(
       loadedTerrainRef.current,
       terrainGroupRef.current,
@@ -342,6 +364,93 @@ export function World3DView({
       disposeTextSprite,
     );
     loadingTerrainRef.current.clear();
+  }
+
+  function queueTerrainTileLoad(
+    lod: number,
+    tileX: number,
+    tileY: number,
+    priority: number,
+  ) {
+    const key = terrainTileKey(lod, tileX, tileY);
+    activeTerrainRequestKeysRef.current.add(key);
+    if (
+      loadedTerrainRef.current.has(key) ||
+      loadingTerrainRef.current.has(key)
+    ) {
+      return;
+    }
+
+    loadingTerrainRef.current.add(key);
+    queueTerrainFetchRequestManaged(pendingTerrainFetchQueueRef.current, {
+      key,
+      lod,
+      tileX,
+      tileY,
+      priority,
+      generation: terrainLoadGenerationRef.current,
+    });
+  }
+
+  function finishTerrainFetch(key: string) {
+    finishTerrainFetchManaged({
+      key,
+      activeTerrainFetchCountRef,
+      terrainFetchControllersRef,
+      drainTerrainFetchQueue,
+    });
+  }
+
+  function drainTerrainFetchQueue() {
+    drainTerrainFetchQueueManaged({
+      pendingTerrainFetchQueueRef,
+      activeTerrainFetchCountRef,
+      maxConcurrentTerrainFetches:
+        debugSettingsRef.current.maxConcurrentTerrainFetches,
+      activeTerrainRequestKeysRef,
+      loadedTerrainRef,
+      loadingTerrainRef,
+      terrainFetchControllersRef,
+      fetchTerrainTile: (request, controller) => {
+        void fetchTerrainTile(request, controller);
+      },
+    });
+  }
+
+  async function fetchTerrainTile(
+    request: PendingTerrainFetchRequest,
+    controller: AbortController,
+  ) {
+    await fetchTerrainTileManaged({
+      request,
+      controller,
+      queryClient: queryClientRef.current,
+      activeTerrainRequestKeysRef,
+      loadedTerrainRef,
+      loadingTerrainRef,
+      pendingTerrainMeshQueueRef,
+      onFinally: finishTerrainFetch,
+    });
+  }
+
+  function buildQueuedTerrainMeshesForFrame() {
+    return buildQueuedTerrainMeshesManaged({
+      pendingTerrainMeshQueueRef,
+      maxTerrainMeshesPerFrame:
+        debugSettingsRef.current.maxTerrainMeshesPerFrame,
+      terrainMeshBuildBudgetMs:
+        debugSettingsRef.current.terrainMeshBuildBudgetMs,
+      activeTerrainRequestKeysRef,
+      loadedTerrainRef,
+      loadingTerrainRef,
+      terrainGroup: terrainGroupRef.current,
+      chunkBorderGroup: chunkBorderGroupRef.current,
+      terrainMaterial,
+      showChunkBorders: showChunkBordersRef.current,
+      debugLabelsDirtyRef,
+      biomeLabelsDirtyRef,
+      terrainVisibilityDirtyRef,
+    });
   }
 
   function evictWarmCachedVoxelTile(key: string) {
@@ -420,43 +529,6 @@ export function World3DView({
     });
   }
 
-  async function loadTerrainTile(
-    lod: number,
-    tileX: number,
-    tileY: number,
-    options: { replaceExisting?: boolean } = {},
-  ) {
-    if (options.replaceExisting) {
-      const existing = loadedTerrainRef.current.get(
-        terrainTileKey(lod, tileX, tileY),
-      );
-      if (existing) {
-        disposeTerrainTileManaged(
-          existing,
-          terrainGroupRef.current,
-          chunkBorderGroupRef.current,
-          disposeTextSprite,
-        );
-        loadedTerrainRef.current.delete(existing.key);
-      }
-    }
-    await loadTerrainTileManaged({
-      lod,
-      tileX,
-      tileY,
-      queryClient: queryClientRef.current,
-      loadingTerrain: loadingTerrainRef.current,
-      loadedTerrain: loadedTerrainRef.current,
-      terrainGroup: terrainGroupRef.current,
-      chunkBorderGroup: chunkBorderGroupRef.current,
-      terrainMaterial,
-      terrainVisibilityDirtyRef,
-      biomeLabelsDirtyRef,
-      debugLabelsDirtyRef,
-      showChunkBorders: showChunkBordersRef.current,
-    });
-  }
-
   function updateTerrainVisibility(target: THREE.Vector3, camDist: number) {
     updateTerrainVisibilityManaged({
       target,
@@ -465,6 +537,10 @@ export function World3DView({
       showTerrain: showTerrainRef.current,
       showVoxelTerrain: showVoxelTerrainRef.current,
       loadedTerrain: loadedTerrainRef.current,
+      loadingTerrain: loadingTerrainRef.current,
+      terrainLodHysteresisRatio:
+        debugSettingsRef.current.terrainLodHysteresisRatio,
+      activeFocusLod: activeTerrainLodRef.current,
       loadedVoxels: loadedVoxelsRef.current.values(),
     });
   }
@@ -476,9 +552,7 @@ export function World3DView({
       surfaceIndex: surfaceIndexRef.current,
       loadedTerrain: loadedTerrainRef.current,
       loadingTerrain: loadingTerrainRef.current,
-      loadTerrainTile: (lod, tileX, tileY) => {
-        void loadTerrainTile(lod, tileX, tileY);
-      },
+      queueTerrainTileLoad,
       disposeTerrainTile: (tile) => {
         disposeTerrainTileManaged(
           tile,
@@ -491,7 +565,11 @@ export function World3DView({
       debugLabelsDirtyRef,
       biomeLabelsDirtyRef,
       terrainVisibilityDirtyRef,
+      activeFocusLodRef: activeTerrainLodRef,
+      terrainLodHysteresisRatio:
+        debugSettingsRef.current.terrainLodHysteresisRatio,
     });
+    drainTerrainFetchQueue();
   }
 
   function queueVoxelFetchRequest(request: PendingVoxelFetchRequest) {
@@ -741,7 +819,7 @@ export function World3DView({
       showTerrain: showTerrainRef.current,
       showVoxelTerrain: showVoxelTerrainRef.current,
       loadedTerrain: loadedTerrainRef.current,
-      loadTerrainTile,
+      queueTerrainTileLoad,
       disposeTerrainTile: (tile) => {
         disposeTerrainTileManaged(
           tile,
@@ -976,6 +1054,7 @@ export function World3DView({
     biomeLabelsDirtyRef,
     updateMarkerScales,
     handleWorkerMessage,
+    buildQueuedTerrainMeshes: buildQueuedTerrainMeshesForFrame,
     buildQueuedVoxelMeshes: buildQueuedVoxelMeshesForFrame,
     checkAndUpdateLOD,
     updateTerrainVisibility,

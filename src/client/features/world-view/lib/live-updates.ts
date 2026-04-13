@@ -21,12 +21,12 @@ export function handleTerrainTileUpdate(args: {
   showTerrain: boolean;
   showVoxelTerrain: boolean;
   loadedTerrain: Map<string, LoadedTerrainTile>;
-  loadTerrainTile: (
+  queueTerrainTileLoad: (
     lod: number,
     tileX: number,
     tileY: number,
-    options?: { replaceExisting?: boolean },
-  ) => Promise<void> | void;
+    priority: number,
+  ) => void;
   disposeTerrainTile: (tile: LoadedTerrainTile) => void;
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
@@ -40,7 +40,7 @@ export function handleTerrainTileUpdate(args: {
     showTerrain,
     showVoxelTerrain,
     loadedTerrain,
-    loadTerrainTile,
+    queueTerrainTileLoad,
     disposeTerrainTile,
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,
@@ -58,7 +58,11 @@ export function handleTerrainTileUpdate(args: {
   );
   if (existing) {
     if (shouldRenderTerrain) {
-      void loadTerrainTile(lod, tileX, tileY, { replaceExisting: true });
+      disposeTerrainTile(existing);
+      loadedTerrain.delete(key);
+      queueTerrainTileLoad(lod, tileX, tileY, Number.NEGATIVE_INFINITY);
+      debugLabelsDirtyRef.current = true;
+      biomeLabelsDirtyRef.current = true;
     } else {
       disposeTerrainTile(existing);
       loadedTerrain.delete(key);
@@ -66,7 +70,7 @@ export function handleTerrainTileUpdate(args: {
       biomeLabelsDirtyRef.current = true;
     }
   } else if (shouldRenderTerrain) {
-    void loadTerrainTile(lod, tileX, tileY);
+    queueTerrainTileLoad(lod, tileX, tileY, Number.NEGATIVE_INFINITY);
   }
 }
 

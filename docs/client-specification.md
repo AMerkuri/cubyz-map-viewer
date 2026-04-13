@@ -57,8 +57,10 @@ src/client/
 ### Terrain Mode
 
 1. `useWorldData` fetches `/api/world` and `/api/world/surface-index`.
-2. `World3DView` requests terrain tiles as needed.
-3. Terrain meshes, markers, and biome labels refresh with camera motion and toggles.
+2. `World3DView` selects desired terrain tiles from the surface index, queues fetches with a small concurrency limit, and drains them as the camera moves.
+3. Fetched terrain payloads are converted into Three.js meshes within a per-frame build budget instead of immediately on fetch completion.
+4. Coarser terrain tiles stay visible as fallback coverage until finer child tiles are ready, reducing zoom-in churn and visible popping.
+5. Terrain meshes, markers, and biome labels refresh with camera motion and toggles.
 
 ### Voxel Mode
 
@@ -87,6 +89,6 @@ src/client/
 - keep feature code in `world-view` unless it is truly reusable
 - keep React responsible for composition, not per-frame 3D updates
 - prefer direct imports over barrels
-- use workers and bounded queues for heavy voxel processing
+- use bounded queues and frame budgets for heavy terrain and voxel processing
 - avoid React re-renders for high-frequency cursor and frame-loop updates
 - avoid publishing React state from the render loop unless the value actually changed

@@ -19,7 +19,11 @@ export type GraphicsPreset = {
   debugSettings: Partial<
     Pick<
       MapDebugSettings,
+      | "maxConcurrentTerrainFetches"
+      | "terrainMeshBuildBudgetMs"
+      | "maxTerrainMeshesPerFrame"
       | "maxConcurrentVoxelFetches"
+      | "terrainLodHysteresisRatio"
       | "voxelDetailRequestDebounceMs"
       | "voxelUnloadGraceMs"
       | "voxelMeshBuildBudgetMs"
@@ -42,7 +46,11 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 1150,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      maxConcurrentTerrainFetches: 6,
+      terrainMeshBuildBudgetMs: 8,
+      maxTerrainMeshesPerFrame: 4,
       maxConcurrentVoxelFetches: 20,
+      terrainLodHysteresisRatio: 0.08,
       voxelDetailRequestDebounceMs: 0,
       voxelUnloadGraceMs: 2000,
       voxelMeshBuildBudgetMs: 12,
@@ -61,7 +69,11 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 900,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      maxConcurrentTerrainFetches: 5,
+      terrainMeshBuildBudgetMs: 6,
+      maxTerrainMeshesPerFrame: 3,
       maxConcurrentVoxelFetches: 12,
+      terrainLodHysteresisRatio: 0.1,
       voxelDetailRequestDebounceMs: 80,
       voxelUnloadGraceMs: 1200,
       voxelMeshBuildBudgetMs: 8,
@@ -80,7 +92,11 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      maxConcurrentTerrainFetches: 4,
+      terrainMeshBuildBudgetMs: 4,
+      maxTerrainMeshesPerFrame: 2,
       maxConcurrentVoxelFetches: 8,
+      terrainLodHysteresisRatio: 0.12,
       voxelDetailRequestDebounceMs: 180,
       voxelUnloadGraceMs: 750,
       voxelMeshBuildBudgetMs: 5,
@@ -100,7 +116,11 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 2,
     debugSettings: {
+      maxConcurrentTerrainFetches: 3,
+      terrainMeshBuildBudgetMs: 3,
+      maxTerrainMeshesPerFrame: 2,
       maxConcurrentVoxelFetches: 6,
+      terrainLodHysteresisRatio: 0.16,
       voxelDetailRequestDebounceMs: 320,
       voxelUnloadGraceMs: 400,
       voxelMeshBuildBudgetMs: 3,
@@ -119,7 +139,11 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 4,
     debugSettings: {
+      maxConcurrentTerrainFetches: 2,
+      terrainMeshBuildBudgetMs: 2,
+      maxTerrainMeshesPerFrame: 1,
       maxConcurrentVoxelFetches: 4,
+      terrainLodHysteresisRatio: 0.2,
       voxelDetailRequestDebounceMs: 450,
       voxelUnloadGraceMs: 200,
       voxelMeshBuildBudgetMs: 2,

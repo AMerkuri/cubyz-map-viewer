@@ -21,6 +21,7 @@ Cubyz Map Viewer is an interactive terrain and voxel map viewer for Cubyz worlds
 - Surface tiles come from `maps/{lod}/{worldX}/{worldY}.surface`.
 - Region voxel data comes from `chunks/{lod}/{worldX}/{worldY}/{worldZ}.region`.
 - Supported surface LODs are `1, 2, 4, 8, 16, 32`.
+- Terrain tile fetches and mesh builds are queued on the client and applied within a per-frame budget to avoid zoom-time stalls.
 - Save watching batches filesystem churn into grouped update events.
 
 ## Runtime Requirements
