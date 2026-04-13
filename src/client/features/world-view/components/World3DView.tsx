@@ -8,6 +8,10 @@ import type {
   CSS2DRenderer,
 } from "three/addons/renderers/CSS2DRenderer.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
+import {
+  createEmptyLoadingBreakdown,
+  type LoadingBreakdown,
+} from "../debug.js";
 import type {
   ChunkIndexEntry,
   SurfaceIndexEntry,
@@ -119,7 +123,7 @@ export function World3DView({
   onCursorMove,
   onPlayerClick,
   onChunkStatsChange,
-  onVoxelLoadingChange,
+  onLoadingBreakdownChange,
   initialCameraState,
   onShareStateChange,
   flyToRequest,
@@ -234,9 +238,11 @@ export function World3DView({
   onPlayerClickRef.current = onPlayerClick;
   const onChunkStatsChangeRef = useRef(onChunkStatsChange);
   onChunkStatsChangeRef.current = onChunkStatsChange;
-  const onVoxelLoadingChangeRef = useRef(onVoxelLoadingChange);
-  onVoxelLoadingChangeRef.current = onVoxelLoadingChange;
-  const lastPublishedVoxelLoadingRef = useRef(false);
+  const onLoadingBreakdownChangeRef = useRef(onLoadingBreakdownChange);
+  onLoadingBreakdownChangeRef.current = onLoadingBreakdownChange;
+  const lastPublishedLoadingBreakdownRef = useRef<LoadingBreakdown>(
+    createEmptyLoadingBreakdown(),
+  );
   const debugEnabledRef = useRef(debugEnabled);
   debugEnabledRef.current = debugEnabled;
   const debugSettingsRef = useRef(debugSettings);
@@ -1015,16 +1021,25 @@ export function World3DView({
     });
   }
 
-  function publishCurrentVoxelLoading() {
-    const loading =
-      loadingVoxelsRef.current.size + pendingVoxelFetchQueueRef.current.length >
-      0;
-    const nextLoading = modeRef.current === "voxel" && loading;
-    if (lastPublishedVoxelLoadingRef.current === nextLoading) {
+  function publishCurrentLoadingBreakdown() {
+    const nextLoadingBreakdown = {
+      terrain: loadingTerrainRef.current.size,
+      voxels: loadingVoxelsRef.current.size,
+      fetchQueue: pendingVoxelFetchQueueRef.current.length,
+      meshQueue: pendingVoxelMeshQueueRef.current.length,
+    };
+
+    const prev = lastPublishedLoadingBreakdownRef.current;
+    if (
+      prev.terrain === nextLoadingBreakdown.terrain &&
+      prev.voxels === nextLoadingBreakdown.voxels &&
+      prev.fetchQueue === nextLoadingBreakdown.fetchQueue &&
+      prev.meshQueue === nextLoadingBreakdown.meshQueue
+    ) {
       return;
     }
-    lastPublishedVoxelLoadingRef.current = nextLoading;
-    onVoxelLoadingChangeRef.current(nextLoading);
+    lastPublishedLoadingBreakdownRef.current = nextLoadingBreakdown;
+    onLoadingBreakdownChangeRef.current(nextLoadingBreakdown);
   }
 
   useWorld3DSceneRuntime({
@@ -1063,7 +1078,7 @@ export function World3DView({
     clearDebugLabels,
     refreshBiomeLabels,
     publishChunkStats: publishCurrentChunkStats,
-    publishVoxelLoading: publishCurrentVoxelLoading,
+    publishLoadingBreakdown: publishCurrentLoadingBreakdown,
     clearTerrainTiles,
     clearVoxelTiles,
     clearBiomeLabels,

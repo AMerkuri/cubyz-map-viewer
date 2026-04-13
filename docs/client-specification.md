@@ -26,7 +26,7 @@ src/client/
 ## Entry Points
 
 - `src/client/main.tsx`: boots React and creates the shared React Query client
-- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, debug state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes smaller local helpers for the toolbar, stats panel, controls panel, and debug-parameters panel around the main scene.
+- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, debug state, loading-indicator state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes smaller local helpers for the toolbar, stats panel, controls panel, and debug-parameters panel around the main scene.
 
 ## World-View Feature
 
@@ -70,7 +70,8 @@ src/client/
 4. `/api/voxels/:lod/:regionX/:regionY` returns compressed binary payloads.
 5. The worker converts mesh buffers into typed arrays, bakes voxel face shading plus a wall depth gradient into base vertex colors, and keeps raw per-face AO separate from those base colors.
 6. The main thread uploads the data to Three.js geometries within a frame budget and applies final seam-aware AO after voxel LOD visibility and parent/child fallback coverage are resolved: top-face AO runs on `L1` and `L2`, while side faces currently rely on the baked face tint and depth cue only; the Parameters panel exposes a runtime AO intensity control for tuning the top-face effect.
-7. Cursor hover prefers voxel meshes and falls back to the terrain underlay when enabled, converting the underlay hit back to the terrain's real world height.
+7. The 3D runtime also publishes a lightweight loading breakdown every frame, and `App` uses it to drive the spinner even when debug stats are hidden.
+8. Cursor hover prefers voxel meshes and falls back to the terrain underlay when enabled, converting the underlay hit back to the terrain's real world height.
 
 ## Live Updates
 

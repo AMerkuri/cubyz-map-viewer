@@ -1,15 +1,26 @@
+export type LoadingBreakdown = {
+  terrain: number;
+  voxels: number;
+  fetchQueue: number;
+  meshQueue: number;
+};
+
+export function createEmptyLoadingBreakdown(): LoadingBreakdown {
+  return {
+    terrain: 0,
+    voxels: 0,
+    fetchQueue: 0,
+    meshQueue: 0,
+  };
+}
+
 export type ChunkStats = {
   loading: number;
   loaded: number;
   fps: number;
   focusLod: number;
   mode: "terrain" | "voxel";
-  loadingBreakdown: {
-    terrain: number;
-    voxels: number;
-    fetchQueue: number;
-    meshQueue: number;
-  };
+  loadingBreakdown: LoadingBreakdown;
   voxelHealth: {
     missing: number;
     failed: number;
@@ -102,12 +113,7 @@ export function createEmptyChunkStats(mode: "terrain" | "voxel"): ChunkStats {
     fps: 0,
     focusLod: 1,
     mode,
-    loadingBreakdown: {
-      terrain: 0,
-      voxels: 0,
-      fetchQueue: 0,
-      meshQueue: 0,
-    },
+    loadingBreakdown: createEmptyLoadingBreakdown(),
     voxelHealth: {
       missing: 0,
       failed: 0,

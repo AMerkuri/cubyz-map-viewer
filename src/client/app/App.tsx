@@ -20,7 +20,9 @@ import {
 import {
   type ChunkStats,
   createEmptyChunkStats,
+  createEmptyLoadingBreakdown,
   DEFAULT_MAP_DEBUG_SETTINGS,
+  type LoadingBreakdown,
   type MapDebugSettings,
 } from "../features/world-view/debug.js";
 import type { PlayerData } from "../features/world-view/hooks/usePlayers.js";
@@ -151,6 +153,16 @@ function LoadingIndicator({ visible }: { visible: boolean }) {
         }}
       />
     </div>
+  );
+}
+
+function isLoadingBreakdownActive(loadingBreakdown: LoadingBreakdown): boolean {
+  return (
+    loadingBreakdown.terrain +
+      loadingBreakdown.voxels +
+      loadingBreakdown.fetchQueue +
+      loadingBreakdown.meshQueue >
+    0
   );
 }
 
@@ -535,6 +547,9 @@ export function App() {
   const [chunkStats, setChunkStats] = useState<ChunkStats>(() =>
     createEmptyChunkStats(initialMode),
   );
+  const [loadingBreakdown, setLoadingBreakdown] = useState<LoadingBreakdown>(
+    () => createEmptyLoadingBreakdown(),
+  );
   const [chunkIndexEnabled, setChunkIndexEnabled] = useState(
     initialMode === "voxel",
   );
@@ -611,6 +626,13 @@ export function App() {
     setChunkStats(stats);
   }, []);
 
+  const handleLoadingBreakdownChange = useCallback(
+    (nextLoadingBreakdown: LoadingBreakdown) => {
+      setLoadingBreakdown(nextLoadingBreakdown);
+    },
+    [],
+  );
+
   const handleShareLocation = useCallback(async () => {
     const state = shareLocationRef.current;
     if (!state) return;
@@ -671,8 +693,6 @@ export function App() {
   const [minRenderedVoxelLod, setMinRenderedVoxelLod] = useState(
     DEFAULT_MIN_RENDERED_VOXEL_LOD,
   );
-  const [voxelLoading, setVoxelLoading] = useState(false);
-
   const applyGraphicsPreset = useCallback((preset: GraphicsPreset) => {
     setRenderDistance(preset.renderDistance);
     setMinRenderedVoxelLod(preset.minRenderedVoxelLod);
@@ -788,7 +808,7 @@ export function App() {
         onCursorMove={handleCursorMove}
         onPlayerClick={handlePlayerClick}
         onChunkStatsChange={handleChunkStatsChange}
-        onVoxelLoadingChange={setVoxelLoading}
+        onLoadingBreakdownChange={handleLoadingBreakdownChange}
         onShareStateChange={handleShareStateChange}
         initialCameraState={initialCameraState}
         flyToRequest={flyToRequest}
@@ -801,9 +821,7 @@ export function App() {
         onViewChange={handleViewChange}
       />
 
-      <LoadingIndicator
-        visible={layerVisibility.debug ? false : voxelLoading}
-      />
+      <LoadingIndicator visible={isLoadingBreakdownActive(loadingBreakdown)} />
 
       {layerVisibility.debug && (
         <>

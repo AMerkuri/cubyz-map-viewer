@@ -1,5 +1,5 @@
 import type * as THREE from "three";
-import type { MapDebugSettings } from "../debug.js";
+import type { LoadingBreakdown, MapDebugSettings } from "../debug.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
@@ -203,7 +203,7 @@ export interface World3DViewProps {
   onCursorMove: (pos: [number, number, number] | null) => void;
   onPlayerClick: (player: PlayerData) => void;
   onChunkStatsChange: (stats: import("../debug.js").ChunkStats) => void;
-  onVoxelLoadingChange: (loading: boolean) => void;
+  onLoadingBreakdownChange: (loadingBreakdown: LoadingBreakdown) => void;
   initialCameraState: InitialCameraState | null;
   onShareStateChange: (state: {
     mode: "terrain" | "voxel";

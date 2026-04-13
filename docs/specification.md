@@ -11,7 +11,7 @@ Cubyz Map Viewer is an interactive terrain and voxel map viewer for Cubyz worlds
 - Seam-aware voxel ambient occlusion with runtime intensity tuning for top faces on `L1` and `L2`
 - Live updates from save-file changes over WebSocket
 - Player and spawn markers, including model-backed 3D player markers
-- Debug stats, rendering controls, and voxel tuning parameters
+- Debug stats, rendering controls, loading spinner feedback, and voxel tuning parameters
 
 ## Shared Behavior
 
