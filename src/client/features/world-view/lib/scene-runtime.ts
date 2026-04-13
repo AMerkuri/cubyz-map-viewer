@@ -232,6 +232,7 @@ export function initializeSceneRuntime(args: {
     camera,
     modeRef,
     showTerrainRef,
+    showVoxelTerrainRef,
     terrainGroupRef,
     voxelGroupRef,
     keysHeldRef,

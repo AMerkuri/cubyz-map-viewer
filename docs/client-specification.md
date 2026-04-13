@@ -65,6 +65,7 @@ src/client/
 4. `/api/voxels/:lod/:regionX/:regionY` returns compressed binary payloads.
 5. The worker converts mesh buffers into typed arrays.
 6. The main thread uploads the data to Three.js geometries within a frame budget.
+7. Cursor hover prefers voxel meshes and falls back to the terrain underlay when enabled, converting the underlay hit back to the terrain's real world height.
 
 ## Live Updates
 

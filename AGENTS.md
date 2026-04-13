@@ -36,7 +36,7 @@
 ## Verification
 
 - There is no test runner configured
-- After code changes, run `npm run check`
+- After code changes, run `npm run check` and `npm run typecheck`
 - Run `npm run build` for changes that affect bundling, types, workers, routing, or path moves
 - Manual smoke checks that match the repo:
   - `curl http://localhost:3001/api/health`

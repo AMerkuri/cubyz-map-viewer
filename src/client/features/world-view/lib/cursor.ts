@@ -16,6 +16,7 @@ export function createCursorInteractionHandlers(args: {
   camera: THREE.PerspectiveCamera;
   modeRef: { current: "terrain" | "voxel" };
   showTerrainRef: { current: boolean };
+  showVoxelTerrainRef: { current: boolean };
   terrainGroupRef: { current: THREE.Group | null };
   voxelGroupRef: { current: THREE.Group | null };
   keysHeldRef: { current: Set<string> };
@@ -26,6 +27,7 @@ export function createCursorInteractionHandlers(args: {
     camera,
     modeRef,
     showTerrainRef,
+    showVoxelTerrainRef,
     terrainGroupRef,
     voxelGroupRef,
     keysHeldRef,
@@ -34,9 +36,25 @@ export function createCursorInteractionHandlers(args: {
 
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
+  const objectWorldPosition = new THREE.Vector3();
   const hoverState = { active: false, clientX: 0, clientY: 0 };
   let isPointerInteracting = false;
   let cursorRefreshTimer: number | null = null;
+
+  function reportIntersection(
+    intersection: THREE.Intersection,
+    isTerrain: boolean,
+  ) {
+    const point = intersection.point;
+    const terrainOffsetZ = isTerrain
+      ? intersection.object.getWorldPosition(objectWorldPosition).z
+      : 0;
+    onCursorMoveRef.current([
+      Math.round(point.x),
+      Math.round(point.y),
+      Math.round(point.z - terrainOffsetZ),
+    ]);
+  }
 
   function clearCursorRefreshTimer() {
     if (cursorRefreshTimer === null) return;
@@ -48,18 +66,23 @@ export function createCursorInteractionHandlers(args: {
     if (!hoverState.active) return;
     if (isPointerInteracting || keysHeldRef.current.size > 0) return;
 
-    const targets: THREE.Object3D[] = [];
-    if (
-      modeRef.current === "terrain" &&
-      showTerrainRef.current &&
-      terrainGroupRef.current
-    ) {
-      targets.push(terrainGroupRef.current);
-    }
+    const terrainGroup = terrainGroupRef.current;
+    const terrainVisible =
+      modeRef.current === "terrain"
+        ? showTerrainRef.current
+        : showVoxelTerrainRef.current;
+
+    const voxelTargets: THREE.Object3D[] = [];
     if (modeRef.current === "voxel" && voxelGroupRef.current) {
-      targets.push(voxelGroupRef.current);
+      voxelTargets.push(voxelGroupRef.current);
     }
-    if (targets.length === 0) {
+
+    const terrainTargets: THREE.Object3D[] = [];
+    if (terrainVisible && terrainGroup) {
+      terrainTargets.push(terrainGroup);
+    }
+
+    if (voxelTargets.length === 0 && terrainTargets.length === 0) {
       onCursorMoveRef.current(null);
       return;
     }
@@ -74,18 +97,29 @@ export function createCursorInteractionHandlers(args: {
     pointerNdc.y = -((hoverState.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointerNdc, camera);
 
-    const intersections = raycaster.intersectObjects(targets, true);
-    if (intersections.length === 0) {
+    if (voxelTargets.length > 0) {
+      const voxelIntersections = raycaster.intersectObjects(voxelTargets, true);
+      if (voxelIntersections.length > 0) {
+        reportIntersection(voxelIntersections[0], false);
+        return;
+      }
+    }
+
+    if (terrainTargets.length === 0) {
       onCursorMoveRef.current(null);
       return;
     }
 
-    const point = intersections[0].point;
-    onCursorMoveRef.current([
-      Math.round(point.x),
-      Math.round(point.y),
-      Math.round(point.z),
-    ]);
+    const terrainIntersections = raycaster.intersectObjects(
+      terrainTargets,
+      true,
+    );
+    if (terrainIntersections.length === 0) {
+      onCursorMoveRef.current(null);
+      return;
+    }
+
+    reportIntersection(terrainIntersections[0], true);
   }
 
   function scheduleCursorTooltipRefresh() {
