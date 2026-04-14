@@ -29,7 +29,6 @@ HTTP route modules validate request parameters, call parser and service code, sh
 
 Examples:
 
-- `tiles.ts`: rendered PNG terrain tiles
 - `world.ts`: world metadata and indexes
 - `players.ts`: parsed player data
 - `terrain.ts`: raw terrain data for 3D terrain meshes
@@ -57,11 +56,10 @@ Examples:
 
 - `color-map.ts`: builds block colors from Cubyz block definitions and biome data
 - `terrain-data.ts`: builds 3D terrain mesh payloads from surface data
-- `tile-renderer.ts`: converts parsed surface data into PNG tiles
 - `voxel-mesh-service.ts`: caches, dedupes, and orchestrates voxel mesh generation
 - `voxel-worker-pool.ts`: manages the worker pool for voxel jobs
 - `watcher.ts`: monitors the save directory and emits typed watch events
-- `cache.ts`: LRU cache used by terrain and voxel pipelines
+- `cache.ts`: LRU cache used by the voxel pipeline
 
 ### Logging
 
@@ -90,22 +88,19 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 2. The client requests `/api/assets/entities/models/:name` and `/api/assets/entities/textures/:name` for entity assets.
 3. The viewer combines the payloads client-side to render clickable player representations.
 
-### Terrain Tile Rendering
-
-1. The client requests `/api/tiles/:lod/:x/:y.png`.
-2. `tiles.ts` maps tile coordinates to the backing `.surface` file.
-3. If the file exists, `parseSurfaceFile` decodes it.
-4. `tile-renderer.ts` renders a PNG using `ColorMapService`.
-5. The result is cached by tile coordinates and source mtime.
-6. If the surface file does not exist, the server returns an empty tile.
-
 ### Terrain Mesh Data
 
 1. The client requests `/api/terrain/:lod/:x/:y` for 3D terrain payloads.
-2. `terrain.ts` validates the tile params, resolves the backing `.surface` file, and revalidates with an ETag.
+2. `terrain.ts` validates the tile params, resolves the backing `.surface` file, sets a 1-hour browser cache, and revalidates with an ETag before parsing the surface when the browser asks.
 3. `parseSurfaceFile` decodes the height and biome arrays.
 4. `terrain-data.ts` down-samples the surface into JSON height and color arrays for the client mesh builder.
 5. The client now schedules those payloads through a bounded fetch queue and a per-frame mesh-build queue so zooming does not try to build every refined terrain tile immediately.
+
+### Biome Label Data
+
+1. The client requests `/api/biomes/:lod/:x/:y`.
+2. `biomes.ts` validates the tile params, resolves the backing `.surface` file, sets a 1-hour browser cache, and revalidates with an ETag before parsing the surface when the browser asks.
+3. `parseSurfaceFile` decodes the biome array, and the route groups biome cells into aggregate label regions.
 
 ### Voxel Mesh Generation
 
@@ -116,7 +111,7 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 5. A worker parses one or more `.region` files, generates a greedy mesh, computes packed top-face AO with same-LOD neighbor sampling across region edges for `L1` and `L2`, and returns an indexless binary payload plus metrics.
 6. The binary mesh payload preserves direct world `X/Y/Z` coordinates and carries separate per-quad color, packed face AO, winding, and vertex-position sections so the client can defer final top-face AO application until after LOD visibility is known.
 7. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
-8. The route negotiates compressed voxel transport and exposes timing and queue metrics through response headers.
+8. The route negotiates compressed voxel transport, computes the current ETag from source-file metadata before resolving the mesh body, and exposes timing and queue metrics through response headers.
 
 ### Voxel Benchmarking
 
@@ -146,10 +141,9 @@ It emits:
 
 ### Broadcast and Invalidation
 
-1. Terrain tile cache entries are invalidated for changed surface tiles.
-2. Voxel mesh cache entries are invalidated for changed voxel regions.
-3. Broad terrain changes can trigger a throttled full voxel cache clear.
-4. The event is broadcast to all connected WebSocket clients.
+1. Voxel mesh cache entries are invalidated for changed voxel regions.
+2. Broad terrain changes can trigger a throttled full voxel cache clear.
+3. The event is broadcast to all connected WebSocket clients.
 
 ## Request Context and Errors
 
@@ -170,12 +164,6 @@ It emits:
 - shutdown stops the watcher, closes WebSocket clients, closes the HTTP server, and destroys the voxel mesh service
 
 ## Caching Strategy
-
-### Terrain Tiles
-
-- cached in memory via `LRUCache`
-- invalidated by source file modification time
-- unexplored areas are not permanently cached as rendered data
 
 ### Voxel Meshes
 

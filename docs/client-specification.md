@@ -60,14 +60,14 @@ src/client/
 2. `World3DView` selects desired terrain tiles from the surface index, queues fetches with a small concurrency limit, and drains them as the camera moves.
 3. Fetched terrain payloads are converted into Three.js meshes within a per-frame build budget instead of immediately on fetch completion.
 4. Coarser terrain tiles stay visible as fallback coverage until finer child tiles are ready, reducing zoom-in churn and visible popping.
-5. Terrain meshes, markers, and biome labels refresh with camera motion and toggles.
+5. Terrain meshes, markers, and biome labels refresh with camera motion and toggles; terrain and biome HTTP responses use 1-hour browser caching plus ETag revalidation when the browser checks again.
 
 ### Voxel Mode
 
 1. `App` enables chunk index loading.
 2. `useWorldData` fetches `/api/world/chunk-index`.
 3. The voxel runtime selects regions based on camera focus, distance, render distance, minimum voxel LOD, and preset tuning.
-4. `/api/voxels/:lod/:regionX/:regionY` returns compressed binary payloads.
+4. `/api/voxels/:lod/:regionX/:regionY` returns compressed binary payloads with `max-age=0` and ETag revalidation.
 5. The worker converts mesh buffers into typed arrays, bakes voxel face shading plus a wall depth gradient into base vertex colors, and keeps raw per-face AO separate from those base colors.
 6. The main thread uploads the data to Three.js geometries within a frame budget and applies final seam-aware AO after voxel LOD visibility and parent/child fallback coverage are resolved: top-face AO runs on `L1` and `L2`, while side faces currently rely on the baked face tint and depth cue only; the Parameters panel exposes a runtime AO intensity control for tuning the top-face effect.
 7. The 3D runtime also publishes a lightweight loading breakdown every frame, and `App` uses it to drive the spinner even when debug stats are hidden.

@@ -134,6 +134,27 @@ export function createVoxelsRouter(voxelMeshService: VoxelMeshService): Router {
       });
       return;
     }
+
+    const currentEtag = await voxelMeshService.getCurrentEtag(
+      key,
+      lod,
+      regionX,
+      regionY,
+      contentEncoding,
+    );
+    if (!currentEtag) {
+      res.set("Cache-Control", VOXEL_MISS_CACHE_CONTROL);
+      res.status(204).end();
+      return;
+    }
+    if (etagMatches(req.headers["if-none-match"], currentEtag)) {
+      res.set("Cache-Control", VOXEL_CACHE_CONTROL);
+      res.append("Vary", "Accept-Encoding");
+      res.set("ETag", currentEtag);
+      res.status(304).end();
+      return;
+    }
+
     const response = await voxelMeshService.getVoxelMesh(
       key,
       lod,
@@ -184,10 +205,6 @@ export function createVoxelsRouter(voxelMeshService: VoxelMeshService): Router {
     res.set("Cache-Control", VOXEL_CACHE_CONTROL);
     res.append("Vary", "Accept-Encoding");
     res.set("ETag", response.etag);
-    if (etagMatches(req.headers["if-none-match"], response.etag)) {
-      res.status(304).end();
-      return;
-    }
 
     res.set("Content-Type", "application/octet-stream");
     if (response.contentEncoding) {

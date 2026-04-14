@@ -12,6 +12,8 @@ import { NotFoundError } from "./errors.js";
 import { etagMatches, statIfExists } from "./http.js";
 import { parseTileParams } from "./validation.js";
 
+const TERRAIN_CACHE_CONTROL = "public, max-age=3600";
+
 export function createTerrainRouter(
   savePath: string,
   colorMap: ColorMapService,
@@ -38,7 +40,7 @@ export function createTerrainRouter(
 
     const etag = `"terrain-${lod}-${worldX}-${worldY}-${Math.trunc(surfaceStat.mtimeMs)}-${surfaceStat.size}"`;
     if (etagMatches(req.headers["if-none-match"], etag)) {
-      res.set("Cache-Control", "public, max-age=0, must-revalidate");
+      res.set("Cache-Control", TERRAIN_CACHE_CONTROL);
       res.set("ETag", etag);
       res.status(304).end();
       return;
@@ -47,7 +49,7 @@ export function createTerrainRouter(
     const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
     const terrainData = buildTerrainData(surface, colorMap, 128);
 
-    res.set("Cache-Control", "public, max-age=0, must-revalidate");
+    res.set("Cache-Control", TERRAIN_CACHE_CONTROL);
     res.set("ETag", etag);
     res.json(terrainData);
   });

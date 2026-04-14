@@ -39,8 +39,8 @@ export class VoxelWorkerPool {
 
   constructor(savePath: string, blockColors: BlockColorTable, size?: number) {
     this.workerData = { savePath, blockColors };
-    const cpuCount = Math.max(1, availableParallelism() - 1);
-    this.size = Math.max(1, size ?? Math.min(4, cpuCount));
+    const parallelism = Math.max(1, availableParallelism());
+    this.size = Math.max(1, size ?? Math.floor(parallelism / 2));
   }
 
   async start(): Promise<void> {

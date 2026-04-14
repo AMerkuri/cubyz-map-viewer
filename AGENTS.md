@@ -41,7 +41,6 @@
 - Manual smoke checks that match the repo:
   - `curl http://localhost:3001/api/health`
   - `curl http://localhost:3001/api/world`
-  - `curl -o tile.png http://localhost:3001/api/tiles/1/8/3.png`
 
 ## Client Structure
 

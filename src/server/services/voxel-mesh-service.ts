@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { brotliCompress, gzip, constants as zlibConstants } from "node:zlib";
 import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
 import { LRUCache } from "./cache.js";
+import { computeVoxelSourceSignature } from "./voxel-source-signature.js";
 import {
   type InstrumentedPoolResult,
   VoxelWorkerPool,
@@ -12,7 +12,7 @@ import {
 interface CachedVoxelMesh {
   key: string;
   buf: Buffer;
-  hash: string;
+  sourceSignature: string;
   cacheTier: VoxelGenerationStats["cacheTier"];
   variants: Map<VoxelContentEncoding, CachedVoxelVariant>;
   variantJobs: Map<CompressedVoxelEncoding, Promise<CachedVoxelVariant>>;
@@ -109,7 +109,8 @@ export interface VoxelServiceMetricsSnapshot {
 
 export class VoxelMeshService {
   private readonly pool: VoxelWorkerPool;
-  private readonly cache = new LRUCache<string, CachedVoxelMesh>(256);
+  private readonly cache: LRUCache<string, CachedVoxelMesh>;
+  private readonly savePath: string;
   private readonly inFlight = new Map<string, InFlightJob>();
   private globalEpoch = 0;
   private nextJobId = 1;
@@ -128,8 +129,11 @@ export class VoxelMeshService {
     savePath: string,
     blockColors: BlockColorTable,
     workerCount?: number,
+    cacheSize = 1024,
   ) {
+    this.savePath = savePath;
     this.pool = new VoxelWorkerPool(savePath, blockColors, workerCount);
+    this.cache = new LRUCache<string, CachedVoxelMesh>(cacheSize);
   }
 
   async start(): Promise<void> {
@@ -170,6 +174,35 @@ export class VoxelMeshService {
       totalMsAvg: this.average(this.totalMetric),
       totalMsMax: this.totalMetric.max,
     };
+  }
+
+  async getCurrentEtag(
+    key: string,
+    lod: number,
+    regionX: number,
+    regionY: number,
+    contentEncoding: VoxelContentEncoding,
+  ): Promise<string | null> {
+    const cached = this.cache.get(key);
+    if (cached) {
+      return this.buildVariantEtag(
+        key,
+        cached.sourceSignature,
+        contentEncoding,
+      );
+    }
+
+    const sourceSignature = await computeVoxelSourceSignature({
+      savePath: this.savePath,
+      lod,
+      regionX,
+      regionY,
+    });
+    if (!sourceSignature) {
+      return null;
+    }
+
+    return this.buildVariantEtag(key, sourceSignature, contentEncoding);
   }
 
   async getVoxelMesh(
@@ -266,17 +299,27 @@ export class VoxelMeshService {
       return { status: "empty", metrics };
     }
 
+    const sourceSignature = await computeVoxelSourceSignature({
+      savePath: this.savePath,
+      lod,
+      regionX,
+      regionY,
+    });
+    if (!sourceSignature) {
+      this.emptyResponses++;
+      return { status: "empty", metrics };
+    }
+
     const responseBuffer = Buffer.from(result.buffer);
-    const hash = createHash("sha1").update(responseBuffer).digest("hex");
     const variants = new Map<VoxelContentEncoding, CachedVoxelVariant>();
     variants.set("identity", {
       buf: responseBuffer,
-      etag: this.buildVariantEtag(key, hash, "identity"),
+      etag: this.buildVariantEtag(key, sourceSignature, "identity"),
     });
     const cachedMesh: CachedVoxelMesh = {
       key,
       buf: responseBuffer,
-      hash,
+      sourceSignature,
       cacheTier: result.stats?.cacheTier ?? "worker",
       variants,
       variantJobs: new Map(),
@@ -443,15 +486,19 @@ export class VoxelMeshService {
         : await gzipAsync(cached.buf, GZIP_RESPONSE_OPTIONS);
     return {
       buf: compressed,
-      etag: this.buildVariantEtag(cached.key, cached.hash, contentEncoding),
+      etag: this.buildVariantEtag(
+        cached.key,
+        cached.sourceSignature,
+        contentEncoding,
+      ),
     };
   }
 
   private buildVariantEtag(
     key: string,
-    hash: string,
+    sourceSignature: string,
     contentEncoding: VoxelContentEncoding,
   ): string {
-    return `"voxels-${key}-${contentEncoding}-${hash}"`;
+    return `"voxels-${key}-${contentEncoding}-${sourceSignature}"`;
   }
 }

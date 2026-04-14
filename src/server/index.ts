@@ -18,7 +18,6 @@ import { errorHandler } from "./api/error-handler.js";
 import { createPlayersRouter } from "./api/players.js";
 import { requestContextMiddleware } from "./api/request-context.js";
 import { createTerrainRouter } from "./api/terrain.js";
-import { createTilesRouter } from "./api/tiles.js";
 import { parseSafeAssetName } from "./api/validation.js";
 import { createVoxelsRouter } from "./api/voxels.js";
 import { createWorldRouter } from "./api/world.js";
@@ -26,7 +25,6 @@ import { loadAllBiomes } from "./parsers/biome.js";
 import { loadPalette } from "./parsers/palette.js";
 import { parseWorldMeta } from "./parsers/world-meta.js";
 import { buildBlockColorTable } from "./services/block-color-table.js";
-import { LRUCache } from "./services/cache.js";
 import { ColorMapService } from "./services/color-map.js";
 import { logger } from "./services/logger.js";
 import { VoxelMeshService } from "./services/voxel-mesh-service.js";
@@ -36,7 +34,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
-const CACHE_SIZE = parseInt(process.env.CACHE_SIZE ?? "500", 10);
+const VOXEL_MEMORY_CACHE_SIZE = parseInt(
+  process.env.VOXEL_MEMORY_CACHE_SIZE ?? "1024",
+  10,
+);
 const VOXEL_FULL_CLEAR_THROTTLE_MS = parseInt(
   process.env.VOXEL_FULL_CLEAR_THROTTLE_MS ?? "1000",
   10,
@@ -178,13 +179,9 @@ async function main() {
     process.env.VOXEL_WORKERS
       ? parseInt(process.env.VOXEL_WORKERS, 10)
       : undefined,
+    VOXEL_MEMORY_CACHE_SIZE,
   );
   await voxelMeshService.start();
-
-  // Create tile cache (stores rendered PNGs with source file mtime for invalidation)
-  const tileCache = new LRUCache<string, { buf: Buffer; mtime: number }>(
-    CACHE_SIZE,
-  );
 
   // Create Express app
   const app = express();
@@ -242,7 +239,6 @@ async function main() {
   });
 
   // API routes
-  app.use("/api/tiles", createTilesRouter(savePath, colorMap, tileCache));
   app.use("/api/world", createWorldRouter(savePath, worldMeta));
   app.use("/api/players", createPlayersRouter(savePath));
   app.use("/api/terrain", createTerrainRouter(savePath, colorMap));
@@ -269,7 +265,6 @@ async function main() {
       status: "ok",
       savePath,
       worldName: worldMeta.name,
-      cacheSize: tileCache.size,
     });
   });
 
@@ -362,10 +357,6 @@ async function main() {
     if (event.type === "terrain-updates-batch" && event.data) {
       const { tiles, regions } = event.data as TerrainUpdatesBatchData;
 
-      for (const tile of tiles) {
-        tileCache.delete(`${tile.lod}/${tile.tileX}/${tile.tileY}`);
-      }
-
       if (tiles.length > 0) {
         const now = Date.now();
         if (now >= voxelFullClearCooldownUntil) {
@@ -426,7 +417,6 @@ async function main() {
         "GET /api/world/surface-index",
         "GET /api/world/chunk-index",
         "GET /api/players",
-        "GET /api/tiles/:lod/:x/:y.png",
         "GET /api/terrain/:lod/:x/:y",
         "GET /api/biomes/:lod/:x/:y",
         "GET /api/voxels/:lod/:rx/:ry",

@@ -9,8 +9,10 @@ import { type Request, type Response, Router } from "express";
 import type { Palette } from "../parsers/palette.js";
 import { MAP_SIZE, parseSurfaceFile } from "../parsers/surface.js";
 import { NotFoundError } from "./errors.js";
-import { statIfExists } from "./http.js";
+import { etagMatches, statIfExists } from "./http.js";
 import { parseTileParams } from "./validation.js";
+
+const BIOMES_CACHE_CONTROL = "public, max-age=3600";
 
 interface BiomeRegion {
   biomeId: string;
@@ -47,6 +49,14 @@ export function createBiomesRouter(
       throw new NotFoundError("Surface data not found");
     }
 
+    const etag = `"biomes-${lod}-${worldX}-${worldY}-${Math.trunc(surfaceStat.mtimeMs)}-${surfaceStat.size}"`;
+    if (etagMatches(req.headers["if-none-match"], etag)) {
+      res.set("Cache-Control", BIOMES_CACHE_CONTROL);
+      res.set("ETag", etag);
+      res.status(304).end();
+      return;
+    }
+
     const surface = await parseSurfaceFile(surfacePath, worldX, worldY, lod);
     const regions = extractBiomeRegions(
       surface.biomes,
@@ -56,7 +66,8 @@ export function createBiomesRouter(
       biomePalette,
     );
 
-    res.set("Cache-Control", "public, max-age=60");
+    res.set("Cache-Control", BIOMES_CACHE_CONTROL);
+    res.set("ETag", etag);
     res.json({ tileX: x, tileY: y, lod, regions });
   });
 

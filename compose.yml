@@ -7,13 +7,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      HOST: 0.0.0.0
       PORT: 3000
-      SAVE_PATH: /data/save
-      CUBYZ_PATH: /data/cubyz
-      VOXEL_CACHE_DIR: /data/cache/voxels
-      LOG_DIR: /data/logs
-      CACHE_SIZE: 500
     volumes:
       - type: bind
         source: /path/to/your/save

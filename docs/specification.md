@@ -37,13 +37,13 @@ The root `.env.example` mirrors the server config list.
 
 - `PORT`: HTTP bind port (`3001`)
 - `HOST`: HTTP bind address (`0.0.0.0`)
-- `CACHE_SIZE`: in-memory terrain tile cache size (`500`)
+- `VOXEL_MEMORY_CACHE_SIZE`: in-memory voxel mesh cache size (`1024` recommended for hosting)
 - `VOXEL_FULL_CLEAR_THROTTLE_MS`: minimum gap in ms between broad voxel cache clears (`1000`)
 - `TERRAIN_UPDATE_BATCH_MS`: save watcher batch window in ms for terrain updates (`15000`)
 - `CORS_ALLOWED_ORIGINS`: comma-separated browser origin allowlist
 - `SAVE_PATH`: Cubyz save directory; auto-detects `~/.cubyz/saves/` when unset
 - `CUBYZ_PATH`: Cubyz project root or asset source; auto-detects the repository parent containing `assets/cubyz` when unset
-- `VOXEL_WORKERS`: voxel worker pool size; defaults to up to `min(4, availableParallelism() - 1)` workers
+- `VOXEL_WORKERS`: voxel worker pool size; defaults to `floor(availableParallelism() / 2)` workers
 - `VOXEL_CACHE_DIR`: persistent voxel mesh cache directory (`dist/server/cache/voxels`)
 - `LOG_DIR`: Winston file log directory for rotated logs (`logs`)
 - `LOG_REQUESTS`: enables the rotated `server-requests.log` transport when set to `true`
@@ -105,7 +105,6 @@ docker compose up --build
 
 - `curl http://localhost:3001/api/health`
 - `curl http://localhost:3001/api/world`
-- `curl -o tile.png http://localhost:3001/api/tiles/1/8/3.png`
 
 ## Documentation
 
