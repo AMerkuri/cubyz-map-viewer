@@ -60,9 +60,10 @@ src/client/
 
 1. `useWorldData` fetches `/api/world` and `/api/world/surface-index`.
 2. `World3DView` selects desired terrain tiles from the surface index, queues fetches with a small concurrency limit, and drains them as the camera moves.
-3. Fetched terrain payloads are converted into Three.js meshes within a per-frame build budget instead of immediately on fetch completion.
+3. Fetched terrain payloads carry a visible vertex grid plus a 1-vertex same-LOD gutter sampled from the tile neighborhood, and the client builds normals from that gutter so same-LOD lighting seams stay consistent across tile borders.
 4. Coarser terrain tiles stay visible as fallback coverage until finer child tiles are ready, reducing zoom-in churn and visible popping.
-5. Terrain meshes, markers, and biome labels refresh with camera motion and toggles; terrain and biome HTTP responses use 1-hour browser caching plus ETag revalidation when the browser checks again.
+5. Terrain meshes are still converted into Three.js meshes within a per-frame build budget instead of immediately on fetch completion.
+6. Terrain meshes, markers, and biome labels refresh with camera motion and toggles; terrain and biome HTTP responses use 1-hour browser caching plus ETag revalidation when the browser checks again.
 
 ### Voxel Mode
 
@@ -80,9 +81,10 @@ src/client/
 1. `useWebSocket` connects to `/ws` and exposes the last server update time plus typed subscriptions.
 2. The server broadcasts `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`.
 3. `usePlayers` keeps player activity fresh with a 30-second refetch interval and also invalidates immediately on `players-updated` events.
-4. `World3DView` refreshes loaded scene data in place, and player updates rebuild the marker layer without recreating the full scene.
-5. Player markers use the `snale` entity model when the asset load succeeds, otherwise they render a fallback sprite marker with the player label.
-6. Spawn and player marker labels use bundled `unscii-8` / `unscii-16` fonts via client `@font-face` definitions.
+4. Terrain tile refreshes invalidate the changed tile plus its same-LOD neighbors because seam-safe terrain payloads depend on a 3x3 tile neighborhood; `surface-index-changed` takes the simpler clear-and-rebuild path for visible terrain so add/remove changes cannot leave stale neighbor-dependent meshes alive.
+5. `World3DView` refreshes loaded scene data in place, and player updates rebuild the marker layer without recreating the full scene.
+6. Player markers use the `snale` entity model when the asset load succeeds, otherwise they render a fallback sprite marker with the player label.
+7. Spawn and player marker labels use bundled `unscii-8` / `unscii-16` fonts via client `@font-face` definitions.
 
 ## Shared UI
 

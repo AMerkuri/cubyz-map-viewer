@@ -5,8 +5,12 @@ import type { WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 
 export interface TerrainMeshData {
-  width: number;
-  height: number;
+  meshWidth: number;
+  meshHeight: number;
+  sampleWidth: number;
+  sampleHeight: number;
+  gutter: number;
+  stepWorld: number;
   heights: number[];
   colors: number[];
   worldX: number;

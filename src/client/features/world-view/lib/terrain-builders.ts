@@ -10,16 +10,19 @@ export function buildFullTileMesh(
   terrainMaterial: THREE.Material,
 ): THREE.Mesh {
   const worldTileSize = 256 * data.voxelSize;
+  const visibleSegmentWidth = data.meshWidth - 1;
+  const visibleSegmentHeight = data.meshHeight - 1;
 
   const geometry = new THREE.PlaneGeometry(
     worldTileSize,
     worldTileSize,
-    data.width - 1,
-    data.height - 1,
+    visibleSegmentWidth,
+    visibleSegmentHeight,
   );
 
   const positions = geometry.attributes.position;
   const colorAttr = new Float32Array(positions.count * 3);
+  const normalAttr = new Float32Array(positions.count * 3);
 
   const edgeTop: {
     x: number;
@@ -55,11 +58,13 @@ export function buildFullTileMesh(
   }[] = [];
 
   for (let i = 0; i < positions.count; i++) {
-    const col = i % data.width;
-    const row = Math.floor(i / data.width);
+    const col = i % data.meshWidth;
+    const row = Math.floor(i / data.meshWidth);
     // PlaneGeometry emits rows from +Y to -Y, so reverse the sampled row to
     // keep scene Y aligned with increasing world Y.
-    const dataIdx = col * data.height + (data.height - 1 - row);
+    const sampleX = col + data.gutter;
+    const sampleY = data.sampleHeight - data.gutter - 1 - row;
+    const dataIdx = sampleIndex(data, sampleX, sampleY);
 
     const ht = data.heights[dataIdx] ?? 0;
     positions.setZ(i, ht);
@@ -72,22 +77,28 @@ export function buildFullTileMesh(
     colorAttr[i * 3 + 1] = g;
     colorAttr[i * 3 + 2] = b;
 
+    const normal = computeSurfaceNormal(data, sampleX, sampleY);
+    normalAttr[i * 3] = normal.x;
+    normalAttr[i * 3 + 1] = normal.y;
+    normalAttr[i * 3 + 2] = normal.z;
+
     const px = positions.getX(i);
     const py = positions.getY(i);
     const v = { x: px, y: py, z: ht, r, g, b };
     if (row === 0) edgeTop.push(v);
-    if (row === data.height - 1) edgeBottom.push(v);
+    if (row === data.meshHeight - 1) edgeBottom.push(v);
     if (col === 0) edgeLeft.push(v);
-    if (col === data.width - 1) edgeRight.push(v);
+    if (col === data.meshWidth - 1) edgeRight.push(v);
   }
 
   geometry.setAttribute("color", new THREE.BufferAttribute(colorAttr, 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normalAttr, 3));
   geometry.deleteAttribute("uv");
-  geometry.deleteAttribute("normal");
 
   const skirtPositions: number[] = [];
   const skirtColors: number[] = [];
   const skirtIndices: number[] = [];
+  const skirtNormals: number[] = [];
 
   function addSkirtStrip(
     edge: {
@@ -131,6 +142,14 @@ export function buildFullTileMesh(
         a.g,
         a.b,
       );
+      const edgeDir = new THREE.Vector2(b.x - a.x, b.y - a.y);
+      if (edgeDir.lengthSq() > 0) {
+        edgeDir.normalize();
+      }
+      const outward = new THREE.Vector3(edgeDir.y, -edgeDir.x, 0);
+      for (let k = 0; k < 4; k++) {
+        skirtNormals.push(outward.x, outward.y, outward.z);
+      }
       skirtIndices.push(base, base + 1, base + 2, base, base + 2, base + 3);
     }
   }
@@ -149,6 +168,10 @@ export function buildFullTileMesh(
     "color",
     new THREE.BufferAttribute(new Float32Array(skirtColors), 3),
   );
+  skirtGeom.setAttribute(
+    "normal",
+    new THREE.BufferAttribute(new Float32Array(skirtNormals), 3),
+  );
   skirtGeom.setIndex(
     new THREE.BufferAttribute(new Uint32Array(skirtIndices), 1),
   );
@@ -157,7 +180,6 @@ export function buildFullTileMesh(
   skirtGeom.dispose();
   geometry.dispose();
 
-  merged.computeVertexNormals();
   merged.computeBoundingBox();
   merged.computeBoundingSphere();
 
@@ -166,6 +188,43 @@ export function buildFullTileMesh(
   const centerY = data.worldY + worldTileSize / 2;
   mesh.position.set(centerX, centerY, 0);
   return mesh;
+}
+
+function sampleIndex(
+  data: TerrainMeshData,
+  sampleX: number,
+  sampleY: number,
+): number {
+  return sampleX * data.sampleHeight + sampleY;
+}
+
+function sampleHeight(
+  data: TerrainMeshData,
+  sampleX: number,
+  sampleY: number,
+): number {
+  const clampedX = THREE.MathUtils.clamp(sampleX, 0, data.sampleWidth - 1);
+  const clampedY = THREE.MathUtils.clamp(sampleY, 0, data.sampleHeight - 1);
+  return data.heights[sampleIndex(data, clampedX, clampedY)] ?? 0;
+}
+
+function computeSurfaceNormal(
+  data: TerrainMeshData,
+  sampleX: number,
+  sampleY: number,
+): THREE.Vector3 {
+  const dx = data.stepWorld;
+  const dy = data.stepWorld;
+  const left = sampleHeight(data, sampleX - 1, sampleY);
+  const right = sampleHeight(data, sampleX + 1, sampleY);
+  const down = sampleHeight(data, sampleX, sampleY - 1);
+  const up = sampleHeight(data, sampleX, sampleY + 1);
+
+  return new THREE.Vector3(
+    left - right,
+    down - up,
+    2 * Math.max(dx, dy),
+  ).normalize();
 }
 
 export function buildSurfaceTileBorderLines(

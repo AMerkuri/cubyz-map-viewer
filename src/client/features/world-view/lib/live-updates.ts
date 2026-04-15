@@ -46,32 +46,41 @@ export function handleTerrainTileUpdate(args: {
     biomeLabelsDirtyRef,
   } = args;
 
-  queryClient.invalidateQueries({ queryKey: ["terrain", lod, tileX, tileY] });
-  queryClient.invalidateQueries({ queryKey: ["biomes", lod, tileX, tileY] });
-
-  const key = terrainTileKey(lod, tileX, tileY);
-  const existing = loadedTerrain.get(key);
   const shouldRenderTerrain = shouldRenderTerrainForMode(
     mode,
     showTerrain,
     showVoxelTerrain,
   );
-  if (existing) {
-    if (shouldRenderTerrain) {
-      disposeTerrainTile(existing);
-      loadedTerrain.delete(key);
-      queueTerrainTileLoad(lod, tileX, tileY, Number.NEGATIVE_INFINITY);
-      debugLabelsDirtyRef.current = true;
-      biomeLabelsDirtyRef.current = true;
-    } else {
-      disposeTerrainTile(existing);
-      loadedTerrain.delete(key);
-      debugLabelsDirtyRef.current = true;
-      biomeLabelsDirtyRef.current = true;
+
+  for (let offsetX = -1; offsetX <= 1; offsetX++) {
+    for (let offsetY = -1; offsetY <= 1; offsetY++) {
+      const affectedTileX = tileX + offsetX;
+      const affectedTileY = tileY + offsetY;
+      queryClient.invalidateQueries({
+        queryKey: ["terrain", lod, affectedTileX, affectedTileY],
+      });
+
+      const key = terrainTileKey(lod, affectedTileX, affectedTileY);
+      const existing = loadedTerrain.get(key);
+      if (existing) {
+        disposeTerrainTile(existing);
+        loadedTerrain.delete(key);
+      }
+
+      if (shouldRenderTerrain) {
+        queueTerrainTileLoad(
+          lod,
+          affectedTileX,
+          affectedTileY,
+          Number.NEGATIVE_INFINITY,
+        );
+      }
     }
-  } else if (shouldRenderTerrain) {
-    queueTerrainTileLoad(lod, tileX, tileY, Number.NEGATIVE_INFINITY);
   }
+  queryClient.invalidateQueries({ queryKey: ["biomes", lod, tileX, tileY] });
+
+  debugLabelsDirtyRef.current = true;
+  biomeLabelsDirtyRef.current = true;
 }
 
 export function handleVoxelRegionUpdate(args: {

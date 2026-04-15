@@ -93,9 +93,10 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 
 1. The client requests `/api/terrain/:lod/:x/:y` for 3D terrain payloads.
 2. `terrain.ts` validates the tile params, resolves the backing `.surface` file, sets a 1-hour browser cache, and revalidates with an ETag before parsing the surface when the browser asks.
-3. `parseSurfaceFile` decodes the height and biome arrays.
-4. `terrain-data.ts` down-samples the surface into JSON height and color arrays for the client mesh builder.
-5. The client now schedules those payloads through a bounded fetch queue and a per-frame mesh-build queue so zooming does not try to build every refined terrain tile immediately.
+3. `parseSurfaceFile` decodes the height and biome arrays for the requested tile and any same-LOD neighbors needed by the terrain seam gutter.
+4. `terrain.ts` computes the terrain ETag from the same-LOD 3x3 neighborhood because the seam-safe terrain payload depends on adjacent surface tiles as well as the center tile.
+5. `terrain-data.ts` converts that neighborhood into a seam-safe JSON payload containing a visible vertex grid plus a 1-vertex gutter of neighbor-aware height and color samples for the client mesh builder.
+6. The client now schedules those payloads through a bounded fetch queue and a per-frame mesh-build queue so zooming does not try to build every refined terrain tile immediately.
 
 ### Biome Label Data
 
@@ -146,7 +147,8 @@ It emits:
 
 1. Voxel mesh cache entries are invalidated for changed voxel regions.
 2. Broad terrain changes can trigger a throttled full voxel cache clear.
-3. The event is broadcast to all connected WebSocket clients.
+3. Terrain tile change notifications remain tile-scoped on the wire, while the client expands them to the same-LOD 3x3 neighborhood because each seam-safe terrain response depends on adjacent surface files.
+4. The event is broadcast to all connected WebSocket clients.
 
 ## Request Context and Errors
 

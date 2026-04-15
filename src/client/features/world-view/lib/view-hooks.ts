@@ -324,6 +324,8 @@ export function useWorld3DSceneSyncEffects(args: {
   rebuildVoxelIndexState: (entries: ChunkIndexEntry[]) => void;
   missingVoxelsRef: { current: Set<string> };
   failedVoxelsRef: { current: Map<string, number> };
+  clearTerrainTiles: () => void;
+  terrainIndexVersionRef: { current: number };
   checkAndUpdateLOD: (
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
@@ -341,14 +343,23 @@ export function useWorld3DSceneSyncEffects(args: {
     rebuildVoxelIndexState,
     missingVoxelsRef,
     failedVoxelsRef,
+    clearTerrainTiles,
+    terrainIndexVersionRef,
     checkAndUpdateLOD,
   } = args;
 
   const onRebuildVoxelIndexState = useEffectEvent(rebuildVoxelIndexState);
+  const onClearTerrainTiles = useEffectEvent(clearTerrainTiles);
   const onCheckAndUpdateLOD = useEffectEvent(checkAndUpdateLOD);
 
   useEffect(() => {
+    const previousSurfaceIndex = surfaceIndexRef.current;
+    const surfaceIndexChanged = previousSurfaceIndex !== surfaceIndex;
     surfaceIndexRef.current = surfaceIndex;
+    if (surfaceIndexChanged && terrainIndexVersionRef.current > 0) {
+      onClearTerrainTiles();
+    }
+    terrainIndexVersionRef.current += 1;
     if (
       shouldRenderTerrainForMode(mode, showTerrain, showVoxelTerrain) &&
       sceneRef.current
@@ -362,6 +373,7 @@ export function useWorld3DSceneSyncEffects(args: {
     showVoxelTerrain,
     sceneRef,
     surfaceIndexRef,
+    terrainIndexVersionRef,
   ]);
 
   useEffect(() => {

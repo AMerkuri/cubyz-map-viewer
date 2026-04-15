@@ -234,6 +234,7 @@ export function World3DView({
   const workerRef = useRef<Worker | null>(null);
 
   const surfaceIndexRef = useRef<SurfaceIndexEntry[]>([]);
+  const terrainIndexVersionRef = useRef(0);
   const chunkIndexRef = useRef(worldData.chunkIndex);
   const availableVoxelKeysRef = useRef<Set<string>>(new Set());
   const voxelRootEntriesRef = useRef<ChunkIndexEntry[]>([]);
@@ -917,15 +918,15 @@ export function World3DView({
       markerGroup: markerGroupRef.current,
       createPlayerMarkerModel:
         playerMarkerModelTemplate &&
-          playerMarkerTexture &&
-          playerMarkerGrayscaleTexture
+        playerMarkerTexture &&
+        playerMarkerGrayscaleTexture
           ? (player) =>
-            createPlayerMarkerModel(
-              playerMarkerModelTemplate,
-              Date.now() - player.lastSeen > 60_000
-                ? playerMarkerGrayscaleTexture
-                : playerMarkerTexture,
-            )
+              createPlayerMarkerModel(
+                playerMarkerModelTemplate,
+                Date.now() - player.lastSeen > 60_000
+                  ? playerMarkerGrayscaleTexture
+                  : playerMarkerTexture,
+              )
           : () => null,
       createFormattedPlayerLabel,
       disposePlayerMarkerModel,
@@ -949,7 +950,7 @@ export function World3DView({
     );
     const playerScale = THREE.MathUtils.clamp(
       (cameraDistance / PLAYER_MARKER_SCALE_REFERENCE_DISTANCE) *
-      PLAYER_MARKER_BASE_SCALE,
+        PLAYER_MARKER_BASE_SCALE,
       PLAYER_MARKER_MIN_SCALE,
       PLAYER_MARKER_MAX_SCALE,
     );
@@ -1259,6 +1260,8 @@ export function World3DView({
     rebuildVoxelIndexState: rebuildVoxelIndexCache,
     missingVoxelsRef,
     failedVoxelsRef,
+    clearTerrainTiles,
+    terrainIndexVersionRef,
     checkAndUpdateLOD,
   });
 
