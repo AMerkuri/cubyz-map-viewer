@@ -25,5 +25,5 @@ COPY --from=runtime-base --chown=nonroot:nonroot /data /data
 COPY --from=build --chown=nonroot:nonroot /app/package.json ./package.json
 COPY --from=build --chown=nonroot:nonroot /app/node_modules ./node_modules
 COPY --from=build --chown=nonroot:nonroot /app/dist ./dist
-EXPOSE 3001
+EXPOSE 3000
 CMD ["dist/server/index.js"]

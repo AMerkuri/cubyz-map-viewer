@@ -69,6 +69,8 @@ The server rotates file logs at 20 MiB, keeps 14 archives per transport, and gzi
 
 The production container serves the built client and API/WebSocket server from a single Node.js process on port `3000`.
 
+For GitHub Container Registry publishing, required GitHub credentials, and the `build-and-push.sh` workflow, see `docs/deployment.md`.
+
 - save data mounted read-only at `/data/save`
 - Cubyz assets mounted read-only at `/data/cubyz`
 - persistent voxel cache mounted read-write at `/data/cache`
