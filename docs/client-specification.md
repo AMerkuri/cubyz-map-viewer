@@ -93,6 +93,8 @@ src/client/
 
 - `OverlayPanel.tsx` provides draggable, collapsible, snapping overlay panels with shared styling.
 - Drag listeners are only attached while a panel is actively being moved.
+- A panel reset button only appears after the panel has actually moved away from its default anchored position.
+- The panel header disables native touch panning so overlays can be dragged on touch devices.
 - The client UI defaults to the bundled `unscii-16` font, while spawn/player marker labels keep their own bundled `unscii-8`-first stack for compact map readability.
 - Shared panels and controls use a retro HUD treatment: square corners, stronger borders, dark brown glass surfaces with light blur, offset shadows, and square slider/thumb controls.
 

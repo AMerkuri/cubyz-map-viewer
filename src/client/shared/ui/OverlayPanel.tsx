@@ -55,6 +55,9 @@ export function OverlayPanel({
   const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(
     null,
   );
+  const [defaultPosition, setDefaultPosition] = useState<PanelPosition | null>(
+    null,
+  );
   const [dragging, setDragging] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
@@ -66,22 +69,37 @@ export function OverlayPanel({
   } | null>(null);
 
   useEffect(() => {
-    if (!absolute || !panelPosition) return;
+    if (!absolute) return;
 
     const handleResize = () => {
       const panel = panelRef.current;
       if (!panel) return;
+
+      const nextDefaultPosition = getDefaultPanelPosition(
+        panel,
+        position,
+        defaultPosition,
+      );
+      setDefaultPosition((current) =>
+        current && arePanelPositionsEqual(current, nextDefaultPosition)
+          ? current
+          : nextDefaultPosition,
+      );
       setPanelPosition((current) => {
         if (!current) return current;
-        return clampPositionToViewport(current, panel);
+        const nextPosition = clampPositionToViewport(current, panel);
+        return arePanelPositionsEqual(nextPosition, nextDefaultPosition)
+          ? null
+          : nextPosition;
       });
     };
 
+    handleResize();
     window.addEventListener("resize", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
     };
-  }, [absolute, panelPosition]);
+  }, [absolute, defaultPosition, position]);
 
   useEffect(() => {
     if (!absolute || !dragging) return;
@@ -92,12 +110,22 @@ export function OverlayPanel({
 
       const panel = panelRef.current;
       if (!panel) return;
+      const defaultPanelPosition = getDefaultPanelPosition(
+        panel,
+        position,
+        defaultPosition,
+      );
 
       const nextPosition = {
         left: dragState.startLeft + (event.clientX - dragState.startPointerX),
         top: dragState.startTop + (event.clientY - dragState.startPointerY),
       };
-      setPanelPosition(clampPositionToViewport(nextPosition, panel));
+      const clampedPosition = clampPositionToViewport(nextPosition, panel);
+      setPanelPosition(
+        arePanelPositionsEqual(clampedPosition, defaultPanelPosition)
+          ? null
+          : clampedPosition,
+      );
     };
 
     const stopDragging = (event: PointerEvent) => {
@@ -116,7 +144,7 @@ export function OverlayPanel({
       window.removeEventListener("pointerup", stopDragging);
       window.removeEventListener("pointercancel", stopDragging);
     };
-  }, [absolute, dragging]);
+  }, [absolute, defaultPosition, dragging, position]);
 
   const moved = panelPosition !== null;
   const panelContainerStyle: React.CSSProperties = {
@@ -178,6 +206,7 @@ export function OverlayPanel({
           background: "rgba(88, 62, 45)",
           cursor: absolute ? "grab" : "default",
           userSelect: "none",
+          touchAction: "none",
         }}
       >
         <div
@@ -256,6 +285,36 @@ function clampPositionToViewport(
   }
 
   return clampPositionToBounds(nextPosition, bounds);
+}
+
+function getDefaultPanelPosition(
+  panel: HTMLDivElement,
+  position: OverlayPanelProps["position"],
+  fallback: PanelPosition | null,
+): PanelPosition {
+  const rect = panel.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+
+  return {
+    left:
+      position?.left ??
+      (position?.right !== undefined
+        ? viewportWidth - rect.width - position.right
+        : (fallback?.left ?? rect.left)),
+    top:
+      position?.top ??
+      (position?.bottom !== undefined
+        ? viewportHeight - rect.height - position.bottom
+        : (fallback?.top ?? rect.top)),
+  };
+}
+
+function arePanelPositionsEqual(
+  first: PanelPosition,
+  second: PanelPosition,
+): boolean {
+  return first.left === second.left && first.top === second.top;
 }
 
 function clampPositionToBounds(
