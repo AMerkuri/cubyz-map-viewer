@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
 REGISTRY="ghcr.io"
@@ -9,7 +10,7 @@ IMAGE_NAME="${GITHUB_REPOSITORY:-}"
 REQUESTED_TAG="${1:-latest}"
 PLATFORMS="linux/amd64,linux/arm64"
 BUILDER_NAME="cubyz-map-viewer-builder"
-PACKAGE_VERSION="$(node -e "console.log(JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).version)" "$SCRIPT_DIR/package.json")"
+PACKAGE_VERSION="$(node -e "console.log(JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).version)" "$REPO_ROOT/package.json")"
 
 # Colors for output
 RED='\033[0;31m'
@@ -78,7 +79,7 @@ docker buildx build \
     --platform "$PLATFORMS" \
     "${TAG_ARGS[@]}" \
     --push \
-    "$SCRIPT_DIR"
+    "$REPO_ROOT"
 
 echo -e "${GREEN}=== Build and push completed successfully! ===${NC}"
 for tag in "${TAGS[@]}"; do

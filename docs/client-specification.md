@@ -26,7 +26,7 @@ src/client/
 ## Entry Points
 
 - `src/client/main.tsx`: boots React and creates the shared React Query client
-- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, debug state, loading-indicator state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes smaller local helpers for the toolbar, stats panel, controls panel, and debug-parameters panel around the main scene.
+- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, persisted graphics parameters, debug state, loading-indicator state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes smaller local helpers for the toolbar, stats panel, controls panel, and debug-parameters panel around the main scene.
 
 ## World-View Feature
 
@@ -42,6 +42,7 @@ src/client/
 - React handles composition, data fetching, overlays, and socket subscription
 - Three.js handles the renderer, scene, camera, controls, meshes, labels, markers, and animation loop; the Parameters panel can cap that loop between `30` and `120` FPS, with an `Uncapped` stop shown to the right of `120` and stored internally as `0`
 - When the scene is settled, no keyboard input is active, no work queues are pending, and the mouse is not hovering the canvas, the runtime can drop to a lower user-configured idle FPS after a short internal delay; idle mode also uses a slower internal LOD polling interval
+- The client restores persisted graphics preset values and custom parameter overrides from `localStorage` during startup, then keeps those graphics settings in sync as the user changes voxel rendering and parameter-panel values
 - Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
 - `World3DView.tsx` is the boundary between those two layers
 - `App.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI

@@ -58,11 +58,112 @@ type ShareLocationState =
 
 const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
+const GRAPHICS_SETTINGS_STORAGE_KEY = "cubyz-map-viewer.graphics-settings";
+const GRAPHICS_SETTINGS_STORAGE_VERSION = 1;
+
+type StoredGraphicsSettings = {
+  renderDistance: number;
+  voxelLod1MaxDist: number;
+  minRenderedVoxelLod: number;
+  mapDebugSettings: MapDebugSettings;
+  parameterVisibility: {
+    chunkBorders: boolean;
+    voxelHeightLabels: boolean;
+  };
+};
+
+type StoredGraphicsSettingsPayload = StoredGraphicsSettings & {
+  version: number;
+};
+
 const MapDebugParameters = lazy(async () =>
   import("../features/world-view/components/MapDebugParameters.js").then(
     ({ MapDebugParameters }) => ({ default: MapDebugParameters }),
   ),
 );
+
+function readFiniteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function readBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function sanitizeMapDebugSettings(value: unknown): MapDebugSettings {
+  const source = value && typeof value === "object" ? value : {};
+  const settings = { ...DEFAULT_MAP_DEBUG_SETTINGS };
+
+  for (const [key, defaultValue] of Object.entries(
+    DEFAULT_MAP_DEBUG_SETTINGS,
+  )) {
+    settings[key as keyof MapDebugSettings] = readFiniteNumber(
+      (source as Record<string, unknown>)[key],
+      defaultValue,
+    );
+  }
+
+  return settings;
+}
+
+function readStoredGraphicsSettings(): StoredGraphicsSettings | null {
+  try {
+    const raw = window.localStorage.getItem(GRAPHICS_SETTINGS_STORAGE_KEY);
+    if (raw === null) return null;
+
+    const parsed = JSON.parse(raw) as StoredGraphicsSettingsPayload | null;
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      parsed.version !== GRAPHICS_SETTINGS_STORAGE_VERSION
+    ) {
+      return null;
+    }
+
+    const parameterVisibility =
+      parsed.parameterVisibility &&
+      typeof parsed.parameterVisibility === "object"
+        ? (parsed.parameterVisibility as Record<string, unknown>)
+        : {};
+
+    return {
+      renderDistance: readFiniteNumber(
+        parsed.renderDistance,
+        DEFAULT_VOXEL_RENDER_DISTANCE,
+      ),
+      voxelLod1MaxDist: readFiniteNumber(parsed.voxelLod1MaxDist, 600),
+      minRenderedVoxelLod: readFiniteNumber(
+        parsed.minRenderedVoxelLod,
+        DEFAULT_MIN_RENDERED_VOXEL_LOD,
+      ),
+      mapDebugSettings: sanitizeMapDebugSettings(parsed.mapDebugSettings),
+      parameterVisibility: {
+        chunkBorders: readBoolean(parameterVisibility.chunkBorders, false),
+        voxelHeightLabels: readBoolean(
+          parameterVisibility.voxelHeightLabels,
+          false,
+        ),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredGraphicsSettings(settings: StoredGraphicsSettings): void {
+  try {
+    const payload: StoredGraphicsSettingsPayload = {
+      version: GRAPHICS_SETTINGS_STORAGE_VERSION,
+      ...settings,
+    };
+    window.localStorage.setItem(
+      GRAPHICS_SETTINGS_STORAGE_KEY,
+      JSON.stringify(payload),
+    );
+  } catch {
+    // Ignore storage failures so the viewer still works in locked-down browsers.
+  }
+}
 
 function readInitialMode(): "terrain" | "voxel" {
   const p = new URLSearchParams(window.location.search);
@@ -566,6 +667,15 @@ function DebugParametersPanel(args: {
 export function App() {
   const initialMode = readInitialMode();
   const initialCameraState = readInitialCameraState();
+  const restoredGraphicsSettingsRef = useRef<StoredGraphicsSettings | null>(
+    null,
+  );
+
+  if (restoredGraphicsSettingsRef.current === null) {
+    restoredGraphicsSettingsRef.current = readStoredGraphicsSettings();
+  }
+
+  const restoredGraphicsSettings = restoredGraphicsSettingsRef.current;
 
   const [view, setView] = useState<"terrain" | "voxel">(initialMode);
   const [flyToRequest, setFlyToRequest] = useState<{
@@ -584,7 +694,8 @@ export function App() {
     initialMode === "voxel",
   );
   const [mapDebugSettings, setMapDebugSettings] = useState<MapDebugSettings>(
-    DEFAULT_MAP_DEBUG_SETTINGS,
+    () =>
+      restoredGraphicsSettings?.mapDebugSettings ?? DEFAULT_MAP_DEBUG_SETTINGS,
   );
   const worldData = useWorldData(chunkIndexEnabled);
 
@@ -706,22 +817,32 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [shareCopied]);
 
-  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
-    biomeLabels: initialMode === "terrain",
-    players: true,
-    spawn: true,
-    debug: false,
-    chunkBorders: false,
-    showTerrain: true,
-    showVoxelTerrain: false,
-    voxelHeightLabels: false,
-  });
-  const [voxelLod1MaxDist, setVoxelLod1MaxDist] = useState(600);
+  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>(
+    () => ({
+      biomeLabels: initialMode === "terrain",
+      players: true,
+      spawn: true,
+      debug: false,
+      chunkBorders:
+        restoredGraphicsSettings?.parameterVisibility.chunkBorders ?? false,
+      showTerrain: true,
+      showVoxelTerrain: false,
+      voxelHeightLabels:
+        restoredGraphicsSettings?.parameterVisibility.voxelHeightLabels ??
+        false,
+    }),
+  );
+  const [voxelLod1MaxDist, setVoxelLod1MaxDist] = useState(
+    () => restoredGraphicsSettings?.voxelLod1MaxDist ?? 600,
+  );
   const [renderDistance, setRenderDistance] = useState(
-    DEFAULT_VOXEL_RENDER_DISTANCE,
+    () =>
+      restoredGraphicsSettings?.renderDistance ?? DEFAULT_VOXEL_RENDER_DISTANCE,
   );
   const [minRenderedVoxelLod, setMinRenderedVoxelLod] = useState(
-    DEFAULT_MIN_RENDERED_VOXEL_LOD,
+    () =>
+      restoredGraphicsSettings?.minRenderedVoxelLod ??
+      DEFAULT_MIN_RENDERED_VOXEL_LOD,
   );
   const applyGraphicsPreset = useCallback((preset: GraphicsPreset) => {
     setRenderDistance(preset.renderDistance);
@@ -748,6 +869,26 @@ export function App() {
       )?.id ?? null
     );
   }, [renderDistance, voxelLod1MaxDist, minRenderedVoxelLod, mapDebugSettings]);
+
+  useEffect(() => {
+    writeStoredGraphicsSettings({
+      renderDistance,
+      voxelLod1MaxDist,
+      minRenderedVoxelLod,
+      mapDebugSettings,
+      parameterVisibility: {
+        chunkBorders: layerVisibility.chunkBorders,
+        voxelHeightLabels: layerVisibility.voxelHeightLabels,
+      },
+    });
+  }, [
+    renderDistance,
+    voxelLod1MaxDist,
+    minRenderedVoxelLod,
+    mapDebugSettings,
+    layerVisibility.chunkBorders,
+    layerVisibility.voxelHeightLabels,
+  ]);
 
   const handleLayerVisibilityChange = useCallback((next: LayerVisibility) => {
     const normalized = next.debug

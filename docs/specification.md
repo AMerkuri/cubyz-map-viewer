@@ -24,6 +24,7 @@ Cubyz Map Viewer is an interactive terrain and voxel map viewer for Cubyz worlds
 - Supported surface LODs are `1, 2, 4, 8, 16, 32`.
 - Terrain tile fetches and mesh builds are queued on the client and applied within a per-frame budget to avoid zoom-time stalls.
 - Graphics presets also define client frame-rate defaults, and the client can automatically drop to a lower user-tunable idle FPS after a short internal delay once the scene is settled and the mouse is no longer hovering the canvas.
+- Graphics preset selections and custom graphics parameter values persist in browser `localStorage` and are restored on application load.
 - Terrain payloads are seam-safe across same-LOD tile borders: each `/api/terrain` response includes a visible vertex grid plus a 1-vertex gutter derived from the same-LOD tile neighborhood, and the client rebuilds visible terrain on surface-index topology changes.
 - Save watching batches filesystem churn into grouped update events.
 
@@ -69,7 +70,7 @@ The server rotates file logs at 20 MiB, keeps 14 archives per transport, and gzi
 
 The production container serves the built client and API/WebSocket server from a single Node.js process on port `3000`.
 
-For GitHub Container Registry publishing, required GitHub credentials, and the `build-and-push.sh` workflow, see `docs/deployment.md`.
+For GitHub Container Registry publishing, required GitHub credentials, and the `scripts/build-and-push.sh` workflow, see `docs/deployment.md`.
 
 - save data mounted read-only at `/data/save`
 - Cubyz assets mounted read-only at `/data/cubyz`

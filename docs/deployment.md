@@ -4,7 +4,7 @@
 
 This project ships a single container image that serves the built client, HTTP API, and WebSocket server from one Node.js process.
 
-Use `build-and-push.sh` to publish a multi-architecture image to GitHub Container Registry (`ghcr.io`).
+Use `scripts/build-and-push.sh` to publish a multi-architecture image to GitHub Container Registry (`ghcr.io`).
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ The script publishes these platforms:
 
 ## Required Environment Variables
 
-Set these variables before running `build-and-push.sh` locally:
+Set these variables before running `scripts/build-and-push.sh` locally:
 
 - `GITHUB_REPOSITORY`: target image name in `owner/repo` form
 - `GITHUB_ACTOR`: your GitHub username
@@ -60,8 +60,8 @@ If the target repository belongs to an organization with SSO enabled, authorize 
 Run without arguments, or pass `latest`, to publish both `latest` and the version from `package.json`:
 
 ```bash
-./build-and-push.sh
-./build-and-push.sh latest
+./scripts/build-and-push.sh
+./scripts/build-and-push.sh latest
 ```
 
 With the current `package.json`, that publishes:
@@ -72,7 +72,7 @@ With the current `package.json`, that publishes:
 Pass any other tag to publish only that explicit tag:
 
 ```bash
-./build-and-push.sh v1.0.0-rc1
+./scripts/build-and-push.sh v1.0.0-rc1
 ```
 
 That publishes only:
@@ -99,10 +99,6 @@ The checked-in `compose.yml` uses these container paths:
 
 ```bash
 docker run --rm -p 3000:3000 \
-  -e SAVE_PATH=/data/save \
-  -e CUBYZ_PATH=/data/cubyz \
-  -e VOXEL_CACHE_DIR=/data/cache/voxels \
-  -e LOG_DIR=/data/logs \
   -v /path/to/your/save:/data/save:ro \
   -v /path/to/Cubyz:/data/cubyz:ro \
   -v cubyz-map-viewer-cache:/data/cache \
