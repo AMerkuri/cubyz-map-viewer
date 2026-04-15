@@ -17,7 +17,7 @@ src/server/
 
 ## Main Entry Point
 
-`src/server/index.ts` is the composition root. It resolves and validates paths, loads world metadata and palettes, initializes the color map service, starts the voxel mesh service and worker pool, registers routers, optionally serves the built client bundle, starts HTTP and WebSocket servers, and then starts the save watcher.
+`src/server/index.ts` is the composition root. It resolves and validates paths, loads world metadata and palettes, initializes the color map service, starts the voxel mesh service and worker pool, registers routers, optionally serves the built client bundle, starts HTTP and WebSocket servers, starts the save watcher, and can optionally launch a background voxel warmup pass.
 
 It owns process lifecycle, route registration, WebSocket broadcasting, request context, CORS, and shutdown behavior.
 
@@ -115,6 +115,8 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 7. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
 8. The route negotiates compressed voxel transport, computes the current ETag from source-file metadata before resolving the mesh body, and exposes timing and queue metrics through response headers.
 
+When `VOXEL_PREGENERATE_ON_STARTUP=true`, the server also walks the chunk index after it starts listening and requests each region once through `VoxelMeshService`. That background pass is best-effort, bounded for concurrency, populates the persistent `VOXEL_CACHE_DIR` cache for new meshes, and leaves recently processed raw payloads hot in the in-memory voxel cache.
+
 ### Voxel Benchmarking
 
 - `GET /api/voxels/metrics` returns aggregate voxel service metrics
@@ -178,6 +180,7 @@ It emits:
 - exposed with encoding-specific ETags so clients can revalidate cheaply
 - cache raw payloads plus lazily generated `gzip` and `br` variants for repeated responses
 - can persist generated mesh payloads on disk via `VOXEL_CACHE_DIR` for faster warm restarts and container reuse
+- can optionally pre-generate both persistent and in-memory voxel caches on startup via `VOXEL_PREGENERATE_ON_STARTUP`
 
 ## WebSocket Role
 

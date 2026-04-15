@@ -47,6 +47,7 @@ The root `.env.example` mirrors the server config list.
 - `CUBYZ_PATH`: Cubyz project root or asset source; auto-detects the repository parent containing `assets/cubyz` when unset
 - `VOXEL_WORKERS`: voxel worker pool size; defaults to `floor(availableParallelism() / 2)` workers
 - `VOXEL_CACHE_DIR`: persistent voxel mesh cache directory (`dist/server/cache/voxels`)
+- `VOXEL_PREGENERATE_ON_STARTUP`: when `true`, the server starts a background voxel warmup pass that pre-generates persistent disk cache entries and fills the in-memory voxel mesh cache for discovered regions
 - `LOG_DIR`: Winston file log directory for rotated logs (`logs`)
 - `LOG_REQUESTS`: enables the rotated `server-requests.log` transport when set to `true`
 - `LOG_LEVEL`: Winston log level (`info`)

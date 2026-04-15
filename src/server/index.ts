@@ -25,6 +25,7 @@ import { loadAllBiomes } from "./parsers/biome.js";
 import { loadPalette } from "./parsers/palette.js";
 import { parseWorldMeta } from "./parsers/world-meta.js";
 import { buildBlockColorTable } from "./services/block-color-table.js";
+import { buildChunkIndex } from "./services/chunk-index.js";
 import { ColorMapService } from "./services/color-map.js";
 import { logger } from "./services/logger.js";
 import { VoxelMeshService } from "./services/voxel-mesh-service.js";
@@ -46,6 +47,9 @@ const TERRAIN_UPDATE_BATCH_MS = parseInt(
   process.env.TERRAIN_UPDATE_BATCH_MS ?? "15000",
   10,
 );
+const VOXEL_PREGENERATE_ON_STARTUP = parseBooleanEnv(
+  process.env.VOXEL_PREGENERATE_ON_STARTUP,
+);
 
 interface TerrainUpdatesBatchData {
   tiles: { lod: number; tileX: number; tileY: number }[];
@@ -58,6 +62,92 @@ const allowedOrigins = new Set(
     .map((origin) => origin.trim())
     .filter(Boolean),
 );
+
+function parseBooleanEnv(value: string | undefined): boolean {
+  return value === "1" || value === "true";
+}
+
+async function warmVoxelCacheOnStartup(
+  savePath: string,
+  voxelMeshService: VoxelMeshService,
+  shouldContinue: () => boolean,
+): Promise<void> {
+  const chunkIndex = await buildChunkIndex(savePath);
+  if (chunkIndex.length === 0) {
+    logger.info("Voxel startup warmup skipped; no voxel regions found");
+    return;
+  }
+
+  const workers = voxelMeshService.getMetricsSnapshot().workers;
+  const concurrency = Math.max(1, Math.min(workers, 4));
+  let nextIndex = 0;
+  let completed = 0;
+  let warmed = 0;
+  let empty = 0;
+  let failed = 0;
+
+  logger.info("Voxel startup warmup started", {
+    regions: chunkIndex.length,
+    concurrency,
+    workers,
+  });
+
+  const warmRegion = async (): Promise<void> => {
+    while (shouldContinue()) {
+      const region = chunkIndex[nextIndex++];
+      if (!region) {
+        return;
+      }
+
+      const key = `${region.lod}/${region.regionX}/${region.regionY}`;
+      try {
+        const response = await voxelMeshService.getVoxelMesh(
+          key,
+          region.lod,
+          region.regionX,
+          region.regionY,
+          "identity",
+        );
+        if (response.status === "ok") {
+          warmed++;
+        } else {
+          empty++;
+        }
+      } catch (error) {
+        failed++;
+        logger.warn("Voxel startup warmup region failed", {
+          key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        completed++;
+        if (
+          completed === chunkIndex.length ||
+          completed % Math.max(1, Math.ceil(chunkIndex.length / 10)) === 0
+        ) {
+          logger.info("Voxel startup warmup progress", {
+            completed,
+            total: chunkIndex.length,
+            warmed,
+            empty,
+            failed,
+          });
+        }
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => warmRegion()));
+
+  logger.info("Voxel startup warmup finished", {
+    completed,
+    total: chunkIndex.length,
+    warmed,
+    empty,
+    failed,
+    interrupted: completed < chunkIndex.length,
+  });
+}
 
 async function findSavePath(): Promise<string> {
   // Check env var first
@@ -439,6 +529,18 @@ async function main() {
         "WS /ws",
       ],
     });
+
+    if (VOXEL_PREGENERATE_ON_STARTUP) {
+      void warmVoxelCacheOnStartup(
+        savePath,
+        voxelMeshService,
+        () => !shuttingDown,
+      ).catch((error) => {
+        logger.error("Voxel startup warmup failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   });
 }
 
