@@ -41,6 +41,7 @@ src/client/
 
 - React handles composition, data fetching, overlays, and socket subscription
 - Three.js handles the renderer, scene, camera, controls, meshes, labels, markers, and animation loop
+- Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
 - `World3DView.tsx` is the boundary between those two layers
 - `App.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
 

@@ -32,7 +32,11 @@ export function applyInitialCameraState(args: {
   if (initialCameraState) {
     const { pos, zoom, theta, phi } = initialCameraState;
     const [stx, sty, stz] = worldToScene(pos[0], pos[1], pos[2]);
-    const clampedZoom = Math.min(zoom, controls.maxDistance);
+    const clampedZoom = THREE.MathUtils.clamp(
+      zoom,
+      controls.minDistance,
+      controls.maxDistance,
+    );
     controls.target.set(stx, sty, stz);
     const thetaRad = THREE.MathUtils.degToRad(theta);
     const phiRad = THREE.MathUtils.degToRad(Math.min(phi, 88));

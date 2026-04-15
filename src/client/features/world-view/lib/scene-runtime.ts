@@ -15,6 +15,8 @@ import {
 import type { WorkerOut } from "./types.js";
 import { shouldRenderTerrainForMode } from "./utils.js";
 
+const MIN_CAMERA_DISTANCE = 1;
+
 export function initializeSceneRuntime(args: {
   container: HTMLDivElement;
   sceneRef: {
@@ -146,6 +148,7 @@ export function initializeSceneRuntime(args: {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
+  controls.minDistance = MIN_CAMERA_DISTANCE;
   controls.maxPolarAngle = Math.PI * 0.49;
   controls.maxDistance = 15_000;
   controls.screenSpacePanning = false;

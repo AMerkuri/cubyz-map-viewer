@@ -90,7 +90,7 @@ export function createMarkerLabel(
     "display: inline-block",
     `color: ${color}`,
     "font-size: 20px",
-    "font-family: 'Unscii', 'Courier New', monospace",
+    "font-family: 'Unscii', monospace",
     "font-weight: 700",
     "text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.55)",
     "white-space: nowrap",
@@ -119,7 +119,7 @@ export function createFormattedPlayerLabel(
   div.style.cssText = [
     "display: inline-block",
     "font-size: 20px",
-    "font-family: 'Unscii', 'Courier New', monospace",
+    "font-family: 'Unscii', monospace",
     "font-weight: 700",
     "text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.55)",
     "white-space: nowrap",

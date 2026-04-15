@@ -197,7 +197,7 @@ export async function refreshBiomeLabels(args: {
     if (!label) {
       const div = document.createElement("div");
       div.style.cssText =
-        "color: rgba(255,255,255,0.78); font-size: 11px; font-weight: 600; text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.5); pointer-events: none; white-space: nowrap;";
+        "color: rgba(255,255,255,0.8); font-size: 10px; font-weight: 600; text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.5); pointer-events: none; white-space: nowrap; font-family: 'Unscii', monospace";
       label = new CSS2DObject(div);
       group.add(label);
       labelMap.set(labelData.key, label);
