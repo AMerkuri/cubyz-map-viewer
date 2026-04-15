@@ -1183,6 +1183,19 @@ export function World3DView({
     onLoadingBreakdownChangeRef.current(nextLoadingBreakdown);
   }
 
+  function hasPendingSceneWork() {
+    return (
+      activeTerrainFetchCountRef.current > 0 ||
+      activeVoxelFetchCountRef.current > 0 ||
+      loadingTerrainRef.current.size > 0 ||
+      loadingVoxelsRef.current.size > 0 ||
+      pendingTerrainFetchQueueRef.current.length > 0 ||
+      pendingTerrainMeshQueueRef.current.length > 0 ||
+      pendingVoxelFetchQueueRef.current.length > 0 ||
+      pendingVoxelMeshQueueRef.current.length > 0
+    );
+  }
+
   useWorld3DSceneRuntime({
     containerRef,
     sceneRef,
@@ -1221,6 +1234,7 @@ export function World3DView({
     refreshBiomeLabels,
     publishChunkStats: publishCurrentChunkStats,
     publishLoadingBreakdown: publishCurrentLoadingBreakdown,
+    hasPendingSceneWork,
     clearTerrainTiles,
     clearVoxelTiles,
     clearBiomeLabels,

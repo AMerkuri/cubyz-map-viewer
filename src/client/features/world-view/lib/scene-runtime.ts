@@ -17,6 +17,9 @@ import type { WorkerOut } from "./types.js";
 import { shouldRenderTerrainForMode } from "./utils.js";
 
 const MIN_CAMERA_DISTANCE = 1;
+const ACTIVE_LOD_POLL_INTERVAL_MS = 125;
+const IDLE_LOD_POLL_INTERVAL_MS = 1000;
+const IDLE_ENTER_DELAY_MS = 500;
 
 export function initializeSceneRuntime(args: {
   container: HTMLDivElement;
@@ -80,6 +83,7 @@ export function initializeSceneRuntime(args: {
   ) => Promise<void> | void;
   publishChunkStats: (fpsValue: number) => void;
   publishLoadingBreakdown: () => void;
+  hasPendingSceneWork: () => boolean;
   clearTerrainTiles: () => void;
   clearVoxelTiles: () => void;
   clearBiomeLabels: () => void;
@@ -124,6 +128,7 @@ export function initializeSceneRuntime(args: {
     refreshBiomeLabels,
     publishChunkStats,
     publishLoadingBreakdown,
+    hasPendingSceneWork,
     clearTerrainTiles,
     clearVoxelTiles,
     clearBiomeLabels,
@@ -283,13 +288,34 @@ export function initializeSceneRuntime(args: {
   }
 
   let animFrameId = 0;
-  let lodCheckCounter = 0;
   let biomeRefreshCounter = 0;
   let fpsFrameCounter = 0;
   let fpsLastTs = performance.now();
   let fpsValue = 0;
   let nextFrameAt = performance.now();
-  const lodCheckInterval = 8;
+  let nextLodPollAt = performance.now() + ACTIVE_LOD_POLL_INTERVAL_MS;
+  let isPointerOverCanvas = false;
+  let isPointerInteracting = false;
+  let lastActiveAt = performance.now();
+  let currentEffectiveCap = debugSettingsRef.current.frameRateCapFps;
+
+  function markActive(at = performance.now()) {
+    lastActiveAt = at;
+  }
+
+  function resetFrameDeadline(now: number, frameIntervalMs: number) {
+    nextFrameAt = frameIntervalMs > 0 ? now + frameIntervalMs : now;
+  }
+
+  function scheduleNextLodPoll(now: number, isIdle: boolean) {
+    nextLodPollAt =
+      now + (isIdle ? IDLE_LOD_POLL_INTERVAL_MS : ACTIVE_LOD_POLL_INTERVAL_MS);
+  }
+
+  function runLodUpdate(now: number, isIdle: boolean) {
+    checkAndUpdateLOD(camera, controls);
+    scheduleNextLodPoll(now, isIdle);
+  }
 
   function animate(now = performance.now()) {
     animFrameId = requestAnimationFrame(animate);
@@ -297,8 +323,34 @@ export function initializeSceneRuntime(args: {
       sceneRef.current.animFrameId = animFrameId;
     }
 
-    const frameRateCapFps = debugSettingsRef.current.frameRateCapFps;
-    const frameIntervalMs = frameRateCapFps <= 0 ? 0 : 1000 / frameRateCapFps;
+    const hasPendingWork = hasPendingSceneWork();
+    const hasDirtySceneState =
+      terrainVisibilityDirtyRef.current ||
+      debugLabelsDirtyRef.current ||
+      biomeLabelsDirtyRef.current;
+    const idleEligible =
+      !isPointerOverCanvas &&
+      !isPointerInteracting &&
+      keysHeldRef.current.size === 0 &&
+      !hasPendingWork &&
+      !hasDirtySceneState &&
+      now - lastActiveAt >= IDLE_ENTER_DELAY_MS;
+
+    const activeCap = debugSettingsRef.current.frameRateCapFps;
+    const idleCap = debugSettingsRef.current.idleFrameRateCapFps;
+    const effectiveCap = idleEligible
+      ? activeCap <= 0
+        ? idleCap
+        : Math.min(activeCap, idleCap)
+      : activeCap;
+
+    if (effectiveCap !== currentEffectiveCap) {
+      currentEffectiveCap = effectiveCap;
+      resetFrameDeadline(now, effectiveCap > 0 ? 1000 / effectiveCap : 0);
+      scheduleNextLodPoll(now, idleEligible);
+    }
+
+    const frameIntervalMs = effectiveCap <= 0 ? 0 : 1000 / effectiveCap;
     if (frameIntervalMs > 0) {
       if (now < nextFrameAt) {
         return;
@@ -324,7 +376,8 @@ export function initializeSceneRuntime(args: {
       preUploadCamera,
     );
     if (builtTerrainTile || builtVoxelTile) {
-      checkAndUpdateLOD(camera, controls);
+      markActive(now);
+      runLodUpdate(now, idleEligible);
     }
 
     if (
@@ -338,14 +391,17 @@ export function initializeSceneRuntime(args: {
       const camDist = camera.position.distanceTo(controls.target);
       updateTerrainVisibility(controls.target, camDist);
       terrainVisibilityDirtyRef.current = false;
+      markActive(now);
     }
 
     if (debugEnabledRef.current && debugLabelsDirtyRef.current) {
       debugLabelsDirtyRef.current = false;
       refreshDebugLabels();
+      markActive(now);
     } else if (!debugEnabledRef.current && debugLabelsDirtyRef.current) {
       debugLabelsDirtyRef.current = false;
       clearDebugLabels();
+      markActive(now);
     }
 
     if (showBiomeLabelsRef.current && biomeLabelsDirtyRef.current) {
@@ -354,6 +410,7 @@ export function initializeSceneRuntime(args: {
         biomeLabelsDirtyRef.current = false;
         const camDist = camera.position.distanceTo(controls.target);
         void refreshBiomeLabels(controls.target, camDist);
+        markActive(now);
       }
     }
 
@@ -373,10 +430,8 @@ export function initializeSceneRuntime(args: {
       publishChunkStats(fpsValue);
     }
 
-    lodCheckCounter++;
-    if (lodCheckCounter >= lodCheckInterval) {
-      lodCheckCounter = 0;
-      checkAndUpdateLOD(camera, controls);
+    if (now >= nextLodPollAt) {
+      runLodUpdate(now, idleEligible);
     }
   }
 
@@ -400,10 +455,12 @@ export function initializeSceneRuntime(args: {
     if (e.code === "Space") {
       e.preventDefault();
       focusCameraOnSpawn();
+      markActive();
       return;
     }
     const hadKeys = keysHeldRef.current.size > 0;
     keysHeldRef.current.add(e.code);
+    markActive();
     if (!hadKeys) {
       cursorHandlers.clearCursorRefreshTimer();
       onCursorMoveRef.current(null);
@@ -412,38 +469,61 @@ export function initializeSceneRuntime(args: {
 
   function onKeyUp(e: KeyboardEvent) {
     keysHeldRef.current.delete(e.code);
+    markActive();
     if (keysHeldRef.current.size === 0) {
       cursorHandlers.scheduleCursorTooltipRefresh();
     }
   }
 
   function onControlsChange() {
+    markActive();
     if (keysHeldRef.current.size > 0) return;
     cursorHandlers.scheduleCursorTooltipRefresh();
+  }
+
+  function onPointerEnter() {
+    isPointerOverCanvas = true;
+    markActive();
+  }
+
+  function onPointerDown() {
+    isPointerInteracting = true;
+    markActive();
+    cursorHandlers.onPointerDown();
+  }
+
+  function onPointerUp() {
+    isPointerInteracting = false;
+    markActive();
+    cursorHandlers.onPointerUp();
+  }
+
+  function onPointerCancel() {
+    isPointerInteracting = false;
+    markActive();
+    cursorHandlers.onPointerCancel();
+  }
+
+  function onPointerLeave() {
+    isPointerOverCanvas = false;
+    isPointerInteracting = false;
+    cursorHandlers.onPointerLeave();
   }
 
   window.addEventListener("resize", onResize);
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
   controls.addEventListener("change", onControlsChange);
+  renderer.domElement.addEventListener("pointerenter", onPointerEnter);
   renderer.domElement.addEventListener(
     "pointermove",
     cursorHandlers.onPointerMove,
   );
-  renderer.domElement.addEventListener(
-    "pointerdown",
-    cursorHandlers.onPointerDown,
-  );
-  renderer.domElement.addEventListener("pointerup", cursorHandlers.onPointerUp);
+  renderer.domElement.addEventListener("pointerdown", onPointerDown);
+  renderer.domElement.addEventListener("pointerup", onPointerUp);
   renderer.domElement.addEventListener("click", handlePlayerMarkerClick);
-  renderer.domElement.addEventListener(
-    "pointercancel",
-    cursorHandlers.onPointerCancel,
-  );
-  renderer.domElement.addEventListener(
-    "pointerleave",
-    cursorHandlers.onPointerLeave,
-  );
+  renderer.domElement.addEventListener("pointercancel", onPointerCancel);
+  renderer.domElement.addEventListener("pointerleave", onPointerLeave);
 
   sceneRef.current = { renderer, scene, camera, controls, animFrameId };
 
@@ -453,27 +533,16 @@ export function initializeSceneRuntime(args: {
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
     controls.removeEventListener("change", onControlsChange);
+    renderer.domElement.removeEventListener("pointerenter", onPointerEnter);
     renderer.domElement.removeEventListener(
       "pointermove",
       cursorHandlers.onPointerMove,
     );
-    renderer.domElement.removeEventListener(
-      "pointerdown",
-      cursorHandlers.onPointerDown,
-    );
-    renderer.domElement.removeEventListener(
-      "pointerup",
-      cursorHandlers.onPointerUp,
-    );
+    renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+    renderer.domElement.removeEventListener("pointerup", onPointerUp);
     renderer.domElement.removeEventListener("click", handlePlayerMarkerClick);
-    renderer.domElement.removeEventListener(
-      "pointercancel",
-      cursorHandlers.onPointerCancel,
-    );
-    renderer.domElement.removeEventListener(
-      "pointerleave",
-      cursorHandlers.onPointerLeave,
-    );
+    renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
+    renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
     cursorHandlers.clearCursorRefreshTimer();
 
     clearTerrainTiles();

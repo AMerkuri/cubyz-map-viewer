@@ -45,6 +45,10 @@ function sliderValueToFrameRateCap(value: number): number {
   return value >= 125 ? 0 : value;
 }
 
+function formatIdleFrameRateCapValue(value: number): string {
+  return `${value} FPS`;
+}
+
 export function MapDebugParameters({
   view,
   settings,
@@ -91,22 +95,39 @@ export function MapDebugParameters({
       {
         title: "Performance",
         content: (
-          <SliderRow
-            label="Frame Rate Cap"
-            description="Caps the main render loop. Set the slider to Uncapped to let rendering run at the display sync rate."
-            value={frameRateCapToSliderValue(settings.frameRateCapFps)}
-            displayValue={formatFrameRateCapValue(settings.frameRateCapFps)}
-            min={30}
-            max={125}
-            step={5}
-            defaultValue={frameRateCapToSliderValue(60)}
-            onChange={(value) =>
-              onChange({
-                ...settings,
-                frameRateCapFps: sliderValueToFrameRateCap(value),
-              })
-            }
-          />
+          <>
+            <SliderRow
+              label="Frame Rate Cap"
+              description="Caps the main render loop. Set the slider to Uncapped to let rendering run at the display sync rate."
+              value={frameRateCapToSliderValue(settings.frameRateCapFps)}
+              displayValue={formatFrameRateCapValue(settings.frameRateCapFps)}
+              min={30}
+              max={125}
+              step={5}
+              defaultValue={frameRateCapToSliderValue(60)}
+              onChange={(value) =>
+                onChange({
+                  ...settings,
+                  frameRateCapFps: sliderValueToFrameRateCap(value),
+                })
+              }
+            />
+            <SliderRow
+              label="Idle Frame Rate"
+              description="Target frame rate once the scene is fully idle and the mouse is not hovering over the canvas."
+              value={settings.idleFrameRateCapFps}
+              displayValue={formatIdleFrameRateCapValue(
+                settings.idleFrameRateCapFps,
+              )}
+              min={5}
+              max={60}
+              step={5}
+              defaultValue={15}
+              onChange={(value) =>
+                onChange({ ...settings, idleFrameRateCapFps: value })
+              }
+            />
+          </>
         ),
       },
     ];
@@ -338,7 +359,7 @@ function RangeSlider({
         ["--slider-progress" as string]: `${clampedProgress}%`,
         ["--slider-fill" as string]: uiTheme.accent.text,
         ["--slider-track" as string]: "rgba(255,255,255,0.14)",
-        ["--slider-thumb" as string]: uiTheme.accent.surfaceActive,
+        ["--slider-thumb" as string]: "rgb(86, 200, 116)",
         ["--slider-thumb-border" as string]: uiTheme.accent.border,
       }}
     />

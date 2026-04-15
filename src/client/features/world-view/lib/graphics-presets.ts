@@ -20,6 +20,7 @@ export type GraphicsPreset = {
     Pick<
       MapDebugSettings,
       | "frameRateCapFps"
+      | "idleFrameRateCapFps"
       | "maxConcurrentTerrainFetches"
       | "terrainMeshBuildBudgetMs"
       | "maxTerrainMeshesPerFrame"
@@ -49,6 +50,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     minRenderedVoxelLod: 1,
     debugSettings: {
       frameRateCapFps: 0,
+      idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 6,
       terrainMeshBuildBudgetMs: 8,
       maxTerrainMeshesPerFrame: 4,
@@ -74,6 +76,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     minRenderedVoxelLod: 1,
     debugSettings: {
       frameRateCapFps: 120,
+      idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 5,
       terrainMeshBuildBudgetMs: 6,
       maxTerrainMeshesPerFrame: 3,
@@ -99,6 +102,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     minRenderedVoxelLod: 1,
     debugSettings: {
       frameRateCapFps: 60,
+      idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 4,
       terrainMeshBuildBudgetMs: 4,
       maxTerrainMeshesPerFrame: 2,
@@ -125,6 +129,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     minRenderedVoxelLod: 2,
     debugSettings: {
       frameRateCapFps: 40,
+      idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 3,
       terrainMeshBuildBudgetMs: 3,
       maxTerrainMeshesPerFrame: 2,
@@ -150,6 +155,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     minRenderedVoxelLod: 4,
     debugSettings: {
       frameRateCapFps: 30,
+      idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 2,
       terrainMeshBuildBudgetMs: 2,
       maxTerrainMeshesPerFrame: 1,

@@ -31,7 +31,7 @@ src/client/
 ## World-View Feature
 
 - `features/world-view/components`: scene UI, info panel, controls, mode toggle, and debug parameters
-- `MapDebugParameters.tsx` is section-driven and reuses a shared parameter-row chrome for sliders and resets, including the frame-rate cap slider shared by terrain and voxel views
+- `MapDebugParameters.tsx` is section-driven and reuses a shared parameter-row chrome for sliders and resets, including shared performance controls for active frame rate and idle frame rate
 - `features/world-view/hooks`: world data, player data, and WebSocket hooks
 - `features/world-view/lib`: scene bootstrap, camera behavior, terrain loading, voxel scheduling, labels, markers, and feature types
 - `features/world-view/workers`: `voxel-mesh.worker.ts` decodes mesh data off the main thread
@@ -41,6 +41,7 @@ src/client/
 
 - React handles composition, data fetching, overlays, and socket subscription
 - Three.js handles the renderer, scene, camera, controls, meshes, labels, markers, and animation loop; the Parameters panel can cap that loop between `30` and `120` FPS, with an `Uncapped` stop shown to the right of `120` and stored internally as `0`
+- When the scene is settled, no keyboard input is active, no work queues are pending, and the mouse is not hovering the canvas, the runtime can drop to a lower user-configured idle FPS after a short internal delay; idle mode also uses a slower internal LOD polling interval
 - Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
 - `World3DView.tsx` is the boundary between those two layers
 - `App.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
@@ -100,5 +101,6 @@ src/client/
 - prefer direct imports over barrels
 - use bounded queues and frame budgets for heavy terrain and voxel processing
 - cap the shared render loop when lower idle CPU is preferable to max refresh-rate rendering
+- prefer a lower idle frame rate once the scene is settled and the user is no longer interacting with the canvas
 - avoid React re-renders for high-frequency cursor and frame-loop updates
 - avoid publishing React state from the render loop unless the value actually changed

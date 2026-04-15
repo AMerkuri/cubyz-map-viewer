@@ -85,6 +85,7 @@ export function useWorld3DSceneRuntime(args: {
   ) => Promise<void> | void;
   publishChunkStats: (fpsValue: number) => void;
   publishLoadingBreakdown: () => void;
+  hasPendingSceneWork: () => boolean;
   clearTerrainTiles: () => void;
   clearVoxelTiles: (preserveWarmCache?: boolean) => void;
   clearBiomeLabels: () => void;
@@ -129,6 +130,7 @@ export function useWorld3DSceneRuntime(args: {
     refreshBiomeLabels,
     publishChunkStats,
     publishLoadingBreakdown,
+    hasPendingSceneWork,
     clearTerrainTiles,
     clearVoxelTiles,
     clearBiomeLabels,
@@ -147,6 +149,7 @@ export function useWorld3DSceneRuntime(args: {
   const onRefreshBiomeLabels = useEffectEvent(refreshBiomeLabels);
   const onPublishChunkStats = useEffectEvent(publishChunkStats);
   const onPublishLoadingBreakdown = useEffectEvent(publishLoadingBreakdown);
+  const onHasPendingSceneWork = useEffectEvent(hasPendingSceneWork);
   const onClearTerrainTiles = useEffectEvent(clearTerrainTiles);
   const onClearVoxelTiles = useEffectEvent(clearVoxelTiles);
   const onClearBiomeLabels = useEffectEvent(clearBiomeLabels);
@@ -192,6 +195,7 @@ export function useWorld3DSceneRuntime(args: {
       refreshBiomeLabels: onRefreshBiomeLabels,
       publishChunkStats: onPublishChunkStats,
       publishLoadingBreakdown: onPublishLoadingBreakdown,
+      hasPendingSceneWork: onHasPendingSceneWork,
       clearTerrainTiles: onClearTerrainTiles,
       clearVoxelTiles: onClearVoxelTiles,
       clearBiomeLabels: onClearBiomeLabels,

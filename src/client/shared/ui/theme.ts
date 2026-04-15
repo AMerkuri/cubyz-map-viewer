@@ -11,7 +11,7 @@ export const uiTheme = {
   panel: {
     background: "rgba(45, 28, 18, 0.6)",
     border: "#bca284",
-    shadow: "4px 4px 0 rgba(0,0,0,0.72)",
+    shadow: "4px 4px 0 rgba(0,0,0,0.62)",
     buttonBackground: "rgb(60, 40, 29, 0.9)",
     buttonBorder: "#bca284",
     buttonBackgroundMuted: "#261a13",
