@@ -21,6 +21,7 @@ export function handleTerrainTileUpdate(args: {
   showTerrain: boolean;
   showVoxelTerrain: boolean;
   loadedTerrain: Map<string, LoadedTerrainTile>;
+  evictWarmCachedTerrainTile: (key: string) => void;
   queueTerrainTileLoad: (
     lod: number,
     tileX: number,
@@ -40,6 +41,7 @@ export function handleTerrainTileUpdate(args: {
     showTerrain,
     showVoxelTerrain,
     loadedTerrain,
+    evictWarmCachedTerrainTile,
     queueTerrainTileLoad,
     disposeTerrainTile,
     debugLabelsDirtyRef,
@@ -61,6 +63,7 @@ export function handleTerrainTileUpdate(args: {
       });
 
       const key = terrainTileKey(lod, affectedTileX, affectedTileY);
+      evictWarmCachedTerrainTile(key);
       const existing = loadedTerrain.get(key);
       if (existing) {
         disposeTerrainTile(existing);

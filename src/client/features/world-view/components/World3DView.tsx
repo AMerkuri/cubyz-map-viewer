@@ -46,14 +46,21 @@ import {
 import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
 import { publishChunkStats } from "../lib/stats.js";
 import {
+  disposeTerrainTileResources as disposeTerrainTileResourcesManaged,
+  ensureTerrainBorderAssets as ensureTerrainBorderAssetsManaged,
+  evictWarmCachedTerrainTile as evictWarmCachedTerrainTileManaged,
+  moveTerrainTileToWarmCache as moveTerrainTileToWarmCacheManaged,
+  restoreTerrainTileFromWarmCache as restoreTerrainTileFromWarmCacheManaged,
+} from "../lib/terrain-cache.js";
+import {
   buildQueuedTerrainMeshes as buildQueuedTerrainMeshesManaged,
   clearTerrainTiles as clearTerrainTilesManaged,
-  disposeTerrainTile as disposeTerrainTileManaged,
   drainTerrainFetchQueue as drainTerrainFetchQueueManaged,
   fetchTerrainTile as fetchTerrainTileManaged,
   finishTerrainFetch as finishTerrainFetchManaged,
   queueTerrainFetchRequest as queueTerrainFetchRequestManaged,
   syncTerrainLod as syncTerrainLodManaged,
+  syncTerrainRequests as syncTerrainRequestsManaged,
   terrainTileKey,
   updateTerrainVisibility as updateTerrainVisibilityManaged,
 } from "../lib/terrain-manager.js";
@@ -66,6 +73,7 @@ import type {
   PendingVoxelMeshItem,
   VoxelFocusState,
   VoxelRefreshState,
+  WarmCachedTerrainTile,
   WarmCachedVoxelTile,
   WorkerOut,
   World3DViewProps,
@@ -191,6 +199,10 @@ export function World3DView({
   const biomeLabelMapRef = useRef<Map<string, CSS2DObject>>(new Map());
 
   const loadedTerrainRef = useRef<Map<string, LoadedTerrainTile>>(new Map());
+  const warmCachedTerrainRef = useRef<Map<string, WarmCachedTerrainTile>>(
+    new Map(),
+  );
+  const warmCachedTerrainBytesRef = useRef(0);
   const loadingTerrainRef = useRef<Set<string>>(new Set());
   const pendingTerrainFetchQueueRef = useRef<PendingTerrainFetchRequest[]>([]);
   const pendingTerrainMeshQueueRef = useRef<PendingTerrainMeshItem[]>([]);
@@ -287,6 +299,7 @@ export function World3DView({
   const debugLabelsDirtyRef = useRef(false);
   const biomeLabelsDirtyRef = useRef(false);
   const terrainLoadGenerationRef = useRef(0);
+  const activeTerrainRequestGenerationRef = useRef(0);
   const biomeRefreshTokenRef = useRef(0);
   const lastChunkStatsRef = useRef("");
   const voxelBenchmarkRef = useRef<RollingVoxelBenchmarkStats>({
@@ -483,7 +496,72 @@ export function World3DView({
       chunkBorderGroupRef.current,
       disposeTextSprite,
     );
+    for (const key of [...warmCachedTerrainRef.current.keys()]) {
+      evictWarmCachedTerrainTile(key);
+    }
     loadingTerrainRef.current.clear();
+  }
+
+  function evictWarmCachedTerrainTile(key: string) {
+    evictWarmCachedTerrainTileManaged(
+      key,
+      warmCachedTerrainRef.current,
+      warmCachedTerrainBytesRef,
+      terrainGroupRef.current,
+      chunkBorderGroupRef.current,
+      disposeTextSprite,
+    );
+  }
+
+  function moveTerrainTileToWarmCache(tile: LoadedTerrainTile) {
+    moveTerrainTileToWarmCacheManaged({
+      tile,
+      warmCachedTerrain: warmCachedTerrainRef.current,
+      warmCachedTerrainBytesRef,
+      warmTerrainCacheMaxBytes:
+        debugSettingsRef.current.warmTerrainCacheMaxBytes,
+      terrainGroup: terrainGroupRef.current,
+      chunkBorderGroup: chunkBorderGroupRef.current,
+      disposeTextSprite,
+    });
+  }
+
+  function restoreTerrainTileFromWarmCache(
+    key: string,
+  ): LoadedTerrainTile | null {
+    return restoreTerrainTileFromWarmCacheManaged({
+      key,
+      warmCachedTerrain: warmCachedTerrainRef.current,
+      warmCachedTerrainBytesRef,
+      terrainGroup: terrainGroupRef.current,
+      chunkBorderGroup: chunkBorderGroupRef.current,
+      showChunkBorders: showChunkBordersRef.current,
+    });
+  }
+
+  function ensureTerrainBorderAssets(tile: LoadedTerrainTile) {
+    ensureTerrainBorderAssetsManaged(
+      tile,
+      chunkBorderGroupRef.current,
+      showChunkBordersRef.current,
+    );
+  }
+
+  function disposeTerrainTile(
+    tile: LoadedTerrainTile,
+    preserveWarmCache = true,
+  ) {
+    if (preserveWarmCache) {
+      moveTerrainTileToWarmCache(tile);
+      return;
+    }
+
+    disposeTerrainTileResourcesManaged(
+      tile,
+      terrainGroupRef.current,
+      chunkBorderGroupRef.current,
+      disposeTextSprite,
+    );
   }
 
   function queueTerrainTileLoad(
@@ -509,6 +587,25 @@ export function World3DView({
       tileY,
       priority,
       generation: terrainLoadGenerationRef.current,
+    });
+  }
+
+  function syncTerrainRequests(
+    requests: Map<string, PendingTerrainFetchRequest>,
+  ) {
+    syncTerrainRequestsManaged({
+      requests,
+      activeTerrainRequestKeysRef,
+      pendingTerrainFetchQueueRef,
+      pendingTerrainMeshQueueRef,
+      loadedTerrainRef,
+      loadingTerrainRef,
+      terrainFetchControllersRef,
+      restoreTerrainTileFromWarmCache,
+      terrainVisibilityDirtyRef,
+      debugLabelsDirtyRef,
+      biomeLabelsDirtyRef,
+      drainTerrainFetchQueue,
     });
   }
 
@@ -567,6 +664,7 @@ export function World3DView({
       chunkBorderGroup: chunkBorderGroupRef.current,
       terrainMaterial,
       showChunkBorders: showChunkBordersRef.current,
+      ensureTerrainBorderAssets,
       debugLabelsDirtyRef,
       biomeLabelsDirtyRef,
       terrainVisibilityDirtyRef,
@@ -588,7 +686,7 @@ export function World3DView({
       tile,
       warmCachedVoxels: warmCachedVoxelsRef.current,
       warmCachedVoxelBytesRef,
-      warmVoxelCacheMaxBytes: debugSettingsRef.current.warmVoxelCacheMaxBytes,
+      warmVoxelCacheMaxBytes: debugSettingsRef.current.warmVoxelCacheLimitBytes,
       voxelGroup: voxelGroupRef.current,
       chunkBorderGroup: chunkBorderGroupRef.current,
     });
@@ -661,26 +759,29 @@ export function World3DView({
       terrainLodHysteresisRatio:
         debugSettingsRef.current.terrainLodHysteresisRatio,
       activeFocusLod: activeTerrainLodRef.current,
+      ensureTerrainBorderAssets,
+      showChunkBorders: showChunkBordersRef.current,
       loadedVoxels: loadedVoxelsRef.current.values(),
     });
   }
 
   function syncTerrainLod(target: THREE.Vector3, camDist: number) {
+    const now = performance.now();
+    const terrainRequestGeneration =
+      activeTerrainRequestGenerationRef.current + 1;
+    activeTerrainRequestGenerationRef.current = terrainRequestGeneration;
+    const stableForDetail =
+      now - voxelLastMotionAtRef.current >=
+      debugSettingsRef.current.voxelDetailRequestDebounceMs;
+
     syncTerrainLodManaged({
       target,
       camDist,
       surfaceIndex: surfaceIndexRef.current,
       loadedTerrain: loadedTerrainRef.current,
       loadingTerrain: loadingTerrainRef.current,
-      queueTerrainTileLoad,
-      disposeTerrainTile: (tile) => {
-        disposeTerrainTileManaged(
-          tile,
-          terrainGroupRef.current,
-          chunkBorderGroupRef.current,
-          disposeTextSprite,
-        );
-      },
+      syncTerrainRequests,
+      disposeTerrainTile,
       updateTerrainVisibility,
       debugLabelsDirtyRef,
       biomeLabelsDirtyRef,
@@ -688,8 +789,9 @@ export function World3DView({
       activeFocusLodRef: activeTerrainLodRef,
       terrainLodHysteresisRatio:
         debugSettingsRef.current.terrainLodHysteresisRatio,
+      terrainRequestGeneration,
+      stableForDetail,
     });
-    drainTerrainFetchQueue();
   }
 
   function queueVoxelFetchRequest(request: PendingVoxelFetchRequest) {
@@ -972,15 +1074,9 @@ export function World3DView({
       showTerrain: showTerrainRef.current,
       showVoxelTerrain: showVoxelTerrainRef.current,
       loadedTerrain: loadedTerrainRef.current,
+      evictWarmCachedTerrainTile,
       queueTerrainTileLoad,
-      disposeTerrainTile: (tile) => {
-        disposeTerrainTileManaged(
-          tile,
-          terrainGroupRef.current,
-          chunkBorderGroupRef.current,
-          disposeTextSprite,
-        );
-      },
+      disposeTerrainTile: (tile) => disposeTerrainTile(tile, false),
       debugLabelsDirtyRef,
       biomeLabelsDirtyRef,
     });
@@ -1158,6 +1254,7 @@ export function World3DView({
       failedVoxels: failedVoxelsRef.current,
       loadedTerrain: loadedTerrainRef.current,
       loadedVoxels: loadedVoxelsRef.current,
+      warmCachedTerrain: warmCachedTerrainRef.current,
       warmCachedVoxels: warmCachedVoxelsRef.current,
       voxelBenchmark: voxelBenchmarkRef.current,
       lastChunkStatsRef,

@@ -1,11 +1,8 @@
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { LOD_LEVELS, TERRAIN_LOD_DISTANCE_THRESHOLDS } from "./constants.js";
-import {
-  getLodForDistance,
-  getLodForDistanceWithHysteresis,
-} from "./lod-utils.js";
+import { LOD_LEVELS } from "./constants.js";
+import { getLodForDistanceWithHysteresis } from "./lod-utils.js";
 import type { PendingVoxelFetchRequest } from "./types.js";
 import { shouldRenderTerrainForMode } from "./utils.js";
 
@@ -117,10 +114,6 @@ export function checkAndUpdateLod(args: {
     pendingVoxelDetailRequestsRef.current.clear();
     committedVoxelDetailRequestsRef.current.clear();
     syncVoxelRequests(new Map());
-    activeFocusLodRef.current = getLodForDistance(
-      camDist,
-      TERRAIN_LOD_DISTANCE_THRESHOLDS,
-    );
     syncTerrainLod(target, camDist);
   } else {
     if (shouldRenderTerrain) {

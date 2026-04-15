@@ -2,7 +2,7 @@ import type { ChunkStats } from "../debug.js";
 
 import {
   addMemoryToLod,
-  estimateGeometryBytes,
+  estimateLoadedTerrainTileBytes,
   estimateLoadedVoxelTileBytes,
 } from "./memory.js";
 import type {
@@ -11,6 +11,7 @@ import type {
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
   PerformanceMemoryInfo,
+  WarmCachedTerrainTile,
   WarmCachedVoxelTile,
 } from "./types.js";
 
@@ -38,6 +39,7 @@ export function publishChunkStats(args: {
   failedVoxels: Map<string, number>;
   loadedTerrain: Map<string, LoadedTerrainTile>;
   loadedVoxels: Map<string, LoadedVoxelTile>;
+  warmCachedTerrain: Map<string, WarmCachedTerrainTile>;
   warmCachedVoxels: Map<string, WarmCachedVoxelTile>;
   voxelBenchmark: RollingVoxelBenchmarkStats;
   lastChunkStatsRef: { current: string };
@@ -55,6 +57,7 @@ export function publishChunkStats(args: {
     failedVoxels,
     loadedTerrain,
     loadedVoxels,
+    warmCachedTerrain,
     warmCachedVoxels,
     voxelBenchmark,
     lastChunkStatsRef,
@@ -73,19 +76,24 @@ export function publishChunkStats(args: {
   const memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
   let terrainMemoryBytes = 0;
   let voxelMemoryBytes = 0;
+  let cachedTerrainMemoryBytes = 0;
   let cachedVoxelMemoryBytes = 0;
   let queuedMemoryBytes = 0;
 
   for (const tile of loadedTerrain.values()) {
     const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
-    const tileBytes =
-      estimateGeometryBytes(tile.mesh.geometry) +
-      estimateGeometryBytes(tile.borderLines.geometry);
+    const tileBytes = estimateLoadedTerrainTileBytes(tile);
     if (mode === "terrain") {
       loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
     }
     terrainMemoryBytes += tileBytes;
     addMemoryToLod(memoryByLod, lod, tileBytes);
+  }
+
+  for (const cached of warmCachedTerrain.values()) {
+    const lod = cached.tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
+    cachedTerrainMemoryBytes += cached.bytes;
+    addMemoryToLod(memoryByLod, lod, cached.bytes);
   }
 
   for (const tile of loadedVoxels.values()) {
@@ -118,6 +126,7 @@ export function publishChunkStats(args: {
   const memoryBytes =
     terrainMemoryBytes +
     voxelMemoryBytes +
+    cachedTerrainMemoryBytes +
     cachedVoxelMemoryBytes +
     queuedMemoryBytes;
   const perfWithMemory = performance as Performance & {
@@ -146,12 +155,16 @@ export function publishChunkStats(args: {
     memoryBreakdown: {
       terrain: terrainMemoryBytes,
       voxels: voxelMemoryBytes,
-      cached: cachedVoxelMemoryBytes,
+      cachedTerrain: cachedTerrainMemoryBytes,
+      cachedVoxels: cachedVoxelMemoryBytes,
       queued: queuedMemoryBytes,
     },
     memoryByLod,
     jsHeapBytes,
-    warmCacheCount: warmCachedVoxels.size,
+    warmCacheCount: {
+      terrain: warmCachedTerrain.size,
+      voxels: warmCachedVoxels.size,
+    },
     voxelBenchmark,
   };
   const statsKey = JSON.stringify(statsPayload);

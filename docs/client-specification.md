@@ -60,11 +60,13 @@ src/client/
 ### Terrain Mode
 
 1. `useWorldData` fetches `/api/world` and `/api/world/surface-index`.
-2. `World3DView` selects desired terrain tiles from the surface index, queues fetches with a small concurrency limit, and drains them as the camera moves.
+2. `World3DView` selects desired terrain tiles from the surface index, keeps a synced set of active terrain requests, and only commits fine terrain refinement after camera motion has settled for a short debounce window; while moving, terrain stays on already-loaded or coarser fallback coverage instead of continuously chasing finer tiles.
 3. Fetched terrain payloads carry a visible vertex grid plus a 1-vertex same-LOD gutter sampled from the tile neighborhood, and the client builds normals from that gutter so same-LOD lighting seams stay consistent across tile borders.
 4. Coarser terrain tiles stay visible as fallback coverage until finer child tiles are ready, reducing zoom-in churn and visible popping.
-5. Terrain meshes are still converted into Three.js meshes within a per-frame build budget instead of immediately on fetch completion.
-6. Terrain meshes, markers, and biome labels refresh with camera motion and toggles; terrain and biome HTTP responses use 1-hour browser caching plus ETag revalidation when the browser checks again.
+5. Terrain meshes are still converted into Three.js meshes within a per-frame build budget instead of immediately on fetch completion, and terrain fetches that drift out of the current desired set are aborted so stale movement work does not keep the spinner alive.
+6. Recently unloaded terrain tiles are kept in a bounded terrain warm cache so nearby pans can reattach existing meshes instead of rebuilding them immediately; voxel tiles keep their own separate warm cache limit.
+7. Terrain chunk-border lines and LOD text sprites are created lazily only when chunk borders are actually shown.
+8. Terrain meshes, markers, and biome labels refresh with camera motion and toggles; terrain and biome HTTP responses use 1-hour browser caching plus ETag revalidation when the browser checks again.
 
 ### Voxel Mode
 

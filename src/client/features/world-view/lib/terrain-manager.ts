@@ -10,10 +10,7 @@ import {
   getLodForDistance,
   getLodForDistanceWithHysteresis,
 } from "./lod-utils.js";
-import {
-  buildFullTileMesh,
-  buildSurfaceTileBorderLines,
-} from "./terrain-builders.js";
+import { buildFullTileMesh } from "./terrain-builders.js";
 import type {
   LoadedTerrainTile,
   PendingTerrainFetchRequest,
@@ -124,11 +121,17 @@ export function disposeTerrainTile(
 ): void {
   terrainGroup?.remove(tile.mesh);
   tile.mesh.geometry.dispose();
-  chunkBorderGroup?.remove(tile.borderLines);
-  tile.borderLines.geometry.dispose();
-  (tile.borderLines.material as THREE.Material).dispose();
-  chunkBorderGroup?.remove(tile.borderLabel);
-  disposeTextSprite(tile.borderLabel);
+  if (tile.borderLines) {
+    chunkBorderGroup?.remove(tile.borderLines);
+    tile.borderLines.geometry.dispose();
+    (tile.borderLines.material as THREE.Material).dispose();
+    tile.borderLines = null;
+  }
+  if (tile.borderLabel) {
+    chunkBorderGroup?.remove(tile.borderLabel);
+    disposeTextSprite(tile.borderLabel);
+    tile.borderLabel = null;
+  }
 }
 
 export function clearTerrainTiles(
@@ -161,6 +164,92 @@ export function finishTerrainFetch(args: {
     0,
     activeTerrainFetchCountRef.current - 1,
   );
+  drainTerrainFetchQueue();
+}
+
+export function syncTerrainRequests(args: {
+  requests: Map<string, PendingTerrainFetchRequest>;
+  activeTerrainRequestKeysRef: { current: Set<string> };
+  pendingTerrainFetchQueueRef: { current: PendingTerrainFetchRequest[] };
+  pendingTerrainMeshQueueRef: { current: PendingTerrainMeshItem[] };
+  loadedTerrainRef: { current: Map<string, LoadedTerrainTile> };
+  loadingTerrainRef: { current: Set<string> };
+  terrainFetchControllersRef: { current: Map<string, AbortController> };
+  restoreTerrainTileFromWarmCache: (key: string) => LoadedTerrainTile | null;
+  terrainVisibilityDirtyRef: { current: boolean };
+  debugLabelsDirtyRef: { current: boolean };
+  biomeLabelsDirtyRef: { current: boolean };
+  drainTerrainFetchQueue: () => void;
+}): void {
+  const {
+    requests,
+    activeTerrainRequestKeysRef,
+    pendingTerrainFetchQueueRef,
+    pendingTerrainMeshQueueRef,
+    loadedTerrainRef,
+    loadingTerrainRef,
+    terrainFetchControllersRef,
+    restoreTerrainTileFromWarmCache,
+    terrainVisibilityDirtyRef,
+    debugLabelsDirtyRef,
+    biomeLabelsDirtyRef,
+    drainTerrainFetchQueue,
+  } = args;
+
+  activeTerrainRequestKeysRef.current = new Set(requests.keys());
+
+  pendingTerrainFetchQueueRef.current =
+    pendingTerrainFetchQueueRef.current.filter((item) => {
+      const updated = requests.get(item.key);
+      if (!updated || loadedTerrainRef.current.has(item.key)) {
+        loadingTerrainRef.current.delete(item.key);
+        return false;
+      }
+      item.priority = updated.priority;
+      item.generation = updated.generation;
+      return true;
+    });
+  pendingTerrainFetchQueueRef.current.sort(compareTerrainFetchRequests);
+
+  pendingTerrainMeshQueueRef.current =
+    pendingTerrainMeshQueueRef.current.filter((item) => {
+      if (
+        activeTerrainRequestKeysRef.current.has(item.key) ||
+        loadedTerrainRef.current.has(item.key)
+      ) {
+        return true;
+      }
+      loadingTerrainRef.current.delete(item.key);
+      return false;
+    });
+
+  for (const [key, controller] of terrainFetchControllersRef.current) {
+    if (!activeTerrainRequestKeysRef.current.has(key)) {
+      controller.abort();
+    }
+  }
+
+  for (const request of requests.values()) {
+    if (
+      loadedTerrainRef.current.has(request.key) ||
+      loadingTerrainRef.current.has(request.key)
+    ) {
+      continue;
+    }
+
+    const restored = restoreTerrainTileFromWarmCache(request.key);
+    if (restored) {
+      loadedTerrainRef.current.set(request.key, restored);
+      terrainVisibilityDirtyRef.current = true;
+      debugLabelsDirtyRef.current = true;
+      biomeLabelsDirtyRef.current = true;
+      continue;
+    }
+
+    loadingTerrainRef.current.add(request.key);
+    queueTerrainFetchRequest(pendingTerrainFetchQueueRef.current, request);
+  }
+
   drainTerrainFetchQueue();
 }
 
@@ -291,6 +380,7 @@ export function buildQueuedTerrainMeshes(args: {
   chunkBorderGroup: THREE.Group | null;
   terrainMaterial: THREE.Material;
   showChunkBorders: boolean;
+  ensureTerrainBorderAssets: (tile: LoadedTerrainTile) => void;
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
   terrainVisibilityDirtyRef: { current: boolean };
@@ -303,9 +393,9 @@ export function buildQueuedTerrainMeshes(args: {
     loadedTerrainRef,
     loadingTerrainRef,
     terrainGroup,
-    chunkBorderGroup,
     terrainMaterial,
     showChunkBorders,
+    ensureTerrainBorderAssets,
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,
     terrainVisibilityDirtyRef,
@@ -338,19 +428,9 @@ export function buildQueuedTerrainMeshes(args: {
 
     const mesh = buildFullTileMesh(item.meshData, terrainMaterial);
     mesh.visible = false;
-    const { lines, label } = buildSurfaceTileBorderLines(
-      item.meshData.worldX,
-      item.meshData.worldY,
-      item.lod,
-      mesh,
-    );
-    lines.visible = showChunkBorders;
-    label.visible = showChunkBorders;
 
     terrainGroup?.add(mesh);
-    chunkBorderGroup?.add(lines);
-    chunkBorderGroup?.add(label);
-    loadedTerrainRef.current.set(item.key, {
+    const tile: LoadedTerrainTile = {
       key: item.key,
       lod: item.lod,
       tileX: item.tileX,
@@ -358,9 +438,13 @@ export function buildQueuedTerrainMeshes(args: {
       worldX: item.meshData.worldX,
       worldY: item.meshData.worldY,
       mesh,
-      borderLines: lines,
-      borderLabel: label,
-    });
+      borderLines: null,
+      borderLabel: null,
+    };
+    if (showChunkBorders) {
+      ensureTerrainBorderAssets(tile);
+    }
+    loadedTerrainRef.current.set(item.key, tile);
     loadingTerrainRef.current.delete(item.key);
     terrainVisibilityDirtyRef.current = true;
     biomeLabelsDirtyRef.current = true;
@@ -386,6 +470,8 @@ export function updateTerrainVisibility(args: {
   loadingTerrain: Set<string>;
   terrainLodHysteresisRatio: number;
   activeFocusLod: number;
+  ensureTerrainBorderAssets: (tile: LoadedTerrainTile) => void;
+  showChunkBorders: boolean;
   loadedVoxels: Iterable<{
     regionX: number;
     regionY: number;
@@ -404,6 +490,8 @@ export function updateTerrainVisibility(args: {
     loadingTerrain,
     terrainLodHysteresisRatio,
     activeFocusLod,
+    ensureTerrainBorderAssets,
+    showChunkBorders,
     loadedVoxels,
   } = args;
   const renderTerrain = shouldRenderTerrainForMode(
@@ -435,6 +523,20 @@ export function updateTerrainVisibility(args: {
       renderTerrain &&
       (visibleByDistance || keepCoarseFallback || keepFineFallback);
     tile.mesh.visible = visible;
+
+    if (
+      showChunkBorders &&
+      visible &&
+      (!tile.borderLines || !tile.borderLabel)
+    ) {
+      ensureTerrainBorderAssets(tile);
+    }
+    if (tile.borderLines) {
+      tile.borderLines.visible = visible && showChunkBorders;
+    }
+    if (tile.borderLabel) {
+      tile.borderLabel.visible = visible && showChunkBorders;
+    }
 
     const underlay = mode === "voxel" && showVoxelTerrain;
     tile.mesh.position.z = underlay ? TERRAIN_UNDERLAY_OFFSET_Z : 0;
@@ -468,11 +570,8 @@ export function syncTerrainLod(args: {
   surfaceIndex: SurfaceIndexEntry[];
   loadedTerrain: Map<string, LoadedTerrainTile>;
   loadingTerrain: Set<string>;
-  queueTerrainTileLoad: (
-    lod: number,
-    tileX: number,
-    tileY: number,
-    priority: number,
+  syncTerrainRequests: (
+    requests: Map<string, PendingTerrainFetchRequest>,
   ) => void;
   disposeTerrainTile: (tile: LoadedTerrainTile) => void;
   updateTerrainVisibility: (target: THREE.Vector3, camDist: number) => void;
@@ -481,14 +580,15 @@ export function syncTerrainLod(args: {
   terrainVisibilityDirtyRef: { current: boolean };
   activeFocusLodRef: { current: number };
   terrainLodHysteresisRatio: number;
+  terrainRequestGeneration: number;
+  stableForDetail: boolean;
 }): void {
   const {
     target,
     camDist,
     surfaceIndex,
     loadedTerrain,
-    loadingTerrain,
-    queueTerrainTileLoad,
+    syncTerrainRequests,
     disposeTerrainTile,
     updateTerrainVisibility,
     debugLabelsDirtyRef,
@@ -496,6 +596,8 @@ export function syncTerrainLod(args: {
     terrainVisibilityDirtyRef,
     activeFocusLodRef,
     terrainLodHysteresisRatio,
+    terrainRequestGeneration,
+    stableForDetail,
   } = args;
 
   const desiredCameraLod = getLodForDistanceWithHysteresis(
@@ -505,6 +607,8 @@ export function syncTerrainLod(args: {
     terrainLodHysteresisRatio,
   );
   activeFocusLodRef.current = desiredCameraLod;
+
+  const desiredTerrainRequests = new Map<string, PendingTerrainFetchRequest>();
 
   if (surfaceIndex.length > 0) {
     for (const entry of surfaceIndex) {
@@ -519,17 +623,23 @@ export function syncTerrainLod(args: {
         TERRAIN_LOD_DISTANCE_THRESHOLDS,
         terrainLodHysteresisRatio,
       );
-      if (entry.lod !== desiredLod) continue;
+      const requestedLod = stableForDetail
+        ? desiredLod
+        : Math.max(desiredLod, desiredCameraLod);
+      if (entry.lod !== requestedLod) continue;
       const key = terrainTileKey(entry.lod, entry.tileX, entry.tileY);
-      if (loadedTerrain.has(key) || loadingTerrain.has(key)) continue;
-      queueTerrainTileLoad(
-        entry.lod,
-        entry.tileX,
-        entry.tileY,
-        Math.round(dist),
-      );
+      desiredTerrainRequests.set(key, {
+        key,
+        lod: entry.lod,
+        tileX: entry.tileX,
+        tileY: entry.tileY,
+        priority: Math.round(dist),
+        generation: terrainRequestGeneration,
+      });
     }
   }
+
+  syncTerrainRequests(desiredTerrainRequests);
 
   for (const [key, tile] of loadedTerrain) {
     const tileWorldSize = 256 * tile.lod;
@@ -543,16 +653,19 @@ export function syncTerrainLod(args: {
       TERRAIN_LOD_DISTANCE_THRESHOLDS,
       terrainLodHysteresisRatio,
     );
+    const requestedLod = stableForDetail
+      ? desiredLod
+      : Math.max(desiredLod, desiredCameraLod);
 
     let replacedByPriority = false;
-    if (desiredLod > tile.lod) {
+    if (requestedLod > tile.lod) {
       replacedByPriority = hasLoadedTerrainTileAtWorld(
         loadedTerrain,
-        desiredLod,
+        requestedLod,
         centerWorldX,
         centerWorldY,
       );
-    } else if (desiredLod < tile.lod) {
+    } else if (requestedLod < tile.lod) {
       replacedByPriority = hasAllImmediateFinerTerrainChildrenLoaded(
         loadedTerrain,
         tile,

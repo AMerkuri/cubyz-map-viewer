@@ -1,6 +1,8 @@
 import type * as THREE from "three";
 
-import type { LoadedVoxelTile } from "./types.js";
+import type { LoadedTerrainTile, LoadedVoxelTile } from "./types.js";
+
+export const ESTIMATED_TEXT_SPRITE_BYTES = 256 * 64 * 4;
 
 export function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   let total = 0;
@@ -23,6 +25,19 @@ export function estimateLoadedVoxelTileBytes(tile: LoadedVoxelTile): number {
   for (const sm of tile.subMeshes) {
     total += estimateGeometryBytes(sm.mesh.geometry);
     total += sm.baseColors.byteLength + sm.faceAo.byteLength;
+  }
+  return total;
+}
+
+export function estimateLoadedTerrainTileBytes(
+  tile: LoadedTerrainTile,
+): number {
+  let total = estimateGeometryBytes(tile.mesh.geometry);
+  if (tile.borderLines) {
+    total += estimateGeometryBytes(tile.borderLines.geometry);
+  }
+  if (tile.borderLabel) {
+    total += ESTIMATED_TEXT_SPRITE_BYTES;
   }
   return total;
 }

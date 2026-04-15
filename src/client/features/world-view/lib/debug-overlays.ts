@@ -51,6 +51,7 @@ export function refreshDebugLabels(args: {
     for (const tile of loadedTerrain) {
       if (!showTiles) continue;
       if (!tile.mesh.visible) continue;
+      if (!tile.borderLines || !tile.borderLabel) continue;
       const key = tile.key;
       active.add(key);
       const text = `T L${tile.lod} ${tile.worldX}/${tile.worldY}`;

@@ -132,8 +132,13 @@ export interface LoadedTerrainTile {
   worldX: number;
   worldY: number;
   mesh: THREE.Mesh;
-  borderLines: THREE.LineSegments;
-  borderLabel: THREE.Sprite;
+  borderLines: THREE.LineSegments | null;
+  borderLabel: THREE.Sprite | null;
+}
+
+export interface WarmCachedTerrainTile {
+  tile: LoadedTerrainTile;
+  bytes: number;
 }
 
 export interface LoadedVoxelTile {

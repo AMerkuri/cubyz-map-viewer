@@ -228,8 +228,14 @@ function DebugStatsPanel({ chunkStats }: { chunkStats: ChunkStats }) {
           Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}
         </div>
         <div>
-          Warm cache: {formatMemoryBytes(chunkStats.memoryBreakdown.cached)} (
-          {chunkStats.warmCacheCount})
+          Terrain warm cache:{" "}
+          {formatMemoryBytes(chunkStats.memoryBreakdown.cachedTerrain)} (
+          {chunkStats.warmCacheCount.terrain})
+        </div>
+        <div>
+          Voxel warm cache:{" "}
+          {formatMemoryBytes(chunkStats.memoryBreakdown.cachedVoxels)} (
+          {chunkStats.warmCacheCount.voxels})
         </div>
         <div>
           Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}

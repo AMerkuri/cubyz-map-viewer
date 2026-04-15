@@ -34,7 +34,8 @@ export type GraphicsPreset = {
       | "lodUnloadHysteresis"
       | "voxelBehindCameraDotStart"
       | "voxelBehindCameraMaxMultiplier"
-      | "warmVoxelCacheMaxBytes"
+      | "warmTerrainCacheMaxBytes"
+      | "warmVoxelCacheLimitBytes"
     >
   >;
 };
@@ -64,7 +65,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 2.25,
       voxelBehindCameraDotStart: -0.45,
       voxelBehindCameraMaxMultiplier: 1.15,
-      warmVoxelCacheMaxBytes: 1536 * MB,
+      warmTerrainCacheMaxBytes: 768 * MB,
+      warmVoxelCacheLimitBytes: 1536 * MB,
     },
   },
   {
@@ -90,7 +92,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.75,
       voxelBehindCameraDotStart: -0.3,
       voxelBehindCameraMaxMultiplier: 1.35,
-      warmVoxelCacheMaxBytes: 768 * MB,
+      warmTerrainCacheMaxBytes: 384 * MB,
+      warmVoxelCacheLimitBytes: 768 * MB,
     },
   },
   {
@@ -116,7 +119,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.5,
       voxelBehindCameraDotStart: -0.15,
       voxelBehindCameraMaxMultiplier: 1.75,
-      warmVoxelCacheMaxBytes: 512 * MB,
+      warmTerrainCacheMaxBytes: 256 * MB,
+      warmVoxelCacheLimitBytes: 512 * MB,
     },
   },
   {
@@ -143,7 +147,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.25,
       voxelBehindCameraDotStart: 0.05,
       voxelBehindCameraMaxMultiplier: 2.2,
-      warmVoxelCacheMaxBytes: 256 * MB,
+      warmTerrainCacheMaxBytes: 128 * MB,
+      warmVoxelCacheLimitBytes: 256 * MB,
     },
   },
   {
@@ -169,7 +174,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.1,
       voxelBehindCameraDotStart: 0.2,
       voxelBehindCameraMaxMultiplier: 2.75,
-      warmVoxelCacheMaxBytes: 128 * MB,
+      warmTerrainCacheMaxBytes: 64 * MB,
+      warmVoxelCacheLimitBytes: 128 * MB,
     },
   },
 ] as const;

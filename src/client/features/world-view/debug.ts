@@ -30,12 +30,16 @@ export type ChunkStats = {
   memoryBreakdown: {
     terrain: number;
     voxels: number;
-    cached: number;
+    cachedTerrain: number;
+    cachedVoxels: number;
     queued: number;
   };
   memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
   jsHeapBytes: number | null;
-  warmCacheCount: number;
+  warmCacheCount: {
+    terrain: number;
+    voxels: number;
+  };
   voxelBenchmark: {
     samples: number;
     contentEncoding: string | null;
@@ -68,7 +72,8 @@ export interface MapDebugSettings {
   voxelUnloadGraceMs: number;
   voxelMeshBuildBudgetMs: number;
   maxVoxelMeshesPerFrame: number;
-  warmVoxelCacheMaxBytes: number;
+  warmTerrainCacheMaxBytes: number;
+  warmVoxelCacheLimitBytes: number;
 }
 
 export interface MapDebugParameterDefinition {
@@ -107,7 +112,8 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   voxelUnloadGraceMs: 750,
   voxelMeshBuildBudgetMs: 5,
   maxVoxelMeshesPerFrame: 8,
-  warmVoxelCacheMaxBytes: 512 * MB,
+  warmTerrainCacheMaxBytes: 256 * MB,
+  warmVoxelCacheLimitBytes: 512 * MB,
 };
 
 export function createEmptyChunkStats(mode: "terrain" | "voxel"): ChunkStats {
@@ -127,12 +133,16 @@ export function createEmptyChunkStats(mode: "terrain" | "voxel"): ChunkStats {
     memoryBreakdown: {
       terrain: 0,
       voxels: 0,
-      cached: 0,
+      cachedTerrain: 0,
+      cachedVoxels: 0,
       queued: 0,
     },
     memoryByLod: {},
     jsHeapBytes: null,
-    warmCacheCount: 0,
+    warmCacheCount: {
+      terrain: 0,
+      voxels: 0,
+    },
     voxelBenchmark: {
       samples: 0,
       contentEncoding: null,
@@ -337,15 +347,29 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     decimals: 2,
   },
   {
-    key: "warmVoxelCacheMaxBytes",
+    key: "warmTerrainCacheMaxBytes",
     section: "Memory",
-    label: "Warm Cache Limit",
+    label: "Terrain Warm Cache Limit",
+    description:
+      "Maximum memory reserved for keeping recently unloaded terrain tiles ready for quick reuse. Higher values improve nearby pan reuse at the cost of memory.",
+    min: 0,
+    max: 2048,
+    step: 32,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.warmTerrainCacheMaxBytes,
+    toDisplay: (value) => value / MB,
+    fromDisplay: (value) => Math.round(value * MB),
+    formatDisplay: (value) => `${Math.round(value)} MB`,
+  },
+  {
+    key: "warmVoxelCacheLimitBytes",
+    section: "Memory",
+    label: "Voxel Warm Cache Limit",
     description:
       "Maximum memory reserved for keeping recently unloaded voxel tiles ready for quick reuse. Higher values improve turn-around reuse at the cost of memory.",
     min: 0,
     max: 2048,
     step: 32,
-    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.warmVoxelCacheMaxBytes,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.warmVoxelCacheLimitBytes,
     toDisplay: (value) => value / MB,
     fromDisplay: (value) => Math.round(value * MB),
     formatDisplay: (value) => `${Math.round(value)} MB`,
