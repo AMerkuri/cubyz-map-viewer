@@ -2,7 +2,11 @@ import { useEffect, useEffectEvent } from "react";
 import type * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
-import { type ChunkStats, createEmptyChunkStats } from "../debug.js";
+import {
+  type ChunkStats,
+  createEmptyChunkStats,
+  type MapDebugSettings,
+} from "../debug.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { TerrainUpdatesBatchEvent } from "../hooks/useWebSocket.js";
 import type {
@@ -45,6 +49,7 @@ export function useWorld3DSceneRuntime(args: {
   showVoxelTerrainRef: { current: boolean };
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
+  debugSettingsRef: { current: MapDebugSettings };
   keysHeldRef: { current: Set<string> };
   terrainLoadGenerationRef: { current: number };
   worldDataRef: {
@@ -104,6 +109,7 @@ export function useWorld3DSceneRuntime(args: {
     showVoxelTerrainRef,
     showBiomeLabelsRef,
     debugEnabledRef,
+    debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,
@@ -166,6 +172,7 @@ export function useWorld3DSceneRuntime(args: {
       showVoxelTerrainRef,
       showBiomeLabelsRef,
       debugEnabledRef,
+      debugSettingsRef,
       keysHeldRef,
       terrainLoadGenerationRef,
       worldDataRef,
@@ -209,6 +216,7 @@ export function useWorld3DSceneRuntime(args: {
     showVoxelTerrainRef,
     showBiomeLabelsRef,
     debugEnabledRef,
+    debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,

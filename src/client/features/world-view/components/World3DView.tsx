@@ -1201,6 +1201,7 @@ export function World3DView({
     showVoxelTerrainRef,
     showBiomeLabelsRef,
     debugEnabledRef,
+    debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,

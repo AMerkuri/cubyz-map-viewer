@@ -50,6 +50,7 @@ export type ChunkStats = {
 };
 
 export interface MapDebugSettings {
+  frameRateCapFps: number;
   lodUnloadHysteresis: number;
   maxConcurrentVoxelFetches: number;
   maxConcurrentTerrainFetches: number;
@@ -87,6 +88,7 @@ export interface MapDebugParameterDefinition {
 const MB = 1024 * 1024;
 
 export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
+  frameRateCapFps: 60,
   lodUnloadHysteresis: 1.5,
   maxConcurrentVoxelFetches: 8,
   maxConcurrentTerrainFetches: 4,

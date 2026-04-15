@@ -33,6 +33,18 @@ interface ControlSection {
   content: React.ReactNode;
 }
 
+function formatFrameRateCapValue(value: number): string {
+  return value <= 0 ? "Uncapped" : `${value} FPS`;
+}
+
+function frameRateCapToSliderValue(value: number): number {
+  return value <= 0 ? 125 : value;
+}
+
+function sliderValueToFrameRateCap(value: number): number {
+  return value >= 125 ? 0 : value;
+}
+
 export function MapDebugParameters({
   view,
   settings,
@@ -74,6 +86,27 @@ export function MapDebugParameters({
               onToggle={() => onVoxelHeightsChange(!voxelHeights)}
             />
           </>
+        ),
+      },
+      {
+        title: "Performance",
+        content: (
+          <SliderRow
+            label="Frame Rate Cap"
+            description="Caps the main render loop. Set the slider to Uncapped to let rendering run at the display sync rate."
+            value={frameRateCapToSliderValue(settings.frameRateCapFps)}
+            displayValue={formatFrameRateCapValue(settings.frameRateCapFps)}
+            min={30}
+            max={125}
+            step={5}
+            defaultValue={frameRateCapToSliderValue(60)}
+            onChange={(value) =>
+              onChange({
+                ...settings,
+                frameRateCapFps: sliderValueToFrameRateCap(value),
+              })
+            }
+          />
         ),
       },
     ];

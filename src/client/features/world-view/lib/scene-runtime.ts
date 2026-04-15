@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import type { MapDebugSettings } from "../debug.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 import {
@@ -43,6 +44,7 @@ export function initializeSceneRuntime(args: {
   showVoxelTerrainRef: { current: boolean };
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
+  debugSettingsRef: { current: MapDebugSettings };
   keysHeldRef: { current: Set<string> };
   terrainLoadGenerationRef: { current: number };
   worldDataRef: {
@@ -102,6 +104,7 @@ export function initializeSceneRuntime(args: {
     showVoxelTerrainRef,
     showBiomeLabelsRef,
     debugEnabledRef,
+    debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,
@@ -285,12 +288,27 @@ export function initializeSceneRuntime(args: {
   let fpsFrameCounter = 0;
   let fpsLastTs = performance.now();
   let fpsValue = 0;
+  let nextFrameAt = performance.now();
   const lodCheckInterval = 8;
 
-  function animate() {
+  function animate(now = performance.now()) {
     animFrameId = requestAnimationFrame(animate);
     if (sceneRef.current) {
       sceneRef.current.animFrameId = animFrameId;
+    }
+
+    const frameRateCapFps = debugSettingsRef.current.frameRateCapFps;
+    const frameIntervalMs = frameRateCapFps <= 0 ? 0 : 1000 / frameRateCapFps;
+    if (frameIntervalMs > 0) {
+      if (now < nextFrameAt) {
+        return;
+      }
+
+      const nextTarget = nextFrameAt + frameIntervalMs;
+      nextFrameAt =
+        now - nextTarget > frameIntervalMs ? now + frameIntervalMs : nextTarget;
+    } else {
+      nextFrameAt = now;
     }
 
     updateKeyboardCameraMotion(camera, controls, keysHeldRef.current);

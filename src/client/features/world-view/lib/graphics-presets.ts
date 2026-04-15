@@ -19,6 +19,7 @@ export type GraphicsPreset = {
   debugSettings: Partial<
     Pick<
       MapDebugSettings,
+      | "frameRateCapFps"
       | "maxConcurrentTerrainFetches"
       | "terrainMeshBuildBudgetMs"
       | "maxTerrainMeshesPerFrame"
@@ -47,6 +48,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 1150,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      frameRateCapFps: 0,
       maxConcurrentTerrainFetches: 6,
       terrainMeshBuildBudgetMs: 8,
       maxTerrainMeshesPerFrame: 4,
@@ -71,6 +73,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 900,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      frameRateCapFps: 120,
       maxConcurrentTerrainFetches: 5,
       terrainMeshBuildBudgetMs: 6,
       maxTerrainMeshesPerFrame: 3,
@@ -95,6 +98,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      frameRateCapFps: 60,
       maxConcurrentTerrainFetches: 4,
       terrainMeshBuildBudgetMs: 4,
       maxTerrainMeshesPerFrame: 2,
@@ -120,6 +124,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 2,
     debugSettings: {
+      frameRateCapFps: 40,
       maxConcurrentTerrainFetches: 3,
       terrainMeshBuildBudgetMs: 3,
       maxTerrainMeshesPerFrame: 2,
@@ -144,6 +149,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 4,
     debugSettings: {
+      frameRateCapFps: 30,
       maxConcurrentTerrainFetches: 2,
       terrainMeshBuildBudgetMs: 2,
       maxTerrainMeshesPerFrame: 1,
