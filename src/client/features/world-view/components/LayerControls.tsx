@@ -36,7 +36,7 @@ function ToggleButton({ label, active, onToggle }: ToggleButtonProps) {
         border: `2px solid ${active ? uiTheme.accent.border : uiTheme.panel.buttonBorderMuted}`,
         cursor: "pointer",
         fontSize: 12,
-        fontWeight: 700,
+        fontWeight: 400,
         background: active
           ? uiTheme.accent.surface
           : uiTheme.panel.buttonBackgroundMuted,

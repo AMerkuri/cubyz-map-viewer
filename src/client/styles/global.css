@@ -4,6 +4,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
+  font-synthesis: none;
 }
 
 @font-face {
@@ -12,6 +13,7 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
+  font-synthesis: none;
 }
 
 * {
@@ -35,6 +37,7 @@ body {
 
 :root {
   font-family: "Unscii16", "Unscii", monospace;
+  font-synthesis: none;
 }
 
 body,

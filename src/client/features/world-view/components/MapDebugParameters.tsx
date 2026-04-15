@@ -433,7 +433,7 @@ function ParameterChrome({
             style={{
               color: uiTheme.text.secondary,
               fontSize: 12,
-              fontWeight: 600,
+              fontWeight: 400,
             }}
           >
             {label}
@@ -456,7 +456,7 @@ function ParameterChrome({
             style={{
               color: disabled ? uiTheme.text.disabled : uiTheme.accent.text,
               fontSize: 12,
-              fontWeight: 700,
+              fontWeight: 400,
               whiteSpace: "nowrap",
             }}
           >
@@ -573,14 +573,14 @@ function ToggleRow({
       }}
     >
       <span
-        style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}
+        style={{ fontSize: 12, fontWeight: 400, textTransform: "uppercase" }}
       >
         {label}
       </span>
       <span
         style={{
-          fontSize: 11,
-          fontWeight: 700,
+          fontSize: 12,
+          fontWeight: 400,
           color: active ? uiTheme.text.accent : uiTheme.text.muted,
         }}
       >
@@ -659,7 +659,7 @@ const rangeSliderCss = `
 const sectionTitleStyle: React.CSSProperties = {
   color: uiTheme.accent.text,
   fontSize: 12,
-  fontWeight: 700,
+  fontWeight: 400,
 };
 
 const helpButtonStyle: React.CSSProperties = {
@@ -669,8 +669,8 @@ const helpButtonStyle: React.CSSProperties = {
   border: `2px solid ${uiTheme.panel.buttonBorder}`,
   background: uiTheme.panel.buttonBackground,
   color: uiTheme.text.primary,
-  fontSize: 11,
-  fontWeight: 700,
+  fontSize: 12,
+  fontWeight: 400,
   cursor: "help",
   padding: 0,
   lineHeight: "16px",
@@ -704,8 +704,8 @@ const tooltipStyle: React.CSSProperties = {
   borderRadius: 0,
   padding: "8px 10px",
   color: uiTheme.text.secondary,
-  fontSize: 11,
-  lineHeight: 1.45,
+  fontSize: 12,
+  lineHeight: 1.25,
   boxShadow: "4px 4px 0 rgba(0,0,0,0.55)",
   zIndex: 5,
 };

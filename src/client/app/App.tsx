@@ -172,7 +172,7 @@ function StatsSectionTitle({ children }: { children: React.ReactNode }) {
       style={{
         marginTop: 4,
         color: uiTheme.accent.text,
-        fontWeight: 700,
+        fontWeight: 400,
       }}
     >
       {children}
@@ -191,7 +191,7 @@ function DebugStatsPanel({ chunkStats }: { chunkStats: ChunkStats }) {
       defaultCollapsed={true}
       contentStyle={{
         fontSize: 12,
-        lineHeight: 1.55,
+        lineHeight: 1.25,
         color: uiTheme.text.secondary,
       }}
     >
@@ -297,7 +297,7 @@ function InstructionTitle({ children }: { children: React.ReactNode }) {
     <div
       style={{
         color: uiTheme.accent.text,
-        fontWeight: 700,
+        fontWeight: 400,
         marginBottom: 2,
       }}
     >
@@ -328,7 +328,7 @@ function MapControlsPanel(args: {
       minWidth={250}
       maxWidth={350}
       collapsible={true}
-      contentStyle={{ fontSize: 12, lineHeight: 1.55 }}
+      contentStyle={{ fontSize: 12, lineHeight: 1.25 }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {view === "voxel" && (
@@ -341,10 +341,15 @@ function MapControlsPanel(args: {
                 gap: 8,
               }}
             >
-              <span style={{ color: uiTheme.accent.text, fontWeight: 700 }}>
+              <span
+                style={{
+                  color: uiTheme.accent.text,
+                  fontWeight: 400,
+                }}
+              >
                 Graphics Presets
               </span>
-              <span style={{ color: uiTheme.text.muted, fontSize: 11 }}>
+              <span style={{ color: uiTheme.text.muted, fontSize: 12 }}>
                 {activeGraphicsPresetId === null ? "Custom" : ""}
               </span>
             </div>
@@ -379,8 +384,8 @@ function MapControlsPanel(args: {
                         ? uiTheme.text.onAccent
                         : uiTheme.text.secondary,
                       cursor: "pointer",
-                      fontSize: 11,
-                      fontWeight: 700,
+                      fontSize: 12,
+                      fontWeight: 400,
                       textAlign: "left",
                       boxShadow: "2px 2px 0 rgba(0,0,0,0.5)",
                       textTransform: "uppercase",
@@ -415,7 +420,7 @@ function MapControlsPanel(args: {
         <div
           style={{
             fontSize: 12,
-            lineHeight: 1.55,
+            lineHeight: 1.25,
             color: uiTheme.text.secondary,
             display: "grid",
             gap: 8,
@@ -474,9 +479,8 @@ function TopRightToolbar(args: {
           backdropFilter: "blur(5px)",
           color: shareCopied ? uiTheme.text.onAccent : uiTheme.text.muted,
           fontSize: 13,
-          fontWeight: 700,
+          fontWeight: 400,
           textTransform: "uppercase",
-          letterSpacing: 0.5,
           cursor: "pointer",
         }}
       >
@@ -524,7 +528,7 @@ function DebugParametersPanel(args: {
       defaultCollapsed={true}
       contentStyle={{
         fontSize: 12,
-        lineHeight: 1.55,
+        lineHeight: 1.25,
         color: uiTheme.text.secondary,
       }}
     >

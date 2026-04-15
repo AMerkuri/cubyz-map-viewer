@@ -26,9 +26,8 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
           border: "none",
           cursor: "pointer",
           fontSize: 13,
-          fontWeight: 700,
+          fontWeight: 400,
           textTransform: "uppercase",
-          letterSpacing: 0.5,
           background:
             view === "terrain"
               ? uiTheme.accent.surfaceActive
@@ -48,9 +47,8 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
           borderLeft: `2px solid ${uiTheme.panel.buttonBorder}`,
           cursor: "pointer",
           fontSize: 13,
-          fontWeight: 700,
+          fontWeight: 400,
           textTransform: "uppercase",
-          letterSpacing: 0.5,
           background:
             view === "voxel"
               ? uiTheme.accent.surfaceActive

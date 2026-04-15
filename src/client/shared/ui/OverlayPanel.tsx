@@ -184,8 +184,7 @@ export function OverlayPanel({
           style={{
             color: uiTheme.accent.title,
             fontSize: 14,
-            fontWeight: 700,
-            letterSpacing: 1,
+            fontWeight: 400,
             textTransform: "uppercase",
             textShadow: "2px 2px 0 rgba(0,0,0,0.8)",
           }}
@@ -264,8 +263,8 @@ function clampPositionToBounds(
   bounds: PanelBounds,
 ): PanelPosition {
   return {
-    left: clamp(position.left, bounds.minLeft, bounds.maxLeft),
-    top: clamp(position.top, bounds.minTop, bounds.maxTop),
+    left: Math.round(clamp(position.left, bounds.minLeft, bounds.maxLeft)),
+    top: Math.round(clamp(position.top, bounds.minTop, bounds.maxTop)),
   };
 }
 

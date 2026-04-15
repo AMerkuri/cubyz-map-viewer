@@ -42,7 +42,7 @@ export function InfoPanel({
       collapsible={true}
       contentStyle={{
         fontSize: 12,
-        lineHeight: 1.45,
+        lineHeight: 1.25,
         color: infoPanelTheme.secondary,
       }}
       style={{
