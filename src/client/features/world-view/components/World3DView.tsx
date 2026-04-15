@@ -29,8 +29,8 @@ import {
 import { checkAndUpdateLod as checkAndUpdateLodManaged } from "../lib/lod-controller.js";
 import { createVoxelLodDistanceThresholds } from "../lib/lod-utils.js";
 import {
-  rebuildPlayerMarkers,
   rebuildSpawnMarker,
+  syncPlayerMarkers,
   updatePlayerMarkerScale,
 } from "../lib/markers.js";
 import {
@@ -913,9 +913,14 @@ export function World3DView({
     const playerMarkerTexture = playerMarkerTextureRef.current;
     const playerMarkerGrayscaleTexture =
       playerMarkerGrayscaleTextureRef.current;
-    rebuildPlayerMarkers({
+    syncPlayerMarkers({
       players: playersRef.current,
       markerGroup: markerGroupRef.current,
+      hasPlayerMarkerModel: Boolean(
+        playerMarkerModelTemplate &&
+          playerMarkerTexture &&
+          playerMarkerGrayscaleTexture,
+      ),
       createPlayerMarkerModel:
         playerMarkerModelTemplate &&
         playerMarkerTexture &&

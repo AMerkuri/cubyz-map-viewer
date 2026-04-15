@@ -21,6 +21,14 @@ function createMarkerVisualRoot(): THREE.Group {
   return visualRoot;
 }
 
+interface PlayerMarkerState {
+  visualRoot: THREE.Group;
+  marker: THREE.Object3D | CSS2DObject;
+  label: CSS2DObject;
+  grayscale: boolean;
+  usesModel: boolean;
+}
+
 function getModelLabelOffset(marker: THREE.Object3D): number {
   const bounds = new THREE.Box3().setFromObject(marker);
   return Math.max(bounds.max.z, 0) + PLAYER_LABEL_HEADROOM;
@@ -58,6 +66,121 @@ function disposeMarkerTree(args: {
       disposePlayerMarkerModel(child);
     }
   });
+}
+
+function disposeMarkerObject(args: {
+  object: THREE.Object3D;
+  disposePlayerMarkerModel: (model: THREE.Object3D) => void;
+  disposeTextSprite: (sprite: THREE.Sprite) => void;
+}) {
+  const { object, disposePlayerMarkerModel, disposeTextSprite } = args;
+  if (object.parent) {
+    object.parent.remove(object);
+  }
+  disposeMarkerTree({
+    root: object,
+    disposePlayerMarkerModel,
+    disposeTextSprite,
+  });
+}
+
+function createPlayerMarkerVisuals(args: {
+  player: PlayerData;
+  createPlayerMarkerModel: (
+    player: PlayerData,
+  ) => THREE.Object3D | CSS2DObject | null;
+  createFormattedPlayerLabel: (
+    text: string,
+    grayscale?: boolean,
+    pixelOffset?: number,
+  ) => CSS2DObject;
+}) {
+  const { player, createPlayerMarkerModel, createFormattedPlayerLabel } = args;
+  const grayscale = Date.now() - player.lastSeen > PLAYER_ACTIVE_WINDOW_MS;
+  const marker =
+    createPlayerMarkerModel(player) ?? createFallbackPlayerMarker(grayscale);
+  const usesModel = !(marker instanceof CSS2DObject);
+  const label = createFormattedPlayerLabel(
+    player.name,
+    grayscale,
+    usesModel ? 4 : DOT_LABEL_PIXEL_OFFSET,
+  );
+  const labelBaseOffset = usesModel ? getModelLabelOffset(marker) : 0;
+
+  label.userData.player = player;
+  label.position.set(0, 0, labelBaseOffset);
+
+  updatePlayerMarkerObject(marker, player);
+
+  return {
+    marker,
+    label,
+    grayscale,
+    usesModel,
+    labelBaseOffset,
+  };
+}
+
+function updatePlayerMarkerObject(
+  marker: THREE.Object3D | CSS2DObject,
+  player: PlayerData,
+) {
+  marker.position.set(0, 0, 0);
+  // Cubyz renders entity models with rotationZ(-yaw), so match that sign here.
+  marker.rotation.z = -(player.rotation[2] ?? 0);
+  marker.userData.player = player;
+  marker.userData.playerMarker = true;
+}
+
+function createPlayerMarkerRoot(args: {
+  player: PlayerData;
+  createPlayerMarkerModel: (
+    player: PlayerData,
+  ) => THREE.Object3D | CSS2DObject | null;
+  createFormattedPlayerLabel: (
+    text: string,
+    grayscale?: boolean,
+    pixelOffset?: number,
+  ) => CSS2DObject;
+}): THREE.Group {
+  const { player, createPlayerMarkerModel, createFormattedPlayerLabel } = args;
+  const [px, py, pz] = worldToScene(
+    player.position[0],
+    player.position[1],
+    player.position[2],
+  );
+  const root = createMarkerRoot([px, py, pz]);
+  const visualRoot = createMarkerVisualRoot();
+  const { marker, label, grayscale, usesModel, labelBaseOffset } =
+    createPlayerMarkerVisuals({
+      player,
+      createPlayerMarkerModel,
+      createFormattedPlayerLabel,
+    });
+
+  root.userData.playerMarkerRoot = true;
+  root.userData.playerKey = player.name;
+
+  visualRoot.add(marker);
+  root.add(visualRoot);
+
+  setMarkerLabelMetadata({
+    label,
+    visualRoot,
+    baseOffset: labelBaseOffset,
+    dynamicWithScale: usesModel,
+  });
+  root.add(label);
+
+  root.userData.playerMarkerState = {
+    visualRoot,
+    marker,
+    label,
+    grayscale,
+    usesModel,
+  } satisfies PlayerMarkerState;
+
+  return root;
 }
 
 function updateGroupMarkerScale(group: THREE.Group | null, scale: number) {
@@ -161,9 +284,10 @@ export function rebuildSpawnMarker(args: {
   spawnGroup.add(root);
 }
 
-export function rebuildPlayerMarkers(args: {
+export function syncPlayerMarkers(args: {
   players: PlayerData[];
   markerGroup: THREE.Group | null;
+  hasPlayerMarkerModel: boolean;
   createPlayerMarkerModel: (
     player: PlayerData,
   ) => THREE.Object3D | CSS2DObject | null;
@@ -178,6 +302,7 @@ export function rebuildPlayerMarkers(args: {
   const {
     players,
     markerGroup,
+    hasPlayerMarkerModel,
     createPlayerMarkerModel,
     createFormattedPlayerLabel,
     disposePlayerMarkerModel,
@@ -185,55 +310,127 @@ export function rebuildPlayerMarkers(args: {
   } = args;
   if (!markerGroup) return;
 
-  while (markerGroup.children.length > 0) {
-    const child = markerGroup.children[0];
-    markerGroup.remove(child);
-    disposeMarkerTree({
-      root: child,
-      disposePlayerMarkerModel,
-      disposeTextSprite,
-    });
+  const existingRoots = new Map<string, THREE.Group>();
+  for (const child of markerGroup.children) {
+    if (!(child instanceof THREE.Group)) {
+      continue;
+    }
+    if (child.userData.playerMarkerRoot !== true) {
+      continue;
+    }
+    const key = child.userData.playerKey;
+    if (typeof key === "string") {
+      existingRoots.set(key, child);
+    }
   }
 
+  const seenKeys = new Set<string>();
+
   for (const player of players) {
+    const key = player.name;
+    seenKeys.add(key);
+
     const [px, py, pz] = worldToScene(
       player.position[0],
       player.position[1],
       player.position[2],
     );
+    const root = existingRoots.get(key);
+    if (!root) {
+      markerGroup.add(
+        createPlayerMarkerRoot({
+          player,
+          createPlayerMarkerModel,
+          createFormattedPlayerLabel,
+        }),
+      );
+      continue;
+    }
+
+    root.position.set(px, py, pz);
+    root.userData.playerKey = key;
+
+    const state = root.userData.playerMarkerState as
+      | PlayerMarkerState
+      | undefined;
+    if (
+      !state ||
+      state.visualRoot.parent !== root ||
+      state.label.parent !== root
+    ) {
+      disposeMarkerObject({
+        object: root,
+        disposePlayerMarkerModel,
+        disposeTextSprite,
+      });
+      markerGroup.add(
+        createPlayerMarkerRoot({
+          player,
+          createPlayerMarkerModel,
+          createFormattedPlayerLabel,
+        }),
+      );
+      continue;
+    }
 
     const grayscale = Date.now() - player.lastSeen > PLAYER_ACTIVE_WINDOW_MS;
-    const marker =
-      createPlayerMarkerModel(player) ?? createFallbackPlayerMarker(grayscale);
-    const usesModel = !(marker instanceof CSS2DObject);
-    const root = createMarkerRoot([px, py, pz]);
-    root.userData.playerMarkerRoot = true;
-    const visualRoot = createMarkerVisualRoot();
+    const shouldUseModel = hasPlayerMarkerModel;
+    if (state.grayscale !== grayscale || state.usesModel !== shouldUseModel) {
+      disposeMarkerObject({
+        object: state.marker,
+        disposePlayerMarkerModel,
+        disposeTextSprite,
+      });
+      disposeMarkerObject({
+        object: state.label,
+        disposePlayerMarkerModel,
+        disposeTextSprite,
+      });
 
-    marker.position.set(0, 0, 0);
-    // Cubyz renders entity models with rotationZ(-yaw), so match that sign here.
-    marker.rotation.z = -(player.rotation[2] ?? 0);
-    marker.userData.player = player;
-    marker.userData.playerMarker = true;
-    visualRoot.add(marker);
-    root.add(visualRoot);
+      const {
+        marker,
+        label,
+        grayscale: nextGrayscale,
+        usesModel,
+        labelBaseOffset,
+      } = createPlayerMarkerVisuals({
+        player,
+        createPlayerMarkerModel,
+        createFormattedPlayerLabel,
+      });
 
-    const label = createFormattedPlayerLabel(
-      player.name,
-      grayscale,
-      usesModel ? 4 : DOT_LABEL_PIXEL_OFFSET,
-    );
-    label.userData.player = player;
-    const labelBaseOffset = usesModel ? getModelLabelOffset(marker) : 0;
-    label.position.set(0, 0, labelBaseOffset);
-    setMarkerLabelMetadata({
-      label,
-      visualRoot,
-      baseOffset: labelBaseOffset,
-      dynamicWithScale: usesModel,
+      state.visualRoot.add(marker);
+      setMarkerLabelMetadata({
+        label,
+        visualRoot: state.visualRoot,
+        baseOffset: labelBaseOffset,
+        dynamicWithScale: usesModel,
+      });
+      root.add(label);
+
+      root.userData.playerMarkerState = {
+        visualRoot: state.visualRoot,
+        marker,
+        label,
+        grayscale: nextGrayscale,
+        usesModel,
+      } satisfies PlayerMarkerState;
+      continue;
+    }
+
+    updatePlayerMarkerObject(state.marker, player);
+    state.label.userData.player = player;
+  }
+
+  for (const [key, root] of existingRoots) {
+    if (seenKeys.has(key)) {
+      continue;
+    }
+    markerGroup.remove(root);
+    disposeMarkerTree({
+      root,
+      disposePlayerMarkerModel,
+      disposeTextSprite,
     });
-    root.add(label);
-
-    markerGroup.add(root);
   }
 }

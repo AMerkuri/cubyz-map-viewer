@@ -83,7 +83,7 @@ src/client/
 2. The server broadcasts `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`.
 3. `usePlayers` keeps player activity fresh with a 30-second refetch interval and also invalidates immediately on `players-updated` events.
 4. Terrain tile refreshes invalidate the changed tile plus its same-LOD neighbors because seam-safe terrain payloads depend on a 3x3 tile neighborhood; `surface-index-changed` takes the simpler clear-and-rebuild path for visible terrain so add/remove changes cannot leave stale neighbor-dependent meshes alive.
-5. `World3DView` refreshes loaded scene data in place, and player updates rebuild the marker layer without recreating the full scene.
+5. `World3DView` refreshes loaded scene data in place, and player updates reconcile marker objects in place so frequent `players-updated` events do not remount every nameplate.
 6. Player markers use the `snale` entity model when the asset load succeeds, otherwise they render a fallback sprite marker with the player label.
 7. Spawn and player marker labels use bundled `unscii-8` / `unscii-16` fonts via client `@font-face` definitions.
 
