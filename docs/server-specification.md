@@ -87,6 +87,7 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 1. The client requests `/api/players` for current player positions, rotation, and health.
 2. The client requests `/api/assets/entities/models/:name` and `/api/assets/entities/textures/:name` for entity assets.
 3. The viewer combines the payloads client-side to render clickable player representations.
+4. `/api/players` returns all parsed player files and includes `isActive` as metadata so the client can distinguish recent saves from older ones.
 
 ### Terrain Mesh Data
 
@@ -138,6 +139,8 @@ It emits:
 - `terrain-updates-batch`
 
 `terrain-updates-batch` groups tile and region changes over a configurable window so the client is not flooded with per-file events.
+
+`findSavePath()` auto-detects the newest save directory under `~/.cubyz/saves/` by modification time when `SAVE_PATH` is not set.
 
 ### Broadcast and Invalidation
 

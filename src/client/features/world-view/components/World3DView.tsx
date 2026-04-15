@@ -28,13 +28,19 @@ import {
 } from "../lib/live-updates.js";
 import { checkAndUpdateLod as checkAndUpdateLodManaged } from "../lib/lod-controller.js";
 import { createVoxelLodDistanceThresholds } from "../lib/lod-utils.js";
-import { rebuildPlayerMarkers, rebuildSpawnMarker } from "../lib/markers.js";
+import {
+  rebuildPlayerMarkers,
+  rebuildSpawnMarker,
+  updatePlayerMarkerScale,
+} from "../lib/markers.js";
 import {
   createFormattedPlayerLabel,
+  createGrayscaleTexture,
   createMarkerDot,
   createMarkerLabel,
   createPlayerMarkerModel,
   disposePlayerMarkerModel,
+  disposePlayerMarkerTemplate,
   disposeTextSprite,
 } from "../lib/primitives.js";
 import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
@@ -102,6 +108,11 @@ import {
 } from "../lib/voxel-runtime.js";
 
 export type { InitialCameraState } from "../lib/types.js";
+
+const PLAYER_MARKER_BASE_SCALE = 3.2;
+const PLAYER_MARKER_SCALE_REFERENCE_DISTANCE = 200;
+const PLAYER_MARKER_MIN_SCALE = 1;
+const PLAYER_MARKER_MAX_SCALE = 25;
 
 export function World3DView({
   mode,
@@ -290,7 +301,12 @@ export function World3DView({
   });
   const playerMarkerModelTemplateRef = useRef<THREE.Object3D | null>(null);
   const playerMarkerTextureRef = useRef<THREE.Texture | null>(null);
-  const playerAssetsRequestedRef = useRef(false);
+  const playerMarkerGrayscaleTextureRef = useRef<THREE.Texture | null>(null);
+  const playerAssetsLoadIdRef = useRef(0);
+  const playerAssetsLoadingRef = useRef(false);
+  const playerAssetsLoadedRef = useRef(false);
+  const playerAssetsRetryAttemptRef = useRef(0);
+  const playerAssetsRetryTimerRef = useRef<number | null>(null);
   const activeFocusLodRef = useRef<number>(1);
   const activeTerrainLodRef = useRef<number>(1);
   const voxelFocusStateRef = useRef<VoxelFocusState>({
@@ -302,43 +318,140 @@ export function World3DView({
 
   useEffect(() => {
     const shouldLoadPlayerAssets = showPlayers || players.length > 0;
-    if (!shouldLoadPlayerAssets || playerAssetsRequestedRef.current) {
+    if (!shouldLoadPlayerAssets || playerAssetsLoadedRef.current) {
       return;
     }
 
-    playerAssetsRequestedRef.current = true;
+    if (playerAssetsLoadingRef.current) {
+      return;
+    }
+
+    const loadId = ++playerAssetsLoadIdRef.current;
+    let cancelled = false;
     const textureLoader = new THREE.TextureLoader();
     const objLoader = new OBJLoader();
-    let disposed = false;
 
-    textureLoader.load("/api/assets/entities/textures/snale.png", (texture) => {
-      if (disposed) {
-        texture.dispose();
+    async function loadPlayerAssets() {
+      if (playerAssetsLoadingRef.current || playerAssetsLoadedRef.current) {
         return;
       }
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.magFilter = THREE.NearestFilter;
-      texture.minFilter = THREE.NearestFilter;
-      playerMarkerTextureRef.current = texture;
-      if (playerMarkerModelTemplateRef.current) {
-        onUpdatePlayerMarkers();
-      }
-    });
 
-    objLoader.load("/api/assets/entities/models/snale.obj", (model) => {
-      if (disposed) {
-        return;
-      }
-      playerMarkerModelTemplateRef.current = model;
-      if (playerMarkerTextureRef.current) {
+      playerAssetsLoadingRef.current = true;
+      try {
+        const [textureResult, modelResult] = await Promise.allSettled([
+          textureLoader.loadAsync("/api/assets/entities/textures/snale.png"),
+          objLoader.loadAsync("/api/assets/entities/models/snale.obj"),
+        ]);
+
+        if (cancelled || loadId !== playerAssetsLoadIdRef.current) {
+          if (textureResult.status === "fulfilled") {
+            textureResult.value.dispose();
+          }
+          if (modelResult.status === "fulfilled") {
+            disposePlayerMarkerTemplate(modelResult.value);
+          }
+          return;
+        }
+
+        if (
+          textureResult.status === "fulfilled" &&
+          modelResult.status === "fulfilled"
+        ) {
+          textureResult.value.colorSpace = THREE.SRGBColorSpace;
+          textureResult.value.magFilter = THREE.NearestFilter;
+          textureResult.value.minFilter = THREE.NearestFilter;
+          playerMarkerTextureRef.current?.dispose();
+          playerMarkerGrayscaleTextureRef.current?.dispose();
+          playerMarkerTextureRef.current = textureResult.value;
+          playerMarkerGrayscaleTextureRef.current = createGrayscaleTexture(
+            textureResult.value,
+          );
+          playerMarkerModelTemplateRef.current = modelResult.value;
+          playerAssetsLoadedRef.current = true;
+          playerAssetsRetryAttemptRef.current = 0;
+          playerAssetsLoadingRef.current = false;
+          if (playerAssetsRetryTimerRef.current) {
+            window.clearTimeout(playerAssetsRetryTimerRef.current);
+            playerAssetsRetryTimerRef.current = null;
+          }
+          onUpdatePlayerMarkers();
+          return;
+        }
+
+        if (textureResult.status === "fulfilled") {
+          textureResult.value.dispose();
+        }
+        if (modelResult.status === "fulfilled") {
+          disposePlayerMarkerTemplate(modelResult.value);
+        }
+
+        playerAssetsLoadedRef.current = false;
+        playerAssetsLoadingRef.current = false;
+        if (playerAssetsRetryAttemptRef.current === 0) {
+          playerAssetsRetryAttemptRef.current = 1;
+          playerAssetsRetryTimerRef.current = window.setTimeout(() => {
+            playerAssetsRetryTimerRef.current = null;
+            void loadPlayerAssets();
+          }, 1000);
+        }
+        onUpdatePlayerMarkers();
+      } catch {
+        if (cancelled || loadId !== playerAssetsLoadIdRef.current) {
+          return;
+        }
+
+        playerAssetsLoadedRef.current = false;
+        playerAssetsLoadingRef.current = false;
+        if (playerAssetsRetryAttemptRef.current === 0) {
+          playerAssetsRetryAttemptRef.current = 1;
+          playerAssetsRetryTimerRef.current = window.setTimeout(() => {
+            playerAssetsRetryTimerRef.current = null;
+            void loadPlayerAssets();
+          }, 1000);
+        }
         onUpdatePlayerMarkers();
       }
-    });
+    }
+
+    void loadPlayerAssets();
 
     return () => {
-      disposed = true;
+      cancelled = true;
+      playerAssetsLoadIdRef.current += 1;
+      playerAssetsLoadingRef.current = false;
+      playerAssetsRetryAttemptRef.current = 0;
+      if (playerAssetsRetryTimerRef.current) {
+        window.clearTimeout(playerAssetsRetryTimerRef.current);
+        playerAssetsRetryTimerRef.current = null;
+      }
     };
   }, [showPlayers, players.length]);
+
+  useEffect(
+    () => () => {
+      playerAssetsLoadIdRef.current += 1;
+      playerAssetsLoadingRef.current = false;
+      playerAssetsLoadedRef.current = false;
+      playerAssetsRetryAttemptRef.current = 0;
+      if (playerAssetsRetryTimerRef.current) {
+        window.clearTimeout(playerAssetsRetryTimerRef.current);
+        playerAssetsRetryTimerRef.current = null;
+      }
+      if (playerMarkerTextureRef.current) {
+        playerMarkerTextureRef.current.dispose();
+        playerMarkerTextureRef.current = null;
+      }
+      if (playerMarkerGrayscaleTextureRef.current) {
+        playerMarkerGrayscaleTextureRef.current.dispose();
+        playerMarkerGrayscaleTextureRef.current = null;
+      }
+      if (playerMarkerModelTemplateRef.current) {
+        disposePlayerMarkerTemplate(playerMarkerModelTemplateRef.current);
+        playerMarkerModelTemplateRef.current = null;
+      }
+    },
+    [],
+  );
 
   function rebuildVoxelIndexCache(entries: ChunkIndexEntry[]) {
     const { availableKeys, roots } = rebuildVoxelIndex(entries);
@@ -797,12 +910,23 @@ export function World3DView({
   function updatePlayerMarkers() {
     const playerMarkerModelTemplate = playerMarkerModelTemplateRef.current;
     const playerMarkerTexture = playerMarkerTextureRef.current;
-    if (!playerMarkerModelTemplate || !playerMarkerTexture) return;
+    const playerMarkerGrayscaleTexture =
+      playerMarkerGrayscaleTextureRef.current;
     rebuildPlayerMarkers({
       players: playersRef.current,
       markerGroup: markerGroupRef.current,
-      createPlayerMarkerModel: () =>
-        createPlayerMarkerModel(playerMarkerModelTemplate, playerMarkerTexture),
+      createPlayerMarkerModel:
+        playerMarkerModelTemplate &&
+        playerMarkerTexture &&
+        playerMarkerGrayscaleTexture
+          ? (player) =>
+              createPlayerMarkerModel(
+                playerMarkerModelTemplate,
+                Date.now() - player.lastSeen > 60_000
+                  ? playerMarkerGrayscaleTexture
+                  : playerMarkerTexture,
+              )
+          : () => null,
       createFormattedPlayerLabel,
       disposePlayerMarkerModel,
       disposeTextSprite,
@@ -814,6 +938,22 @@ export function World3DView({
   function updateMarkerScales(_: THREE.PerspectiveCamera, __: OrbitControls) {
     // Marker labels are CSS2D-based and intentionally keep constant screen size,
     // matching biome labels readability across zoom levels.
+    const scene = sceneRef.current;
+    const markerGroup = markerGroupRef.current;
+    if (!scene) {
+      return;
+    }
+
+    const cameraDistance = scene.camera.position.distanceTo(
+      scene.controls.target,
+    );
+    const playerScale = THREE.MathUtils.clamp(
+      (cameraDistance / PLAYER_MARKER_SCALE_REFERENCE_DISTANCE) *
+        PLAYER_MARKER_BASE_SCALE,
+      PLAYER_MARKER_MIN_SCALE,
+      PLAYER_MARKER_MAX_SCALE,
+    );
+    updatePlayerMarkerScale(markerGroup, playerScale);
   }
 
   function handleTileUpdate(lod: number, tileX: number, tileY: number) {

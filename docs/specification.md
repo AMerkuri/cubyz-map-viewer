@@ -41,7 +41,7 @@ The root `.env.example` mirrors the server config list.
 - `VOXEL_FULL_CLEAR_THROTTLE_MS`: minimum gap in ms between broad voxel cache clears (`1000`)
 - `TERRAIN_UPDATE_BATCH_MS`: save watcher batch window in ms for terrain updates (`15000`)
 - `CORS_ALLOWED_ORIGINS`: comma-separated browser origin allowlist
-- `SAVE_PATH`: Cubyz save directory; auto-detects `~/.cubyz/saves/` when unset
+- `SAVE_PATH`: Cubyz save directory; auto-detects the newest directory under `~/.cubyz/saves/` when unset
 - `CUBYZ_PATH`: Cubyz project root or asset source; auto-detects the repository parent containing `assets/cubyz` when unset
 - `VOXEL_WORKERS`: voxel worker pool size; defaults to `floor(availableParallelism() / 2)` workers
 - `VOXEL_CACHE_DIR`: persistent voxel mesh cache directory (`dist/server/cache/voxels`)

@@ -358,13 +358,16 @@ function MapControlsPanel(args: {
                     onClick={() => applyGraphicsPreset(preset)}
                     title={preset.description}
                     style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
                       padding: "8px 10px",
-                      borderRadius: 6,
+                      borderRadius: 0,
                       border: active
-                        ? `1px solid ${uiTheme.accent.border}`
-                        : `1px solid ${uiTheme.panel.buttonBorderMuted}`,
+                        ? `2px solid ${uiTheme.accent.border}`
+                        : `2px solid ${uiTheme.panel.buttonBorderMuted}`,
                       background: active
-                        ? uiTheme.accent.surfaceActive
+                        ? uiTheme.accent.surface
                         : uiTheme.panel.buttonBackgroundMuted,
                       color: active
                         ? uiTheme.text.onAccent
@@ -372,9 +375,25 @@ function MapControlsPanel(args: {
                       cursor: "pointer",
                       fontSize: 11,
                       fontWeight: 700,
-                      textAlign: "center",
+                      textAlign: "left",
+                      boxShadow: "2px 2px 0 rgba(0,0,0,0.5)",
+                      textTransform: "uppercase",
                     }}
                   >
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 10,
+                        height: 10,
+                        flexShrink: 0,
+                        border: active
+                          ? `2px solid ${uiTheme.accent.border}`
+                          : `2px solid ${uiTheme.panel.buttonBorderMuted}`,
+                        background: active
+                          ? uiTheme.accent.surfaceActive
+                          : uiTheme.panel.buttonBackgroundMuted,
+                      }}
+                    />
                     {preset.label}
                   </button>
                 );
@@ -440,18 +459,19 @@ function TopRightToolbar(args: {
         onClick={onShareLocation}
         style={{
           padding: "8px 14px",
-          border: "none",
-          borderRadius: 6,
-          boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+          border: `2px solid ${shareCopied ? uiTheme.accent.border : uiTheme.panel.buttonBorder}`,
+          borderRadius: 0,
+          boxShadow: "3px 3px 0 rgba(0,0,0,0.55)",
           background: shareCopied
             ? uiTheme.accent.surfaceActive
-            : uiTheme.panel.buttonBackgroundMuted,
-          backdropFilter: "blur(2px)",
+            : uiTheme.panel.buttonBackground,
+          backdropFilter: "blur(5px)",
           color: shareCopied ? uiTheme.text.onAccent : uiTheme.text.muted,
           fontSize: 13,
-          fontWeight: 600,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
           cursor: "pointer",
-          transition: "all 0.2s",
         }}
       >
         {shareCopied ? "Copied" : "Copy Location"}
@@ -853,15 +873,15 @@ export function App() {
           transform: "translateX(-50%)",
           zIndex: 1000,
           background: uiTheme.panel.background,
-          border: `1px solid ${uiTheme.panel.border}`,
-          borderRadius: 6,
+          border: `2px solid ${uiTheme.panel.border}`,
+          borderRadius: 0,
           padding: "5px 14px",
           fontSize: 12,
           color: uiTheme.text.secondary,
           pointerEvents: "none",
           whiteSpace: "nowrap",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
-          backdropFilter: "blur(8px)",
+          boxShadow: uiTheme.panel.shadow,
+          backdropFilter: "blur(5px)",
         }}
       />
 

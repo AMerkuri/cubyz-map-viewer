@@ -1,0 +1,46 @@
+@font-face {
+  font-family: "Unscii";
+  src: url("/fonts/unscii-8.woff") format("woff");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Unscii16";
+  src: url("/fonts/unscii-16.woff") format("woff");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+}
+
+:root {
+  font-family: "Unscii16", "Unscii", monospace;
+}
+
+body,
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}

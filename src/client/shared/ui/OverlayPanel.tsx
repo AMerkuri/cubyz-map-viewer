@@ -128,12 +128,13 @@ export function OverlayPanel({
       : {}),
     zIndex,
     background: uiTheme.panel.background,
-    border: `1px solid ${uiTheme.panel.border}`,
-    borderRadius: 8,
+    border: `2px solid ${uiTheme.panel.border}`,
+    borderRadius: 0,
     boxShadow: uiTheme.panel.shadow,
     backdropFilter: "blur(5px)",
     minWidth,
     maxWidth,
+    imageRendering: "pixelated",
     ...style,
   };
 
@@ -169,15 +170,25 @@ export function OverlayPanel({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: 10,
-          padding: "10px 12px",
-          borderBottom: collapsed ? "none" : "1px solid rgba(255,255,255,0.09)",
+          gap: 8,
+          padding: "8px 10px",
+          borderBottom: collapsed
+            ? "none"
+            : `2px solid ${uiTheme.panel.border}`,
+          background: "rgba(88, 62, 45)",
           cursor: absolute ? "grab" : "default",
           userSelect: "none",
         }}
       >
         <div
-          style={{ color: uiTheme.accent.title, fontSize: 14, fontWeight: 700 }}
+          style={{
+            color: uiTheme.accent.title,
+            fontSize: 14,
+            fontWeight: 700,
+            letterSpacing: 1,
+            textTransform: "uppercase",
+            textShadow: "2px 2px 0 rgba(0,0,0,0.8)",
+          }}
         >
           {title}
         </div>
@@ -209,7 +220,7 @@ export function OverlayPanel({
       {!collapsed && (
         <div
           style={{
-            padding: "10px 12px",
+            padding: "8px 10px",
             maxHeight: "min(70vh, calc(100vh - 96px))",
             overflowY: "auto",
             ...contentStyle,
@@ -276,17 +287,18 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 const headerButtonStyle: React.CSSProperties = {
-  border: `1px solid ${uiTheme.panel.buttonBorder}`,
+  border: `2px solid ${uiTheme.panel.buttonBorder}`,
   background: uiTheme.panel.buttonBackground,
   color: uiTheme.text.primary,
-  borderRadius: 4,
-  width: 22,
-  height: 22,
+  borderRadius: 0,
+  width: 24,
+  height: 24,
   cursor: "pointer",
   padding: 0,
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
+  boxShadow: "2px 2px 0 rgba(0,0,0,0.65)",
 };
 
 function ResetGlyph() {

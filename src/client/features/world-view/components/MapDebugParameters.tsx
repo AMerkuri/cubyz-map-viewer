@@ -305,8 +305,8 @@ function RangeSlider({
         ["--slider-progress" as string]: `${clampedProgress}%`,
         ["--slider-fill" as string]: uiTheme.accent.text,
         ["--slider-track" as string]: "rgba(255,255,255,0.14)",
-        ["--slider-thumb" as string]: uiTheme.text.primary,
-        ["--slider-thumb-border" as string]: "rgba(126, 255, 175, 0.45)",
+        ["--slider-thumb" as string]: uiTheme.accent.surfaceActive,
+        ["--slider-thumb-border" as string]: uiTheme.accent.border,
       }}
     />
   );
@@ -508,14 +508,21 @@ function ToggleRow({
         gap: 10,
         width: "100%",
         padding: "7px 10px",
-        borderRadius: 6,
-        border: "1px solid rgba(255,255,255,0.1)",
-        background: "rgba(255,255,255,0.04)",
+        borderRadius: 0,
+        border: `2px solid ${active ? uiTheme.accent.border : uiTheme.panel.buttonBorderMuted}`,
+        background: active
+          ? "rgba(125, 242, 170, 0.12)"
+          : uiTheme.panel.buttonBackgroundMuted,
         color: uiTheme.text.secondary,
         cursor: "pointer",
+        boxShadow: "2px 2px 0 rgba(0,0,0,0.5)",
       }}
     >
-      <span style={{ fontSize: 12, fontWeight: 600 }}>{label}</span>
+      <span
+        style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase" }}
+      >
+        {label}
+      </span>
       <span
         style={{
           fontSize: 11,
@@ -549,7 +556,8 @@ const rangeSliderCss = `
 
   .map-debug-slider::-webkit-slider-runnable-track {
     height: 6px;
-    border-radius: 999px;
+    border-radius: 0;
+    border: 2px solid var(--slider-thumb-border);
     background: linear-gradient(
       90deg,
       var(--slider-fill) 0%,
@@ -560,37 +568,37 @@ const rangeSliderCss = `
   }
 
   .map-debug-slider::-webkit-slider-thumb {
-    width: 14px;
-    height: 14px;
-    margin-top: -4px;
-    border-radius: 999px;
-    border: 1px solid var(--slider-thumb-border);
+    width: 16px;
+    height: 16px;
+    margin-top: -6px;
+    border-radius: 0;
+    border: 2px solid var(--slider-thumb-border);
     background: var(--slider-thumb);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45);
     appearance: none;
     -webkit-appearance: none;
   }
 
   .map-debug-slider::-moz-range-track {
     height: 6px;
-    border: none;
-    border-radius: 999px;
+    border: 2px solid var(--slider-thumb-border);
+    border-radius: 0;
     background: var(--slider-track);
   }
 
   .map-debug-slider::-moz-range-progress {
     height: 6px;
-    border-radius: 999px;
+    border-radius: 0;
     background: var(--slider-fill);
   }
 
   .map-debug-slider::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    border-radius: 999px;
-    border: 1px solid var(--slider-thumb-border);
+    width: 16px;
+    height: 16px;
+    border-radius: 0;
+    border: 2px solid var(--slider-thumb-border);
     background: var(--slider-thumb);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45);
   }
 `;
 
@@ -603,8 +611,8 @@ const sectionTitleStyle: React.CSSProperties = {
 const helpButtonStyle: React.CSSProperties = {
   width: 18,
   height: 18,
-  borderRadius: 999,
-  border: `1px solid ${uiTheme.panel.buttonBorder}`,
+  borderRadius: 0,
+  border: `2px solid ${uiTheme.panel.buttonBorder}`,
   background: uiTheme.panel.buttonBackground,
   color: uiTheme.text.primary,
   fontSize: 11,
@@ -613,13 +621,14 @@ const helpButtonStyle: React.CSSProperties = {
   padding: 0,
   lineHeight: "16px",
   flexShrink: 0,
+  boxShadow: "2px 2px 0 rgba(0,0,0,0.5)",
 };
 
 const resetButtonStyle: React.CSSProperties = {
-  border: `1px solid ${uiTheme.panel.buttonBorder}`,
+  border: `2px solid ${uiTheme.panel.buttonBorder}`,
   background: uiTheme.panel.buttonBackground,
   color: uiTheme.text.primary,
-  borderRadius: 4,
+  borderRadius: 0,
   width: 24,
   height: 24,
   cursor: "pointer",
@@ -627,6 +636,7 @@ const resetButtonStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
+  boxShadow: "2px 2px 0 rgba(0,0,0,0.5)",
 };
 
 const tooltipStyle: React.CSSProperties = {
@@ -636,13 +646,13 @@ const tooltipStyle: React.CSSProperties = {
   transform: "translateY(-100%)",
   maxWidth: 260,
   background: uiTheme.panel.tooltipBackground,
-  border: `1px solid ${uiTheme.panel.tooltipBorder}`,
-  borderRadius: 6,
+  border: `2px solid ${uiTheme.panel.tooltipBorder}`,
+  borderRadius: 0,
   padding: "8px 10px",
   color: uiTheme.text.secondary,
   fontSize: 11,
   lineHeight: 1.45,
-  boxShadow: "0 8px 18px rgba(0,0,0,0.35)",
+  boxShadow: "4px 4px 0 rgba(0,0,0,0.55)",
   zIndex: 5,
 };
 

@@ -5,7 +5,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -89,8 +89,23 @@ async function findSavePath(): Promise<string> {
     throw new Error("No saves found in ~/.cubyz/saves/");
   }
 
-  // Return the first save found (could be improved to pick most recent)
-  const savePath = join(savesDir, saves[0]);
+  const saveEntries = await Promise.all(
+    saves.map(async (save) => {
+      const savePath = join(savesDir, save);
+      const saveStat = await stat(savePath);
+      return saveStat.isDirectory()
+        ? { savePath, mtimeMs: saveStat.mtimeMs }
+        : null;
+    }),
+  );
+  const directories = saveEntries.filter(
+    (entry): entry is { savePath: string; mtimeMs: number } => entry !== null,
+  );
+  directories.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const savePath = directories[0]?.savePath;
+  if (!savePath) {
+    throw new Error(`No readable saves found in ${savesDir}`);
+  }
   logger.info("Auto-detected save", { savePath });
   return savePath;
 }

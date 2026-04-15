@@ -32,16 +32,20 @@ function ToggleButton({ label, active, onToggle }: ToggleButtonProps) {
         display: "flex",
         alignItems: "center",
         gap: 6,
-        padding: "5px 0px",
-        border: "none",
+        padding: "6px 8px",
+        border: `2px solid ${active ? uiTheme.accent.border : uiTheme.panel.buttonBorderMuted}`,
         cursor: "pointer",
         fontSize: 12,
-        fontWeight: 500,
-        background: "transparent",
+        fontWeight: 700,
+        background: active
+          ? uiTheme.accent.surface
+          : uiTheme.panel.buttonBackgroundMuted,
         color: active ? uiTheme.text.onAccent : uiTheme.text.muted,
         textAlign: "left",
         width: "100%",
-        transition: "color 0.15s",
+        borderRadius: 0,
+        boxShadow: "2px 2px 0 rgba(0,0,0,0.55)",
+        textTransform: "uppercase",
       }}
     >
       <span
@@ -49,13 +53,12 @@ function ToggleButton({ label, active, onToggle }: ToggleButtonProps) {
           display: "inline-block",
           width: 10,
           height: 10,
-          borderRadius: 2,
+          borderRadius: 0,
           background: active
-            ? uiTheme.accent.surface
+            ? uiTheme.accent.surfaceActive
             : uiTheme.panel.buttonBackgroundMuted,
-          border: `1px solid ${active ? uiTheme.accent.border : uiTheme.panel.buttonBorderMuted}`,
+          border: `2px solid ${active ? uiTheme.accent.border : uiTheme.panel.buttonBorderMuted}`,
           flexShrink: 0,
-          transition: "background 0.15s, border-color 0.15s",
         }}
       />
       {label}
@@ -73,7 +76,7 @@ export function LayerControls({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <ToggleButton
         label="Biome Labels"
         active={visibility.biomeLabels}

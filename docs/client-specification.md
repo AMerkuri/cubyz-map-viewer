@@ -52,7 +52,8 @@ src/client/
 2. `App` loads world data, players, and the WebSocket connection.
 3. `World3DView` initializes once world data is available.
 4. Terrain and voxel resources load from camera position and the current mode.
-5. Player marker model/texture assets load only once the player layer is visible or player data is present.
+5. Player marker model/texture assets load lazily once the player layer is visible or player data is present.
+6. If the `snale` assets fail to load, the viewer retries once and falls back to a visible marker sprite so players remain on the map.
 
 ### Terrain Mode
 
@@ -77,13 +78,17 @@ src/client/
 
 1. `useWebSocket` connects to `/ws` and exposes the last server update time plus typed subscriptions.
 2. The server broadcasts `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`.
-3. `App` invalidates query-backed data and falls back to a 30-second refresh for players if no socket event arrives.
+3. `usePlayers` keeps player activity fresh with a 30-second refetch interval and also invalidates immediately on `players-updated` events.
 4. `World3DView` refreshes loaded scene data in place, and player updates rebuild the marker layer without recreating the full scene.
+5. Player markers use the `snale` entity model when the asset load succeeds, otherwise they render a fallback sprite marker with the player label.
+6. Spawn and player marker labels use bundled `unscii-8` / `unscii-16` fonts via client `@font-face` definitions.
 
 ## Shared UI
 
 - `OverlayPanel.tsx` provides draggable, collapsible, snapping overlay panels with shared styling.
 - Drag listeners are only attached while a panel is actively being moved.
+- The client UI defaults to the bundled `unscii-16` font, while spawn/player marker labels keep their own bundled `unscii-8`-first stack for compact map readability.
+- Shared panels and controls use a retro HUD treatment: square corners, stronger borders, dark brown glass surfaces with light blur, offset shadows, and square slider/thumb controls.
 
 ## Design Principles
 

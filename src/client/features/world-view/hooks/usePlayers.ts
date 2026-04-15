@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect } from "react";
 
 import type { WatchEvent, WatchEventType } from "./useWebSocket.js";
 
@@ -29,36 +29,18 @@ export function usePlayers(
   ) => () => void,
 ) {
   const queryClient = useQueryClient();
-  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const query = useQuery({
     queryKey: ["players"],
     queryFn: fetchPlayers,
     staleTime: PLAYERS_STALE_AFTER_MS,
+    refetchInterval: PLAYERS_STALE_AFTER_MS,
+    refetchIntervalInBackground: true,
   });
-
-  const scheduleSilenceRefresh = useEffectEvent(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-    }
-    silenceTimerRef.current = setTimeout(() => {
-      void queryClient.invalidateQueries({ queryKey: ["players"] });
-    }, PLAYERS_STALE_AFTER_MS);
-  });
-
-  useEffect(() => {
-    scheduleSilenceRefresh();
-    return () => {
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     if (!subscribe) return;
     return subscribe("players-updated", () => {
-      scheduleSilenceRefresh();
       void queryClient.invalidateQueries({ queryKey: ["players"] });
     });
   }, [subscribe, queryClient]);

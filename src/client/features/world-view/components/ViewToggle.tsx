@@ -11,9 +11,11 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
       style={{
         display: "flex",
         gap: 0,
-        borderRadius: 6,
+        borderRadius: 0,
         overflow: "hidden",
-        boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+        border: `2px solid ${uiTheme.panel.buttonBorder}`,
+        boxShadow: "3px 3px 0 rgba(0,0,0,0.55)",
+        backdropFilter: "blur(5px)",
       }}
     >
       <button
@@ -24,15 +26,15 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
           border: "none",
           cursor: "pointer",
           fontSize: 13,
-          fontWeight: 600,
-          backdropFilter: "blur(2px)",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
           background:
             view === "terrain"
               ? uiTheme.accent.surfaceActive
-              : uiTheme.panel.buttonBackgroundMuted,
+              : uiTheme.panel.buttonBackground,
           color:
             view === "terrain" ? uiTheme.text.onAccent : uiTheme.text.muted,
-          transition: "all 0.2s",
         }}
       >
         Terrain
@@ -43,16 +45,17 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
         style={{
           padding: "8px 16px",
           border: "none",
+          borderLeft: `2px solid ${uiTheme.panel.buttonBorder}`,
           cursor: "pointer",
           fontSize: 13,
-          fontWeight: 600,
-          backdropFilter: "blur(2px)",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
           background:
             view === "voxel"
               ? uiTheme.accent.surfaceActive
-              : uiTheme.panel.buttonBackgroundMuted,
+              : uiTheme.panel.buttonBackground,
           color: view === "voxel" ? uiTheme.text.onAccent : uiTheme.text.muted,
-          transition: "all 0.2s",
         }}
       >
         Voxels

@@ -49,64 +49,168 @@ export function createTextSprite(text: string, color: string): THREE.Sprite {
   return sprite;
 }
 
+export function createFallbackPlayerMarker(
+  grayscale = false,
+  sizePx = 17,
+): CSS2DObject {
+  return createMarkerDot(grayscale ? "#5f6672d0" : "#3b82f6bc", sizePx);
+}
+
 export function createMarkerDot(color: string, sizePx: number): CSS2DObject {
   const div = document.createElement("div");
   div.style.cssText = [
     `width: ${sizePx}px`,
     `height: ${sizePx}px`,
-    "transform: translate(-50%, -50%)",
-    "border-radius: 999px",
+    "border-radius: 5px",
     `background: ${color}`,
-    "border: 1px solid rgba(255,255,255,0.75)",
+    "border: 2px solid rgba(255,255,255,0.78)",
     "box-shadow: 0 0 8px rgba(0,0,0,0.55)",
     "pointer-events: none",
   ].join(";");
-  return new CSS2DObject(div);
+  const marker = new CSS2DObject(div);
+  marker.center.set(0.5, 0.5);
+  return marker;
 }
 
-export function createMarkerLabel(text: string, color: string): CSS2DObject {
+export function createMarkerLabel(
+  text: string,
+  color: string,
+  pixelOffset = 4,
+): CSS2DObject {
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = [
+    "width: 0",
+    "height: 0",
+    "pointer-events: none",
+  ].join(";");
+
   const div = document.createElement("div");
   div.textContent = text;
   div.style.cssText = [
+    "display: inline-block",
     `color: ${color}`,
     "font-size: 20px",
+    "font-family: 'Unscii', 'Courier New', monospace",
     "font-weight: 700",
-    "transform: translate(-50%, calc(-100% - 10px))",
     "text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.55)",
-    "pointer-events: none",
     "white-space: nowrap",
+    `transform: translate(-50%, calc(-100% - ${pixelOffset}px))`,
   ].join(";");
-  return new CSS2DObject(div);
+  wrapper.appendChild(div);
+
+  const label = new CSS2DObject(wrapper);
+  label.center.set(0.5, 1);
+  return label;
 }
 
-export function createFormattedPlayerLabel(name: string): CSS2DObject {
-  const div = document.createElement("div");
-  const segments = parseFormattedPlayerName(name);
-
-  div.style.cssText = [
-    "transform: translate(-50%, calc(-100% - 10px))",
-    "font-size: 20px",
-    "font-weight: 700",
-    "text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.55)",
+export function createFormattedPlayerLabel(
+  name: string,
+  grayscale = false,
+  pixelOffset = 4,
+): CSS2DObject {
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = [
+    "width: 0",
+    "height: 0",
     "pointer-events: none",
-    "white-space: nowrap",
   ].join(";");
 
+  const div = document.createElement("div");
+  div.style.cssText = [
+    "display: inline-block",
+    "font-size: 20px",
+    "font-family: 'Unscii', 'Courier New', monospace",
+    "font-weight: 700",
+    "text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.55)",
+    "white-space: nowrap",
+    grayscale ? "filter: grayscale(1)" : "",
+    `transform: translate(-50%, calc(-100% - ${pixelOffset}px))`,
+  ].join(";");
+
+  const segments = parseFormattedPlayerName(name);
+
   for (const segment of segments) {
-    appendPlayerLabelSegment(div, segment);
+    appendPlayerLabelSegment(div, segment, grayscale);
   }
 
-  return new CSS2DObject(div);
+  wrapper.appendChild(div);
+
+  const label = new CSS2DObject(wrapper);
+  label.center.set(0.5, 1);
+  return label;
 }
 
 function appendPlayerLabelSegment(
   parent: HTMLDivElement,
   segment: FormattedPlayerNameSegment,
+  grayscale: boolean,
 ) {
   const span = document.createElement("span");
   span.textContent = segment.text;
-  span.style.color = segment.color ?? "#e6e8ed";
+  span.style.color = grayscale ? "#7a808a" : (segment.color ?? "#e6e8ed");
   parent.appendChild(span);
+}
+
+export function createGrayscaleTexture(texture: THREE.Texture): THREE.Texture {
+  const sourceImage = texture.image as
+    | HTMLImageElement
+    | HTMLCanvasElement
+    | ImageBitmap
+    | OffscreenCanvas
+    | undefined;
+  if (!sourceImage) {
+    const clonedTexture = texture.clone();
+    clonedTexture.needsUpdate = true;
+    return clonedTexture;
+  }
+
+  const width =
+    sourceImage instanceof HTMLImageElement
+      ? sourceImage.naturalWidth
+      : sourceImage.width;
+  const height =
+    sourceImage instanceof HTMLImageElement
+      ? sourceImage.naturalHeight
+      : sourceImage.height;
+
+  if (width <= 0 || height <= 0) {
+    const clonedTexture = texture.clone();
+    clonedTexture.needsUpdate = true;
+    return clonedTexture;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    const clonedTexture = texture.clone();
+    clonedTexture.needsUpdate = true;
+    return clonedTexture;
+  }
+
+  ctx.drawImage(sourceImage, 0, 0, width, height);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = Math.round(
+      data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114,
+    );
+    data[i] = gray;
+    data[i + 1] = gray;
+    data[i + 2] = gray;
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  const grayscaleTexture = new THREE.CanvasTexture(canvas);
+  grayscaleTexture.colorSpace = texture.colorSpace;
+  grayscaleTexture.magFilter = texture.magFilter;
+  grayscaleTexture.minFilter = texture.minFilter;
+  grayscaleTexture.wrapS = texture.wrapS;
+  grayscaleTexture.wrapT = texture.wrapT;
+  grayscaleTexture.generateMipmaps = texture.generateMipmaps;
+  grayscaleTexture.needsUpdate = true;
+  return grayscaleTexture;
 }
 
 export function createPlayerMarkerModel(
@@ -122,6 +226,9 @@ export function createPlayerMarkerModel(
       transparent: true,
       alphaTest: 0.1,
       side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false,
+      color: 0xffffff,
     });
     child.castShadow = false;
     child.receiveShadow = false;
@@ -129,8 +236,25 @@ export function createPlayerMarkerModel(
     child.userData.playerMarker = true;
   });
 
-  model.scale.setScalar(4.5);
+  model.scale.setScalar(1.75);
   return model;
+}
+
+export function disposePlayerMarkerTemplate(template: THREE.Object3D) {
+  template.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const material = child.material;
+    if (Array.isArray(material)) {
+      for (const mat of material) {
+        mat.map?.dispose();
+        mat.dispose();
+      }
+    } else {
+      material.map?.dispose();
+      material.dispose();
+    }
+    child.geometry.dispose();
+  });
 }
 
 export function disposePlayerMarkerModel(model: THREE.Object3D) {
