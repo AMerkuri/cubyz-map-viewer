@@ -122,3 +122,7 @@ The practical workaround is to enable the terrain underlay.
 
 This project uses Cubyz assets and world data formats. Cubyz is licensed under GPLv3; see `LICENSE` for the
 viewer's license text.
+
+## Disclaimer
+
+This project was developed with the assistance of LLMs (GPT-5.3-Codex, GPT-5.4). This code is provided "as-is"; use at your own risk.
