@@ -81,6 +81,7 @@ src/client/
 6. The main thread uploads the data to Three.js geometries within a frame budget and applies final seam-aware AO after voxel LOD visibility and parent-child fallback coverage are resolved. Top-face AO runs on `L1` and `L2`, while side faces currently rely on the baked face tint and depth cue only. The Parameters panel exposes a runtime AO intensity control for tuning the top-face effect.
 7. The 3D runtime also publishes a lightweight loading breakdown every frame, and `App` uses it to drive the spinner even when debug stats are hidden.
 8. Cursor hover prefers voxel meshes and falls back to the terrain underlay when enabled, converting the underlay hit back to the terrain's real world height.
+9. Transient hover suppression from held keys or pointer drags is reset when the browser window loses focus so OS-level app switching cannot leave the coordinate HUD stuck hidden after returning.
 
 ## Live Updates
 

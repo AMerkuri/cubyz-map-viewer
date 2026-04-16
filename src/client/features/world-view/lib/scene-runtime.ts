@@ -481,9 +481,19 @@ export function initializeSceneRuntime(args: {
     cursorHandlers.scheduleCursorTooltipRefresh();
   }
 
+  function resetTransientInputState() {
+    keysHeldRef.current.clear();
+    isPointerInteracting = false;
+    cursorHandlers.clearCursorRefreshTimer();
+    onCursorMoveRef.current(null);
+  }
+
   function onPointerEnter() {
     isPointerOverCanvas = true;
     markActive();
+    if (!isPointerInteracting && keysHeldRef.current.size === 0) {
+      cursorHandlers.scheduleCursorTooltipRefresh();
+    }
   }
 
   function onPointerDown() {
@@ -510,9 +520,28 @@ export function initializeSceneRuntime(args: {
     cursorHandlers.onPointerLeave();
   }
 
+  function onWindowBlur() {
+    markActive();
+    resetTransientInputState();
+  }
+
+  function onVisibilityChange() {
+    if (!document.hidden) {
+      markActive();
+      if (isPointerOverCanvas) {
+        cursorHandlers.scheduleCursorTooltipRefresh();
+      }
+      return;
+    }
+
+    onWindowBlur();
+  }
+
   window.addEventListener("resize", onResize);
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", onWindowBlur);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   controls.addEventListener("change", onControlsChange);
   renderer.domElement.addEventListener("pointerenter", onPointerEnter);
   renderer.domElement.addEventListener(
@@ -532,6 +561,8 @@ export function initializeSceneRuntime(args: {
     window.removeEventListener("resize", onResize);
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
+    window.removeEventListener("blur", onWindowBlur);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     controls.removeEventListener("change", onControlsChange);
     renderer.domElement.removeEventListener("pointerenter", onPointerEnter);
     renderer.domElement.removeEventListener(
