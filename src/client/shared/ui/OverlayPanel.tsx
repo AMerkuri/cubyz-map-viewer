@@ -1,4 +1,10 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { uiTheme } from "./theme.js";
 
 interface OverlayPanelProps {
@@ -36,6 +42,11 @@ interface PanelBounds {
 const VIEWPORT_EDGE_PADDING_PX = 12;
 const SNAP_DISTANCE_PX = 24;
 const RESET_GLYPH_SIZE = 12;
+const PANEL_LAYER_MAX_Z_INDEX = 999;
+
+let nextPanelStackId = 0;
+const panelStackOrder: number[] = [];
+const panelStackListeners = new Set<() => void>();
 
 export function OverlayPanel({
   title,
@@ -60,6 +71,7 @@ export function OverlayPanel({
   );
   const [dragging, setDragging] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const panelStackIdRef = useRef(nextPanelStackId++);
   const dragStateRef = useRef<{
     pointerId: number;
     startPointerX: number;
@@ -67,6 +79,23 @@ export function OverlayPanel({
     startLeft: number;
     startTop: number;
   } | null>(null);
+  const panelStackSnapshot = useSyncExternalStore(
+    subscribeToPanelStack,
+    () => getPanelStackSnapshot(panelStackIdRef.current),
+    () => "-1:0",
+  );
+  const [panelStackIndex, panelStackCount] = panelStackSnapshot
+    .split(":")
+    .map(Number);
+
+  useEffect(() => {
+    if (!absolute) return;
+
+    registerPanel(panelStackIdRef.current);
+    return () => {
+      unregisterPanel(panelStackIdRef.current);
+    };
+  }, [absolute]);
 
   useEffect(() => {
     if (!absolute) return;
@@ -147,6 +176,9 @@ export function OverlayPanel({
   }, [absolute, defaultPosition, dragging, position]);
 
   const moved = panelPosition !== null;
+  const effectiveZIndex = absolute
+    ? getStackedPanelZIndex(zIndex, panelStackIndex, panelStackCount)
+    : zIndex;
   const panelContainerStyle: React.CSSProperties = {
     position: absolute ? "absolute" : "relative",
     ...(absolute
@@ -154,7 +186,7 @@ export function OverlayPanel({
         ? { left: panelPosition.left, top: panelPosition.top }
         : { ...(position ?? {}) }
       : {}),
-    zIndex,
+    zIndex: effectiveZIndex,
     background: uiTheme.panel.background,
     border: `2px solid ${uiTheme.panel.border}`,
     borderRadius: 0,
@@ -167,7 +199,15 @@ export function OverlayPanel({
   };
 
   return (
-    <div ref={panelRef} style={panelContainerStyle}>
+    <div
+      ref={panelRef}
+      onPointerDownCapture={() => {
+        if (!absolute) return;
+
+        bringPanelToFront(panelStackIdRef.current);
+      }}
+      style={panelContainerStyle}
+    >
       <div
         onPointerDown={(event) => {
           if (!absolute) return;
@@ -285,6 +325,67 @@ function clampPositionToViewport(
   }
 
   return clampPositionToBounds(nextPosition, bounds);
+}
+
+function subscribeToPanelStack(listener: () => void) {
+  panelStackListeners.add(listener);
+  return () => {
+    panelStackListeners.delete(listener);
+  };
+}
+
+function getPanelStackSnapshot(id: number): string {
+  return `${panelStackOrder.indexOf(id)}:${panelStackOrder.length}`;
+}
+
+function registerPanel(id: number) {
+  if (panelStackOrder.includes(id)) return;
+
+  panelStackOrder.push(id);
+  notifyPanelStackListeners();
+}
+
+function unregisterPanel(id: number) {
+  const panelIndex = panelStackOrder.indexOf(id);
+  if (panelIndex === -1) return;
+
+  panelStackOrder.splice(panelIndex, 1);
+  notifyPanelStackListeners();
+}
+
+function bringPanelToFront(id: number) {
+  const panelIndex = panelStackOrder.indexOf(id);
+  if (panelIndex === -1 || panelIndex === panelStackOrder.length - 1) return;
+
+  panelStackOrder.splice(panelIndex, 1);
+  panelStackOrder.push(id);
+  notifyPanelStackListeners();
+}
+
+function notifyPanelStackListeners() {
+  for (const listener of panelStackListeners) {
+    listener();
+  }
+}
+
+function getStackedPanelZIndex(
+  requestedZIndex: number,
+  panelStackIndex: number,
+  panelStackCount: number,
+): number {
+  const panelLayerCeiling = Math.max(
+    1,
+    Math.min(requestedZIndex, PANEL_LAYER_MAX_Z_INDEX),
+  );
+
+  if (panelStackIndex < 0 || panelStackCount <= 1) {
+    return panelLayerCeiling;
+  }
+
+  return Math.min(
+    panelLayerCeiling,
+    Math.max(1, panelLayerCeiling - panelStackCount + panelStackIndex + 1),
+  );
 }
 
 function getDefaultPanelPosition(
