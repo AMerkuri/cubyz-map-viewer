@@ -86,6 +86,9 @@ The root `.env.example` mirrors the server config list.
 - `VOXEL_MEMORY_CACHE_SIZE`: in-memory voxel mesh cache size (`1024` recommended for hosting)
 - `VOXEL_FULL_CLEAR_THROTTLE_MS`: minimum gap in ms between broad voxel cache clears (`1000`)
 - `TERRAIN_UPDATE_BATCH_MS`: save watcher batch window in ms for terrain updates (`15000`)
+- `PLAYER_UPDATE_BATCH_MS`: quiet-period batch window in ms before the server rechecks players and considers broadcasting `players-updated` (`1000`)
+- `PLAYER_ACTIVE_WINDOW_MS`: player freshness window in ms used to compute the `isActive` response field for client styling (`60000`)
+- `PLAYER_RETENTION_MS`: maximum player age in ms before `/api/players` omits that player entirely (`300000`)
 - `CORS_ALLOWED_ORIGINS`: comma-separated browser origin allowlist
 - `SAVE_PATH`: Cubyz save directory; defaults to `/data/save` in the published container image and auto-detects the newest directory under `~/.cubyz/saves/` when unset
 - `CUBYZ_PATH`: Cubyz project root or asset source; defaults to `/data/cubyz` in the published container image and auto-detects the repository parent that contains `assets/cubyz` when unset
@@ -111,7 +114,7 @@ The server rotates file logs at 20 MiB, keeps 14 archives per transport, and gzi
 1. The client requests `/api/players` for current player positions, rotation, and health.
 2. The client requests `/api/assets/entities/models/:name` and `/api/assets/entities/textures/:name` for entity assets.
 3. The viewer combines the payloads client-side to render clickable player representations.
-4. `/api/players` returns all parsed player files and includes `isActive` as metadata so the client can distinguish recent saves from older ones.
+4. `/api/players` returns players whose save files still fall within `PLAYER_RETENTION_MS`, and each entry includes `isActive` computed from the shorter `PLAYER_ACTIVE_WINDOW_MS` so the client can gray out stale markers without recomputing freshness locally.
 
 ### Terrain Mesh Data
 
@@ -167,14 +170,17 @@ It emits:
 
 `terrain-updates-batch` groups tile and region changes over a configurable window so the client is not flooded with per-file events.
 
+`players-updated` now acts as a delayed invalidation signal. The watcher still notices `players/` file churn immediately, but the server waits for `PLAYER_UPDATE_BATCH_MS`, reloads players once, compares a semantic snapshot that excludes timestamp-only noise, and only broadcasts when player-visible state changed.
+
 `findSavePath()` auto-detects the newest save directory under `~/.cubyz/saves/` by modification time when `SAVE_PATH` is not set.
 
 ### Broadcast and Invalidation
 
 1. Voxel mesh cache entries are invalidated for changed voxel regions.
 2. Broad terrain changes can trigger a throttled full voxel cache clear.
-3. Terrain tile change notifications remain tile-scoped on the wire, while the client expands them to the same-LOD 3x3 neighborhood because each seam-safe terrain response depends on adjacent surface files.
-4. The event is broadcast to all connected WebSocket clients.
+3. Player update broadcasts are suppressed when the reloaded player snapshot differs only by `lastSeen` or other timestamp-derived noise.
+4. Terrain tile change notifications remain tile-scoped on the wire, while the client expands them to the same-LOD 3x3 neighborhood because each seam-safe terrain response depends on adjacent surface files.
+5. The event is broadcast to all connected WebSocket clients.
 
 ## Request Context and Errors
 

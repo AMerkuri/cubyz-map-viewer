@@ -23,6 +23,12 @@ import { createVoxelsRouter } from "./api/voxels.js";
 import { createWorldRouter } from "./api/world.js";
 import { loadAllBiomes } from "./parsers/biome.js";
 import { loadPalette } from "./parsers/palette.js";
+import {
+  DEFAULT_PLAYER_ACTIVE_WINDOW_MS,
+  DEFAULT_PLAYER_RETENTION_MS,
+  loadAllPlayers,
+  type PlayerData,
+} from "./parsers/player.js";
 import { parseWorldMeta } from "./parsers/world-meta.js";
 import { buildBlockColorTable } from "./services/block-color-table.js";
 import { buildChunkIndex } from "./services/chunk-index.js";
@@ -47,6 +53,18 @@ const TERRAIN_UPDATE_BATCH_MS = parseInt(
   process.env.TERRAIN_UPDATE_BATCH_MS ?? "15000",
   10,
 );
+const PLAYER_UPDATE_BATCH_MS = parseInt(
+  process.env.PLAYER_UPDATE_BATCH_MS ?? "1000",
+  10,
+);
+const PLAYER_ACTIVE_WINDOW_MS = parseInt(
+  process.env.PLAYER_ACTIVE_WINDOW_MS ?? `${DEFAULT_PLAYER_ACTIVE_WINDOW_MS}`,
+  10,
+);
+const PLAYER_RETENTION_MS = parseInt(
+  process.env.PLAYER_RETENTION_MS ?? `${DEFAULT_PLAYER_RETENTION_MS}`,
+  10,
+);
 const VOXEL_PREGENERATE_ON_STARTUP = parseBooleanEnv(
   process.env.VOXEL_PREGENERATE_ON_STARTUP,
 );
@@ -54,6 +72,29 @@ const VOXEL_PREGENERATE_ON_STARTUP = parseBooleanEnv(
 interface TerrainUpdatesBatchData {
   tiles: { lod: number; tileX: number; tileY: number }[];
   regions: { lod: number; regionX: number; regionY: number }[];
+}
+
+type PlayerSemanticSnapshot = Array<{
+  name: string;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  health: number;
+  energy: number;
+  spawnPos: [number, number, number];
+  isActive: boolean;
+}>;
+
+function createPlayerSemanticSignature(players: PlayerData[]): string {
+  const snapshot: PlayerSemanticSnapshot = players.map((player) => ({
+    name: player.name,
+    position: player.position,
+    rotation: player.rotation,
+    health: player.health,
+    energy: player.energy,
+    spawnPos: player.spawnPos,
+    isActive: player.isActive,
+  }));
+  return JSON.stringify(snapshot);
 }
 
 const allowedOrigins = new Set(
@@ -459,8 +500,61 @@ async function main() {
     terrainUpdateBatchMs: TERRAIN_UPDATE_BATCH_MS,
   });
   let voxelFullClearCooldownUntil = 0;
+  let playerUpdateTimer: NodeJS.Timeout | null = null;
+  let playerFlushInFlight: Promise<void> | null = null;
+  let playerUpdateQueued = false;
+  let lastPlayersSignature: string | null = null;
+
+  const flushPlayerUpdates = async (): Promise<void> => {
+    const players = await loadAllPlayers(join(savePath, "players"), {
+      activeWindowMs: PLAYER_ACTIVE_WINDOW_MS,
+      retentionMs: PLAYER_RETENTION_MS,
+    });
+    const nextSignature = createPlayerSemanticSignature(players);
+    if (nextSignature === lastPlayersSignature) {
+      return;
+    }
+    lastPlayersSignature = nextSignature;
+    broadcast({ type: "players-updated" });
+  };
+
+  const runPlayerUpdateFlush = (): void => {
+    if (playerFlushInFlight) {
+      playerUpdateQueued = true;
+      return;
+    }
+
+    playerFlushInFlight = flushPlayerUpdates()
+      .catch((error) => {
+        logger.error("Failed to flush player updates", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        playerFlushInFlight = null;
+        if (playerUpdateQueued) {
+          playerUpdateQueued = false;
+          runPlayerUpdateFlush();
+        }
+      });
+  };
+
+  const schedulePlayerUpdateFlush = (): void => {
+    if (playerUpdateTimer) {
+      clearTimeout(playerUpdateTimer);
+    }
+    playerUpdateTimer = setTimeout(() => {
+      playerUpdateTimer = null;
+      runPlayerUpdateFlush();
+    }, PLAYER_UPDATE_BATCH_MS);
+  };
 
   watcher.on("watch-event", (event: WatchEvent) => {
+    if (event.type === "players-updated") {
+      schedulePlayerUpdateFlush();
+      return;
+    }
+
     if (event.type === "terrain-updates-batch" && event.data) {
       const { tiles, regions } = event.data as TerrainUpdatesBatchData;
 
@@ -478,7 +572,6 @@ async function main() {
         );
       }
     }
-    // Broadcast to all connected WebSocket clients
     broadcast(event);
   });
 
@@ -491,6 +584,12 @@ async function main() {
     shuttingDown = true;
     logger.info("Shutting down", { signal });
     watcher.stop();
+    if (playerUpdateTimer) {
+      clearTimeout(playerUpdateTimer);
+      playerUpdateTimer = null;
+    }
+    playerUpdateQueued = false;
+    await playerFlushInFlight;
     await new Promise<void>((resolveClose) => {
       wss.close(() => resolveClose());
       for (const client of wsClients) {

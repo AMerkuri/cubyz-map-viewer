@@ -57,7 +57,7 @@ src/client/
 2. `App` loads world data, players, and the WebSocket connection.
 3. `World3DView` initializes once world data is available.
 4. Terrain and voxel resources load from camera position and the current mode.
-5. Player marker model/texture assets load lazily once the player layer is visible or player data is present.
+5. Player marker model/texture assets load lazily once the player layer is visible or player data is present, and marker styling reads the server-provided `isActive` flag instead of recomputing stale state client-side.
 6. If the `snale` assets fail to load, the viewer retries once and falls back to a visible marker sprite so players stay visible on the map.
 
 ### Terrain Mode
@@ -87,11 +87,12 @@ src/client/
 
 1. `useWebSocket` connects to `/ws` and exposes the last server update time plus typed subscriptions.
 2. The server broadcasts `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`.
-3. `usePlayers` keeps player activity fresh with a 30-second refetch interval and also invalidates immediately on `players-updated` events.
+3. `usePlayers` keeps player activity fresh with a 30-second refetch interval and also reacts to `players-updated` events, but both sides now coalesce that work: the server batches player file churn behind a short quiet window and suppresses broadcasts when the semantic player state did not change, while the client debounces repeated player events and defers socket-driven player refreshes until the tab is visible again.
 4. Terrain tile refreshes invalidate the changed tile plus its same-LOD neighbors because seam-safe terrain payloads depend on a 3x3 tile neighborhood. `surface-index-changed` takes the simpler clear-and-rebuild path for visible terrain so add/remove changes cannot leave stale neighbor-dependent meshes alive.
 5. `World3DView` refreshes loaded scene data in place, and player updates reconcile marker objects in place so frequent `players-updated` events do not remount all nameplates.
 6. Player markers use the `snale` entity model when the asset load succeeds, otherwise they render a fallback sprite marker with the player label.
-7. Spawn and player marker labels use bundled `unscii-8` / `unscii-16` fonts via client `@font-face` definitions.
+7. Player model, marker, and name grayscale all derive from the server-owned `isActive` flag; the longer retention window controls when old players disappear from `/api/players` entirely.
+8. Spawn and player marker labels use bundled `unscii-8` / `unscii-16` fonts via client `@font-face` definitions.
 
 ## Shared UI
 

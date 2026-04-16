@@ -458,7 +458,7 @@ const headerButtonStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   boxShadow: "2px 2px 0 rgba(0,0,0,0.65)",
-  fontSize: 14
+  fontSize: 14,
 };
 
 function ResetGlyph() {

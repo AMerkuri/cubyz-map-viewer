@@ -1030,9 +1030,9 @@ export function World3DView({
           ? (player) =>
               createPlayerMarkerModel(
                 playerMarkerModelTemplate,
-                Date.now() - player.lastSeen > 60_000
-                  ? playerMarkerGrayscaleTexture
-                  : playerMarkerTexture,
+                player.isActive
+                  ? playerMarkerTexture
+                  : playerMarkerGrayscaleTexture,
               )
           : () => null,
       createFormattedPlayerLabel,

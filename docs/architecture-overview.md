@@ -62,6 +62,8 @@ At a high level:
 
 - save watching batches filesystem churn into grouped update events
 - the main event names are `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`
+- `players-updated` is a server-side invalidation hint only: the server waits for a short quiet window, reloads `/api/players`, compares a semantic player snapshot, and only broadcasts when the player view state actually changed
+- `/api/players` includes `isActive` as the server-owned player activity flag for client styling, while stale player removal uses a longer retention window
 - if event names, payload shapes, or update semantics change, update the server, client, and docs together
 
 ## Documentation Map

@@ -6,8 +6,14 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseZon, type ZonValue } from "./zon.js";
 
-/** Players whose save file was modified within this many milliseconds are considered active. */
-const ACTIVE_PLAYER_TIMEOUT_MS = 60 * 5 * 1000; // 5 minutes
+export const DEFAULT_PLAYER_ACTIVE_WINDOW_MS = 60 * 1000;
+export const DEFAULT_PLAYER_RETENTION_MS = 60 * 5 * 1000;
+
+export interface PlayerLoadOptions {
+  activeWindowMs?: number;
+  retentionMs?: number;
+  now?: number;
+}
 
 export interface PlayerData {
   name: string;
@@ -18,11 +24,14 @@ export interface PlayerData {
   spawnPos: [number, number, number];
   /** Unix timestamp (ms) of the last save file modification */
   lastSeen: number;
-  /** True when the file was modified within ACTIVE_PLAYER_TIMEOUT_MS */
+  /** True when the file was modified within the configured active window. */
   isActive: boolean;
 }
 
-export async function parsePlayerFile(filePath: string): Promise<PlayerData> {
+export async function parsePlayerFile(
+  filePath: string,
+  options: PlayerLoadOptions = {},
+): Promise<PlayerData> {
   const [text, fileStat] = await Promise.all([
     readFile(filePath, "utf-8"),
     stat(filePath),
@@ -35,7 +44,10 @@ export async function parsePlayerFile(filePath: string): Promise<PlayerData> {
   const spawnPos = (parsed.playerSpawnPos ?? [0, 0, 0]) as number[];
 
   const lastSeen = fileStat.mtimeMs;
-  const isActive = Date.now() - lastSeen <= ACTIVE_PLAYER_TIMEOUT_MS;
+  const now = options.now ?? Date.now();
+  const activeWindowMs =
+    options.activeWindowMs ?? DEFAULT_PLAYER_ACTIVE_WINDOW_MS;
+  const isActive = now - lastSeen <= activeWindowMs;
 
   return {
     name: String(parsed.name ?? "Unknown"),
@@ -51,8 +63,11 @@ export async function parsePlayerFile(filePath: string): Promise<PlayerData> {
 
 export async function loadAllPlayers(
   playersDir: string,
+  options: PlayerLoadOptions = {},
 ): Promise<PlayerData[]> {
   try {
+    const now = options.now ?? Date.now();
+    const retentionMs = options.retentionMs ?? DEFAULT_PLAYER_RETENTION_MS;
     const files = await readdir(playersDir);
     const zonFiles = files
       .filter((f) => f.endsWith(".zon"))
@@ -65,8 +80,11 @@ export async function loadAllPlayers(
     const players: PlayerData[] = [];
     for (const file of zonFiles) {
       try {
-        const player = await parsePlayerFile(join(playersDir, file));
-        if (player.isActive) {
+        const player = await parsePlayerFile(join(playersDir, file), {
+          ...options,
+          now,
+        });
+        if (now - player.lastSeen <= retentionMs) {
           players.push(player);
         }
       } catch (e) {

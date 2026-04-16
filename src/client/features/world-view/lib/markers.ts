@@ -5,7 +5,6 @@ import type { PlayerData } from "../hooks/usePlayers.js";
 import { createFallbackPlayerMarker } from "./primitives.js";
 import { worldToScene } from "./utils.js";
 
-const PLAYER_ACTIVE_WINDOW_MS = 60_000;
 const PLAYER_LABEL_HEADROOM = 3.5;
 const DOT_LABEL_PIXEL_OFFSET = 40;
 
@@ -96,7 +95,7 @@ function createPlayerMarkerVisuals(args: {
   ) => CSS2DObject;
 }) {
   const { player, createPlayerMarkerModel, createFormattedPlayerLabel } = args;
-  const grayscale = Date.now() - player.lastSeen > PLAYER_ACTIVE_WINDOW_MS;
+  const grayscale = !player.isActive;
   const marker =
     createPlayerMarkerModel(player) ?? createFallbackPlayerMarker(grayscale);
   const usesModel = !(marker instanceof CSS2DObject);
@@ -373,7 +372,7 @@ export function syncPlayerMarkers(args: {
       continue;
     }
 
-    const grayscale = Date.now() - player.lastSeen > PLAYER_ACTIVE_WINDOW_MS;
+    const grayscale = !player.isActive;
     const shouldUseModel = hasPlayerMarkerModel;
     if (state.grayscale !== grayscale || state.usesModel !== shouldUseModel) {
       disposeMarkerObject({
