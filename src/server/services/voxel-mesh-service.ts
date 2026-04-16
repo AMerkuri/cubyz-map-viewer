@@ -89,6 +89,7 @@ export interface VoxelRequestMetrics {
 
 export interface VoxelServiceMetricsSnapshot {
   workers: number;
+  workerRuntimeMode: "source" | "dist";
   queueDepth: number;
   runningJobs: number;
   inFlightJobs: number;
@@ -157,6 +158,7 @@ export class VoxelMeshService {
   getMetricsSnapshot(): VoxelServiceMetricsSnapshot {
     return {
       workers: this.pool.getWorkerCount(),
+      workerRuntimeMode: this.pool.getRuntimeMode(),
       queueDepth: this.pool.getQueueDepth(),
       runningJobs: this.pool.getRunningCount(),
       inFlightJobs: this.inFlight.size,

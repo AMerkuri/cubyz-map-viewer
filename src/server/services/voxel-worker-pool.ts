@@ -1,5 +1,4 @@
 import { availableParallelism } from "node:os";
-import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type {
@@ -29,6 +28,8 @@ interface WorkerSlot {
   currentJobId: number | null;
   currentJobStartedAt: number;
 }
+
+export type VoxelWorkerRuntimeMode = "source" | "dist";
 
 export class VoxelWorkerPool {
   private readonly workerData: VoxelWorkerData;
@@ -78,6 +79,10 @@ export class VoxelWorkerPool {
     return this.runningJobs.size;
   }
 
+  getRuntimeMode(): VoxelWorkerRuntimeMode {
+    return this.isSourceRuntime() ? "source" : "dist";
+  }
+
   private dispatch(): void {
     for (const slot of this.workers) {
       if (slot.busy) continue;
@@ -93,15 +98,7 @@ export class VoxelWorkerPool {
   }
 
   private createWorkerSlot(): WorkerSlot {
-    const currentPath = fileURLToPath(import.meta.url);
-    const workerUrl = fileURLToPath(import.meta.url).endsWith(".ts")
-      ? new URL(
-          `file://${resolve(dirname(currentPath), "../../../dist/server/workers/voxel-worker.js")}`,
-        )
-      : new URL("../workers/voxel-worker.js", import.meta.url);
-    const worker = new Worker(workerUrl, {
-      workerData: this.workerData,
-    });
+    const worker = this.createWorker();
     const slot: WorkerSlot = {
       worker,
       busy: false,
@@ -156,5 +153,28 @@ export class VoxelWorkerPool {
     });
 
     return slot;
+  }
+
+  private createWorker(): Worker {
+    const isSourceRuntime = this.isSourceRuntime();
+    if (!isSourceRuntime) {
+      return new Worker(
+        new URL("../workers/voxel-worker.js", import.meta.url),
+        {
+          workerData: this.workerData,
+        },
+      );
+    }
+
+    return new Worker(
+      new URL("../workers/voxel-worker-dev.js", import.meta.url),
+      {
+        workerData: this.workerData,
+      },
+    );
+  }
+
+  private isSourceRuntime(): boolean {
+    return fileURLToPath(import.meta.url).endsWith(".ts");
   }
 }

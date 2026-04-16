@@ -344,6 +344,11 @@ async function main() {
     VOXEL_MEMORY_CACHE_SIZE,
   );
   await voxelMeshService.start();
+  const voxelMetrics = voxelMeshService.getMetricsSnapshot();
+  logger.info("Voxel worker runtime", {
+    mode: voxelMetrics.workerRuntimeMode,
+    workers: voxelMetrics.workers,
+  });
 
   // Create Express app
   const app = express();

@@ -21,6 +21,8 @@ src/server/
 
 `src/server/index.ts` is the composition root. It resolves and validates paths, discovers layered asset namespaces from the core Cubyz asset root plus the active save's local `assets/` overlay, loads world metadata and palettes, initializes the color map service, starts the voxel mesh service and worker pool, registers routers, optionally serves the built client bundle, starts HTTP and WebSocket servers, starts the save watcher, and can optionally launch a background voxel warmup pass.
 
+During `npm run dev:server`, the main server runs from `src/server` via `tsx`, and the voxel worker pool uses a small source-side bootstrap that registers `tsx` before importing `src/server/workers/voxel-worker.ts`. In production builds and `npm start`, the worker pool still uses the compiled `dist/server/workers/voxel-worker.js` entrypoint. After startup the server logs the active voxel worker runtime mode as `source` or `dist` together with the worker count so the effective worker path is visible without inspecting processes.
+
 It owns process lifecycle, route registration, WebSocket broadcasting, request context, CORS, and shutdown.
 
 ## Layer Responsibilities
@@ -68,6 +70,7 @@ Examples:
 Server-side worker entry points and protocol definitions for voxel mesh generation.
 
 - `voxel-worker.ts`: worker thread that parses regions and builds mesh payloads
+- `voxel-worker-dev.js`: development-only bootstrap that loads the TypeScript worker source through `tsx`
 - `voxel-worker-protocol.ts`: message and metrics types shared with the pool and service
 
 ## Logging
