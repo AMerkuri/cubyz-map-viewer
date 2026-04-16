@@ -1,6 +1,6 @@
 # Cubyz Map Viewer
 
-Interactive terrain and voxel map viewer for Cubyz worlds.
+Interactive 3D terrain and voxel map viewer for Cubyz worlds, with realtime world syncing from the Cubyz save using REST and WebSocket updates. Includes LOD-aware terrain and voxel rendering, player and spawn markers, biome labels.
 
 ![Cubyz Map Viewer](https://raw.githubusercontent.com/AMerkuri/cubyz-map-viewer/refs/heads/master/assets/cubyz-map-viewer.png)
 
@@ -9,6 +9,12 @@ Interactive terrain and voxel map viewer for Cubyz worlds.
 - Node.js with `npm`
 - A Cubyz save directory
 - A local clone of [`PixelGuys/Cubyz`](https://github.com/PixelGuys/Cubyz)
+
+### Stack
+
+- Client: React 19, TypeScript, Vite, Three.js, React Query
+- Server: Node.js, Express, WebSocket (`ws`), Chokidar, Sharp, Winston
+- Shared tooling: TypeScript, Biome formatter
 
 ## Quick Start
 
