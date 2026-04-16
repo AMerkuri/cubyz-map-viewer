@@ -3,8 +3,8 @@ import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { MAP_SIZE } from "../parsers/surface.js";
+import { VOXEL_GENERATOR_CACHE_VERSION } from "./voxel-cache-version.js";
 
-const VOXEL_GENERATOR_CACHE_VERSION = 17;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
 const VOXEL_REGION_SIZE = 256;
 

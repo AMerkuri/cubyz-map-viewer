@@ -19,7 +19,7 @@ src/server/
 
 ## Main Entry Point
 
-`src/server/index.ts` is the composition root. It resolves and validates paths, loads world metadata and palettes, initializes the color map service, starts the voxel mesh service and worker pool, registers routers, optionally serves the built client bundle, starts HTTP and WebSocket servers, starts the save watcher, and can optionally launch a background voxel warmup pass.
+`src/server/index.ts` is the composition root. It resolves and validates paths, discovers layered asset namespaces from the core Cubyz asset root plus the active save's local `assets/` overlay, loads world metadata and palettes, initializes the color map service, starts the voxel mesh service and worker pool, registers routers, optionally serves the built client bundle, starts HTTP and WebSocket servers, starts the save watcher, and can optionally launch a background voxel warmup pass.
 
 It owns process lifecycle, route registration, WebSocket broadcasting, request context, CORS, and shutdown.
 
@@ -91,7 +91,7 @@ The root `.env.example` mirrors the server config list.
 - `PLAYER_RETENTION_MS`: maximum player age in ms before `/api/players` omits that player entirely (`300000`)
 - `CORS_ALLOWED_ORIGINS`: comma-separated browser origin allowlist
 - `SAVE_PATH`: Cubyz save directory; defaults to `/data/save` in the published container image and auto-detects the newest directory under `~/.cubyz/saves/` when unset
-- `CUBYZ_PATH`: Cubyz project root or asset source; defaults to `/data/cubyz` in the published container image and auto-detects the repository parent that contains `assets/cubyz` when unset
+- `CUBYZ_PATH`: Cubyz project root or base asset source; defaults to `/data/cubyz` in the published container image and auto-detects the repository parent that contains `assets/cubyz` when unset
 - `VOXEL_WORKERS`: voxel worker pool size; defaults to `floor(availableParallelism() / 2)` workers
 - `VOXEL_CACHE_DIR`: persistent voxel mesh cache directory (`dist/server/cache/voxels`)
 - `VOXEL_PREGENERATE_ON_STARTUP`: when `true`, the server starts a background voxel warmup pass that pre-generates persistent disk cache entries and warms the in-memory voxel mesh cache for discovered regions
@@ -100,6 +100,8 @@ The root `.env.example` mirrors the server config list.
 - `LOG_LEVEL`: Winston log level (`info`); set `debug` to see WebSocket connect/disconnect and broadcast logs
 
 The server rotates file logs at 20 MiB, keeps 14 archives per transport, and gzip-compresses rotated files.
+
+At startup the server treats `CUBYZ_PATH/assets/*` as the base asset set and `SAVE_PATH/assets/*` as an optional sparse overlay. It discovers namespaces one directory below each root, such as `cubyz`, `materialz`, `MobilityBlocks`, or `fire`, and loads block definitions, block textures, and biome definitions from that union. For the same namespace-relative asset path, the save-local file wins over the core file.
 
 ## Request Flows
 
@@ -113,8 +115,9 @@ The server rotates file logs at 20 MiB, keeps 14 archives per transport, and gzi
 
 1. The client requests `/api/players` for current player positions, rotation, and health.
 2. The client requests `/api/assets/entities/models/:name` and `/api/assets/entities/textures/:name` for entity assets.
-3. The viewer combines the payloads client-side to render clickable player representations.
-4. `/api/players` returns players whose save files still fall within `PLAYER_RETENTION_MS`, and each entry includes `isActive` computed from the shorter `PLAYER_ACTIVE_WINDOW_MS` so the client can gray out stale markers without recomputing freshness locally.
+3. Those entity routes resolve `cubyz` assets through the same layered asset lookup, so a save-local `assets/cubyz/entities/...` file overrides the base Cubyz copy when present.
+4. The viewer combines the payloads client-side to render clickable player representations.
+5. `/api/players` returns players whose save files still fall within `PLAYER_RETENTION_MS`, and each entry includes `isActive` computed from the shorter `PLAYER_ACTIVE_WINDOW_MS` so the client can gray out stale markers without recomputing freshness locally.
 
 ### Terrain Mesh Data
 

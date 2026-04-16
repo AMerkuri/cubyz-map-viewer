@@ -1,0 +1,1 @@
+export const VOXEL_GENERATOR_CACHE_VERSION = 18;

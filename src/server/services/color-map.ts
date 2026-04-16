@@ -7,6 +7,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import sharp from "sharp";
+import type { AssetNamespaceSource } from "../parsers/assets.js";
 import type { BiomeDefinition } from "../parsers/biome.js";
 import type { Palette } from "../parsers/palette.js";
 import { parseZon, type ZonValue } from "../parsers/zon.js";
@@ -33,6 +34,7 @@ export const FALLBACK_BLOCK_COLOR: RGB = { r: 255, g: 0, b: 220 };
 
 const AIR_LIKE_BLOCK_COLOR: RGB = { r: 0, g: 0, b: 0 };
 const AIR_LIKE_BLOCK_PREFIXES = ["cubyz:fog/", "cubyz:glass/"];
+const BLOCK_DEFINITION_EXTENSIONS = [".zig.zon", ".zon"] as const;
 
 const TEXTURE_FIELD_PRIORITY: Record<string, number> = {
   texture_top: 0,
@@ -75,18 +77,18 @@ export class ColorMapService {
   private biomePaletteIsOcean: boolean[] = [];
 
   async initialize(
-    cubyzAssetsPath: string,
+    assetSources: readonly AssetNamespaceSource[],
     blockPalette: Palette,
     biomePalette: Palette,
     biomeDefinitions: Map<string, BiomeDefinition>,
   ): Promise<void> {
+    this.reset();
+
     // Step 1: Parse block definitions to get texture names
-    await this.loadBlockTextures(join(cubyzAssetsPath, "blocks"));
+    await this.loadBlockTextures(assetSources);
 
     // Step 2: Compute average colors from texture PNGs
-    await this.computeTextureColors(
-      join(cubyzAssetsPath, "blocks", "textures"),
-    );
+    await this.computeTextureColors(assetSources);
 
     // Step 3: Build biome -> color mapping via ground_structure
     this.buildBiomeColors(biomeDefinitions);
@@ -99,6 +101,21 @@ export class ColorMapService {
       blockColors: this.blockColors.size,
       biomeColors: this.biomeColors.size,
     });
+  }
+
+  private reset(): void {
+    this.blockColors.clear();
+    this.blockTopColors.clear();
+    this.blockTextures.clear();
+    this.blockTopTextures.clear();
+    this.blockAbsorptionColors.clear();
+    this.airLikeBlocks.clear();
+    this.reportedFallbackBlocks.clear();
+    this.biomeColors.clear();
+    this.paletteColors = [];
+    this.paletteAirLike = [];
+    this.biomePaletteColors = [];
+    this.biomePaletteIsOcean = [];
   }
 
   private reportFallbackBlockColor(
@@ -144,8 +161,16 @@ export class ColorMapService {
     logger.error("Using fallback block color", meta);
   }
 
-  private async loadBlockTextures(blocksDir: string): Promise<void> {
-    await this.scanBlockDir(blocksDir, "cubyz", "");
+  private async loadBlockTextures(
+    assetSources: readonly AssetNamespaceSource[],
+  ): Promise<void> {
+    for (const source of assetSources) {
+      await this.scanBlockDir(
+        join(source.rootDir, "blocks"),
+        source.namespace,
+        "",
+      );
+    }
   }
 
   private async scanBlockDir(
@@ -169,33 +194,43 @@ export class ColorMapService {
       if (st.isDirectory()) {
         const nextSub = subPath ? `${subPath}/${entry}` : entry;
         await this.scanBlockDir(baseDir, prefix, nextSub);
-      } else if (entry.endsWith(".zig.zon")) {
-        const name = basename(entry, ".zig.zon");
+      } else {
+        const name = this.stripBlockDefinitionExtension(entry);
+        if (!name) {
+          continue;
+        }
+
         const blockPath = subPath ? `${subPath}/${name}` : name;
         const blockId = `${prefix}:${blockPath}`;
         try {
           const text = await readFile(fullPath, "utf-8");
           const parsed = parseZon(text) as Record<string, ZonValue>;
-          if (this.isAirLikeBlock(blockId)) {
+
+          const textures = this.extractTextureCandidates(parsed);
+          const topTextures = this.extractTopTextureCandidates(parsed);
+          const absorptionColor =
+            typeof parsed.absorbedLight === "number"
+              ? this.absorptionToColor(parsed.absorbedLight)
+              : null;
+          const isAirLike = this.isInherentAirLikeBlock(blockId);
+
+          this.clearBlockDefinition(blockId);
+
+          if (isAirLike) {
             this.airLikeBlocks.add(blockId);
             continue;
           }
 
-          const textures = this.extractTextureCandidates(parsed);
           if (textures.length > 0) {
             this.blockTextures.set(blockId, textures);
           }
 
-          const topTextures = this.extractTopTextureCandidates(parsed);
           if (topTextures.length > 0) {
             this.blockTopTextures.set(blockId, topTextures);
           }
 
-          if (typeof parsed.absorbedLight === "number") {
-            this.blockAbsorptionColors.set(
-              blockId,
-              this.absorptionToColor(parsed.absorbedLight),
-            );
+          if (absorptionColor) {
+            this.blockAbsorptionColors.set(blockId, absorptionColor);
           }
         } catch {
           // Skip unparseable block definitions
@@ -207,6 +242,7 @@ export class ColorMapService {
   private async scanTextureDir(
     baseDir: string,
     currentDir: string,
+    namespace: string,
     out: Map<string, string>,
   ): Promise<void> {
     let entries: string[];
@@ -221,7 +257,7 @@ export class ColorMapService {
       const st = await stat(fullPath);
 
       if (st.isDirectory()) {
-        await this.scanTextureDir(baseDir, fullPath, out);
+        await this.scanTextureDir(baseDir, fullPath, namespace, out);
       } else if (
         entry.endsWith(".png") &&
         !entry.includes("_emission") &&
@@ -230,17 +266,28 @@ export class ColorMapService {
         // Build texture name relative to base textures dir, e.g. "cubyz:leaves/oak"
         const rel = fullPath.slice(baseDir.length + 1).replace(/\\/g, "/");
         const name = rel.slice(0, -".png".length);
-        out.set(`cubyz:${name}`, fullPath);
+        out.set(`${namespace}:${name}`, fullPath);
       }
     }
   }
 
-  private async computeTextureColors(texturesDir: string): Promise<void> {
+  private async computeTextureColors(
+    assetSources: readonly AssetNamespaceSource[],
+  ): Promise<void> {
     // Build a map of texture name -> file path by scanning subdirectories recursively.
     // Texture names use slash-separated paths relative to the textures dir, e.g.
     // "cubyz:leaves/oak" maps to textures/leaves/oak.png.
     const textureFiles = new Map<string, string>();
-    await this.scanTextureDir(texturesDir, texturesDir, textureFiles);
+
+    for (const source of assetSources) {
+      const texturesDir = join(source.rootDir, "blocks", "textures");
+      await this.scanTextureDir(
+        texturesDir,
+        texturesDir,
+        source.namespace,
+        textureFiles,
+      );
+    }
 
     // Compute average color for each block that has a texture
     for (const [blockId, textureNames] of this.blockTextures) {
@@ -419,10 +466,32 @@ export class ColorMapService {
 
   private isAirLikeBlock(blockId: string): boolean {
     return (
-      blockId === "cubyz:air" ||
-      AIR_LIKE_BLOCK_PREFIXES.some((prefix) => blockId.startsWith(prefix)) ||
-      this.airLikeBlocks.has(blockId)
+      this.isInherentAirLikeBlock(blockId) || this.airLikeBlocks.has(blockId)
     );
+  }
+
+  private isInherentAirLikeBlock(blockId: string): boolean {
+    return (
+      blockId === "cubyz:air" ||
+      AIR_LIKE_BLOCK_PREFIXES.some((prefix) => blockId.startsWith(prefix))
+    );
+  }
+
+  private clearBlockDefinition(blockId: string): void {
+    this.blockTextures.delete(blockId);
+    this.blockTopTextures.delete(blockId);
+    this.blockAbsorptionColors.delete(blockId);
+    this.airLikeBlocks.delete(blockId);
+  }
+
+  private stripBlockDefinitionExtension(entry: string): string | null {
+    for (const extension of BLOCK_DEFINITION_EXTENSIONS) {
+      if (entry.endsWith(extension)) {
+        return basename(entry, extension);
+      }
+    }
+
+    return null;
   }
 
   private extractTextureCandidates(parsed: Record<string, ZonValue>): string[] {

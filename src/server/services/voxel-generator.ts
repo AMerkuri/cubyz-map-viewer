@@ -23,12 +23,12 @@ import {
   VOXEL_REGION_SIZE,
 } from "./greedy-mesh.js";
 import { logger } from "./logger.js";
+import { VOXEL_GENERATOR_CACHE_VERSION } from "./voxel-cache-version.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 const COLUMN_VOXELS = VOXEL_REGION_SIZE;
 const CHUNK_COLUMNS_PER_AXIS = COLUMN_VOXELS / CHUNK_SIZE;
 const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
-const VOXEL_GENERATOR_CACHE_VERSION = 17;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??

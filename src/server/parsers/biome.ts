@@ -6,6 +6,7 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
+import type { AssetNamespaceSource } from "./assets.js";
 import { parseZon, type ZonValue } from "./zon.js";
 
 export interface BiomeDefinition {
@@ -60,11 +61,19 @@ export async function parseBiomeFile(
  * Biomes can be in subdirectories (e.g., assets/cubyz/biomes/cave/cave.zig.zon)
  */
 export async function loadAllBiomes(
-  biomesDir: string,
-  prefix: string = "cubyz",
+  assetSources: readonly AssetNamespaceSource[],
 ): Promise<Map<string, BiomeDefinition>> {
   const biomes = new Map<string, BiomeDefinition>();
-  await scanBiomeDir(biomesDir, prefix, "", biomes);
+
+  for (const source of assetSources) {
+    await scanBiomeDir(
+      join(source.rootDir, "biomes"),
+      source.namespace,
+      "",
+      biomes,
+    );
+  }
+
   return biomes;
 }
 

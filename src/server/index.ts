@@ -21,6 +21,10 @@ import { createTerrainRouter } from "./api/terrain.js";
 import { parseSafeAssetName } from "./api/validation.js";
 import { createVoxelsRouter } from "./api/voxels.js";
 import { createWorldRouter } from "./api/world.js";
+import {
+  discoverAssetNamespaceSources,
+  resolveNamespaceFile,
+} from "./parsers/assets.js";
 import { loadAllBiomes } from "./parsers/biome.js";
 import { loadPalette } from "./parsers/palette.js";
 import {
@@ -274,12 +278,19 @@ async function main() {
   // Resolve paths
   const savePath = await findSavePath();
   const cubyzPath = findCubyzPath();
-  const assetsPath = join(cubyzPath, "assets", "cubyz");
+  const coreAssetsRoot = join(cubyzPath, "assets");
+  const saveAssetsRoot = join(savePath, "assets");
+  const coreCubyzAssetsPath = join(coreAssetsRoot, "cubyz");
   const clientDistDir = resolve(__dirname, "..", "client");
   const clientIndexPath = join(clientDistDir, "index.html");
   const hasBuiltClient = existsSync(clientIndexPath);
 
-  logger.info("Resolved paths", { savePath, cubyzPath, assetsPath });
+  logger.info("Resolved paths", {
+    savePath,
+    cubyzPath,
+    coreAssetsRoot,
+    saveAssetsRoot,
+  });
 
   // Verify save exists
   if (!existsSync(join(savePath, "world.zig.zon"))) {
@@ -305,16 +316,21 @@ async function main() {
     biomePaletteEntries: biomePalette.entries.length,
   });
 
+  const assetSources = await discoverAssetNamespaceSources([
+    coreAssetsRoot,
+    saveAssetsRoot,
+  ]);
+
   // Load biome definitions
   logger.info("Loading biome definitions");
-  const biomeDefinitions = await loadAllBiomes(join(assetsPath, "biomes"));
+  const biomeDefinitions = await loadAllBiomes(assetSources);
   logger.info("Loaded biome definitions", { count: biomeDefinitions.size });
 
   // Initialize color map
   logger.info("Building color map from block textures");
   const colorMap = new ColorMapService();
   await colorMap.initialize(
-    assetsPath,
+    assetSources,
     blockPalette,
     biomePalette,
     biomeDefinitions,
@@ -397,12 +413,28 @@ async function main() {
 
   app.get("/api/assets/entities/textures/:name", (req, res) => {
     const textureName = parseSafeAssetName(req.params.name, "texture name");
-    res.sendFile(join(assetsPath, "entities", "textures", textureName));
+    res.sendFile(
+      resolveNamespaceFile(
+        assetSources,
+        "cubyz",
+        "entities",
+        "textures",
+        textureName,
+      ) ?? join(coreCubyzAssetsPath, "entities", "textures", textureName),
+    );
   });
 
   app.get("/api/assets/entities/models/:name", (req, res) => {
     const modelName = parseSafeAssetName(req.params.name, "model name");
-    res.sendFile(join(assetsPath, "entities", "models", modelName));
+    res.sendFile(
+      resolveNamespaceFile(
+        assetSources,
+        "cubyz",
+        "entities",
+        "models",
+        modelName,
+      ) ?? join(coreCubyzAssetsPath, "entities", "models", modelName),
+    );
   });
 
   // Health check

@@ -148,7 +148,7 @@ class ZonParser {
       this.expect("=");
       const value = this.parseValue();
       obj[key] = value;
-      this.skipWhitespaceAndComments();
+      const sawLineBreak = this.skipWhitespaceAndComments();
       const char = this.peek();
       if (char === ",") {
         this.pos += 1;
@@ -157,6 +157,9 @@ class ZonParser {
       if (char === "}") {
         this.pos += 1;
         break;
+      }
+      if (sawLineBreak) {
+        continue;
       }
       throw new Error(
         `Unexpected character in object at pos ${this.pos}: ${char ?? "EOF"}`,
@@ -175,7 +178,7 @@ class ZonParser {
       }
       const value = this.parseValue();
       arr.push(value);
-      this.skipWhitespaceAndComments();
+      const sawLineBreak = this.skipWhitespaceAndComments();
       const char = this.peek();
       if (char === ",") {
         this.pos += 1;
@@ -184,6 +187,9 @@ class ZonParser {
       if (char === "}") {
         this.pos += 1;
         break;
+      }
+      if (sawLineBreak) {
+        continue;
       }
       throw new Error(
         `Unexpected character in array at pos ${this.pos}: ${char ?? "EOF"}`,
@@ -364,10 +370,15 @@ class ZonParser {
     return value;
   }
 
-  public skipWhitespaceAndComments(): void {
+  public skipWhitespaceAndComments(): boolean {
+    let sawLineBreak = false;
+
     while (this.pos < this.length) {
       // Skip whitespace
       if (WHITESPACE.test(this.text[this.pos])) {
+        if (this.text[this.pos] === "\n" || this.text[this.pos] === "\r") {
+          sawLineBreak = true;
+        }
         this.pos += 1;
         continue;
       }
@@ -381,10 +392,15 @@ class ZonParser {
         while (this.pos < this.length && this.text[this.pos] !== "\n") {
           this.pos += 1;
         }
+        if (this.pos < this.length && this.text[this.pos] === "\n") {
+          sawLineBreak = true;
+        }
         continue;
       }
       break;
     }
+
+    return sawLineBreak;
   }
 
   private expect(char: string): void {
