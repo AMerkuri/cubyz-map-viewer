@@ -39,6 +39,17 @@ resolve_repository_from_origin() {
     printf '%s\n' "$repo"
 }
 
+resolve_actor_from_origin() {
+    local repo
+
+    repo="$(resolve_repository_from_origin 2>/dev/null || true)"
+    if [[ -z "$repo" ]]; then
+        return 1
+    fi
+
+    printf '%s\n' "${repo%%/*}"
+}
+
 is_valid_github_repository() {
     local repo="$1"
     [[ "$repo" =~ ^[^[:space:]/]+/[^[:space:]/]+$ ]]
@@ -76,9 +87,14 @@ if ! is_valid_github_repository "$IMAGE_NAME"; then
 fi
 
 if [[ -z "${GITHUB_ACTOR:-}" ]]; then
-    echo -e "${RED}Error: GITHUB_ACTOR is not set.${NC}"
-    echo -e "${YELLOW}Set it to your GitHub username before running this script.${NC}"
-    exit 1
+    if GITHUB_ACTOR="$(resolve_actor_from_origin)"; then
+        export GITHUB_ACTOR
+        echo -e "${GREEN}Detected GitHub actor from origin owner: ${GITHUB_ACTOR}${NC}"
+    else
+        echo -e "${RED}Error: GITHUB_ACTOR is not set and origin owner could not be resolved.${NC}"
+        echo -e "${YELLOW}Set it to the GitHub account that owns the token used for docker login.${NC}"
+        exit 1
+    fi
 fi
 
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then

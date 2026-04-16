@@ -6,7 +6,7 @@ This document covers image publishing and deployment-specific details that are n
 
 For standard Docker and Compose runtime setup, published-image usage, and troubleshooting, use the `README.md` deployment section first.
 
-Use `scripts/build-and-push.sh` to publish a multi-architecture image to GitHub Container Registry (`ghcr.io`).
+Use `scripts/build-and-push.sh` to publish a multi-architecture image to GitHub Container Registry (`ghcr.io`). For the full release workflow that also updates `CHANGELOG.md`, creates tags, pushes `master`, and publishes the matching image, see `docs/release.md`.
 
 ## Prerequisites
 
@@ -23,11 +23,14 @@ The script publishes these platforms:
 
 Set these variables before running `scripts/build-and-push.sh` locally:
 
-- `GITHUB_REPOSITORY`: target image name in `owner/repo` form
-- `GITHUB_ACTOR`: your GitHub username
 - `GITHUB_TOKEN`: GitHub token used for `docker login ghcr.io`
 
-If `GITHUB_REPOSITORY` is unset, the script tries to derive it from the `origin` remote. If neither source produces a valid `owner/repo` value, the script stops before building.
+Optional overrides:
+
+- `GITHUB_REPOSITORY`: target image name in `owner/repo` form
+- `GITHUB_ACTOR`: GitHub username used for `docker login ghcr.io`
+
+If `GITHUB_REPOSITORY` is unset, the script tries to derive it from the `origin` remote. If `GITHUB_ACTOR` is unset, the script derives it from the owner part of that same GitHub remote. If neither source produces a usable value, the script stops before building.
 
 Example:
 
@@ -40,6 +43,8 @@ export GITHUB_TOKEN=your-token
 The script rejects invalid `GITHUB_REPOSITORY` values such as `cubyz-map-viewer` without the owner prefix.
 
 If you run the script in GitHub Actions, `GITHUB_REPOSITORY`, `GITHUB_ACTOR`, and `GITHUB_TOKEN` are typically already available in the workflow environment.
+
+For personal repositories that use a matching personal access token, you can often set only `GITHUB_TOKEN` and let the script infer the rest from `origin`.
 
 ## How To Obtain `GITHUB_TOKEN`
 
