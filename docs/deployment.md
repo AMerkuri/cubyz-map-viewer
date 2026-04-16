@@ -2,7 +2,9 @@
 
 ## Overview
 
-This project ships a single container image that serves the built client, HTTP API, and WebSocket server from one Node.js process.
+This document covers image publishing and deployment-specific details that are not already documented in `README.md`.
+
+For standard Docker and Compose runtime setup, published-image usage, and troubleshooting, use the `README.md` deployment section first.
 
 Use `scripts/build-and-push.sh` to publish a multi-architecture image to GitHub Container Registry (`ghcr.io`).
 
@@ -25,6 +27,8 @@ Set these variables before running `scripts/build-and-push.sh` locally:
 - `GITHUB_ACTOR`: your GitHub username
 - `GITHUB_TOKEN`: GitHub token used for `docker login ghcr.io`
 
+If `GITHUB_REPOSITORY` is unset, the script tries to derive it from the `origin` remote. If neither source produces a valid `owner/repo` value, the script stops before building.
+
 Example:
 
 ```bash
@@ -33,7 +37,9 @@ export GITHUB_ACTOR=your-github-username
 export GITHUB_TOKEN=your-token
 ```
 
-If you run the script inside GitHub Actions, `GITHUB_REPOSITORY`, `GITHUB_ACTOR`, and `GITHUB_TOKEN` are typically already available from the workflow environment.
+The script rejects invalid `GITHUB_REPOSITORY` values such as `cubyz-map-viewer` without the owner prefix.
+
+If you run the script in GitHub Actions, `GITHUB_REPOSITORY`, `GITHUB_ACTOR`, and `GITHUB_TOKEN` are typically already available in the workflow environment.
 
 ## How To Obtain `GITHUB_TOKEN`
 
@@ -53,7 +59,7 @@ Recommended scopes:
 - `write:packages`
 - `read:packages`
 
-If the target repository belongs to an organization with SSO enabled, authorize the token for that organization as well.
+If the target repository belongs to an organization with SSO enabled, authorize the token for that organization.
 
 ## Publishing Images
 
@@ -79,31 +85,12 @@ That publishes only:
 
 - `ghcr.io/<owner>/<repo>:v1.0.0-rc1`
 
-## Runtime Configuration
+## Published Image Reference
 
-Publishing the image does not include world data or Cubyz assets. When you run the container, you still need to provide:
-
-- `SAVE_PATH`: Cubyz save directory inside the container
-- `CUBYZ_PATH`: Cubyz asset source inside the container
-- `VOXEL_CACHE_DIR`: persistent voxel cache directory
-- `LOG_DIR`: server log directory
-
-The checked-in `compose.yml` uses these container paths:
-
-- save data: `/data/save`
-- Cubyz checkout: `/data/cubyz`
-- voxel cache: `/data/cache/voxels`
-- logs: `/data/logs`
-
-## Run The Published Image
+`compose.yml` uses this published image:
 
 ```bash
-docker run --rm -p 3000:3000 \
-  -v /path/to/your/save:/data/save:ro \
-  -v /path/to/Cubyz:/data/cubyz:ro \
-  -v cubyz-map-viewer-cache:/data/cache \
-  -v cubyz-map-viewer-logs:/data/logs \
-  ghcr.io/<owner>/<repo>:latest
+ghcr.io/amerkuri/cubyz-map-viewer:latest
 ```
 
-The container listens on port `3000`.
+For container paths, runtime environment variables, Compose commands, and direct `docker run` examples, see `README.md`.

@@ -19,6 +19,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
+ENV SAVE_PATH=/data/save
+ENV CUBYZ_PATH=/data/cubyz
 ENV VOXEL_CACHE_DIR=/data/cache/voxels
 ENV LOG_DIR=/data/logs
 COPY --from=runtime-base --chown=nonroot:nonroot /data /data

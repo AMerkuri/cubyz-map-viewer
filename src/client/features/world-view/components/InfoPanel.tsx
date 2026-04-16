@@ -37,7 +37,7 @@ export function InfoPanel({
     <OverlayPanel
       title="Cubyz Map Viewer"
       position={{ bottom: 12, left: 12 }}
-      minWidth={220}
+      minWidth={250}
       maxWidth={320}
       collapsible={true}
       contentStyle={{

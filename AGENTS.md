@@ -1,11 +1,14 @@
 # Cubyz Map Viewer – Agent Guide
 
 - Work only inside `cubyz-map-viewer/`. Do not modify the parent `Cubyz` game code when working on this repo.
-- Keep documentation up to date. Whenever you change client or server behavior, structure, or workflows, update the corresponding files in `docs/` in the same task.
+- Keep documentation up to date. Whenever you change behavior, structure, or workflows, update the corresponding files in `docs/` in the same task.
 - Architecture docs live in:
-  - `docs/specification.md`
-  - `docs/client-specification.md`
-  - `docs/server-specification.md`
+  - `docs/architecture-overview.md`: system-level overview and shared client/server contracts
+  - `docs/client-specification.md`: client architecture, rendering behavior, state ownership, and live-update handling
+  - `docs/server-specification.md`: server architecture, API and WebSocket flows, caching, workers, and runtime configuration
+- Operational docs:
+  - `docs/deployment.md`: container setup, publishing, mounts, and deployment troubleshooting
+- When a change affects a shared contract such as coordinates, event names, payload shape, or LOD behavior, update `docs/architecture-overview.md` and the relevant side-specific doc together.
 
 ## Read First
 

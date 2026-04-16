@@ -4,6 +4,46 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+resolve_repository_from_origin() {
+    local origin_url
+    local repo
+
+    origin_url="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
+    if [[ -z "$origin_url" ]]; then
+        return 1
+    fi
+
+    case "$origin_url" in
+        https://github.com/*)
+            repo="${origin_url#https://github.com/}"
+            ;;
+        http://github.com/*)
+            repo="${origin_url#http://github.com/}"
+            ;;
+        git@github.com:*)
+            repo="${origin_url#git@github.com:}"
+            ;;
+        ssh://git@github.com/*)
+            repo="${origin_url#ssh://git@github.com/}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    repo="${repo%.git}"
+    if [[ "$repo" != */* ]]; then
+        return 1
+    fi
+
+    printf '%s\n' "$repo"
+}
+
+is_valid_github_repository() {
+    local repo="$1"
+    [[ "$repo" =~ ^[^[:space:]/]+/[^[:space:]/]+$ ]]
+}
+
 # Configuration
 REGISTRY="ghcr.io"
 IMAGE_NAME="${GITHUB_REPOSITORY:-}"
@@ -19,9 +59,19 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 if [[ -z "$IMAGE_NAME" ]]; then
-    echo -e "${RED}Error: GITHUB_REPOSITORY is not set.${NC}"
-    echo -e "${YELLOW}Set it to the target GitHub repository, for example:${NC}"
-    echo "export GITHUB_REPOSITORY=owner/cubyz-map-viewer"
+    if IMAGE_NAME="$(resolve_repository_from_origin)"; then
+        echo -e "${GREEN}Detected repository from origin: ${IMAGE_NAME}${NC}"
+    else
+        echo -e "${RED}Error: GITHUB_REPOSITORY is not set and origin could not be resolved to a GitHub repository.${NC}"
+        echo -e "${YELLOW}Set it to the target GitHub repository, for example:${NC}"
+        echo "export GITHUB_REPOSITORY=owner/cubyz-map-viewer"
+        exit 1
+    fi
+fi
+
+if ! is_valid_github_repository "$IMAGE_NAME"; then
+    echo -e "${RED}Error: GITHUB_REPOSITORY must be in owner/repo form.${NC}"
+    echo -e "${YELLOW}Current value: ${IMAGE_NAME}${NC}"
     exit 1
 fi
 

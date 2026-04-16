@@ -4,6 +4,8 @@
 
 The server is an Express application that reads Cubyz save files and exposes the world through HTTP and WebSocket APIs. It loads metadata and palettes, renders terrain tiles, generates voxel meshes, watches the save directory, and broadcasts update notifications.
 
+This document describes server-owned behavior. Shared contracts such as coordinates, transport roles, LODs, and event names are defined in `docs/architecture-overview.md`.
+
 ## Top-Level Structure
 
 ```text
@@ -19,13 +21,13 @@ src/server/
 
 `src/server/index.ts` is the composition root. It resolves and validates paths, loads world metadata and palettes, initializes the color map service, starts the voxel mesh service and worker pool, registers routers, optionally serves the built client bundle, starts HTTP and WebSocket servers, starts the save watcher, and can optionally launch a background voxel warmup pass.
 
-It owns process lifecycle, route registration, WebSocket broadcasting, request context, CORS, and shutdown behavior.
+It owns process lifecycle, route registration, WebSocket broadcasting, request context, CORS, and shutdown.
 
 ## Layer Responsibilities
 
 ### `api/`
 
-HTTP route modules validate request parameters, call parser and service code, shape responses, set cache headers and status codes, and log request failures.
+HTTP route modules validate request parameters, call parser and service code, shape responses, set cache headers and status codes, and log failures.
 
 Examples:
 
@@ -37,7 +39,7 @@ Examples:
 
 ### `parsers/`
 
-File-format and binary decoding code that knows how to read Cubyz data from disk but not HTTP.
+File-format and binary decoding code that reads Cubyz data from disk without HTTP concerns.
 
 Examples:
 
@@ -61,18 +63,40 @@ Examples:
 - `watcher.ts`: monitors the save directory and emits typed watch events
 - `cache.ts`: LRU cache used by the voxel pipeline
 
-### Logging
+### `workers/`
+
+Server-side worker entry points and protocol definitions for voxel mesh generation.
+
+- `voxel-worker.ts`: worker thread that parses regions and builds mesh payloads
+- `voxel-worker-protocol.ts`: message and metrics types shared with the pool and service
+
+## Logging
 
 - `src/server/services/logger.ts` writes console output plus rotated file logs in `LOG_DIR`
 - `server-error.log` and `server-combined.log` rotate at 20 MiB, keep 14 archives, and gzip-compress rotated files
 - `LOG_REQUESTS=true` adds the same rotation/compression policy for `server-requests.log`
+- WebSocket connect/disconnect events and watch-event broadcasts log at `debug`, so they stay hidden at the default `info` level
 
-### `workers/`
+## Runtime Configuration
 
-Server-side worker entry points and protocol definitions used for voxel mesh generation.
+The root `.env.example` mirrors the server config list.
 
-- `voxel-worker.ts`: worker thread that parses regions and builds mesh payloads
-- `voxel-worker-protocol.ts`: message and metrics types shared with the pool and service
+- `PORT`: HTTP bind port (`3001`)
+- `HOST`: HTTP bind address (`0.0.0.0`)
+- `VOXEL_MEMORY_CACHE_SIZE`: in-memory voxel mesh cache size (`1024` recommended for hosting)
+- `VOXEL_FULL_CLEAR_THROTTLE_MS`: minimum gap in ms between broad voxel cache clears (`1000`)
+- `TERRAIN_UPDATE_BATCH_MS`: save watcher batch window in ms for terrain updates (`15000`)
+- `CORS_ALLOWED_ORIGINS`: comma-separated browser origin allowlist
+- `SAVE_PATH`: Cubyz save directory; defaults to `/data/save` in the published container image and auto-detects the newest directory under `~/.cubyz/saves/` when unset
+- `CUBYZ_PATH`: Cubyz project root or asset source; defaults to `/data/cubyz` in the published container image and auto-detects the repository parent that contains `assets/cubyz` when unset
+- `VOXEL_WORKERS`: voxel worker pool size; defaults to `floor(availableParallelism() / 2)` workers
+- `VOXEL_CACHE_DIR`: persistent voxel mesh cache directory (`dist/server/cache/voxels`)
+- `VOXEL_PREGENERATE_ON_STARTUP`: when `true`, the server starts a background voxel warmup pass that pre-generates persistent disk cache entries and warms the in-memory voxel mesh cache for discovered regions
+- `LOG_DIR`: Winston file log directory for rotated logs (`logs`)
+- `LOG_REQUESTS`: enables the rotated `server-requests.log` transport when set to `true`
+- `LOG_LEVEL`: Winston log level (`info`); set `debug` to see WebSocket connect/disconnect and broadcast logs
+
+The server rotates file logs at 20 MiB, keeps 14 archives per transport, and gzip-compresses rotated files.
 
 ## Request Flows
 
@@ -96,7 +120,7 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 3. `parseSurfaceFile` decodes the height and biome arrays for the requested tile and any same-LOD neighbors needed by the terrain seam gutter.
 4. `terrain.ts` computes the terrain ETag from the same-LOD 3x3 neighborhood because the seam-safe terrain payload depends on adjacent surface tiles as well as the center tile.
 5. `terrain-data.ts` converts that neighborhood into a seam-safe JSON payload containing a visible vertex grid plus a 1-vertex gutter of neighbor-aware height and color samples for the client mesh builder.
-6. The client now schedules those payloads through a bounded fetch queue and a per-frame mesh-build queue so zooming does not try to build every refined terrain tile immediately.
+6. The client schedules those payloads through a bounded fetch queue and a per-frame mesh-build queue so zooming does not try to build every refined terrain tile immediately.
 
 ### Biome Label Data
 
@@ -115,7 +139,7 @@ Server-side worker entry points and protocol definitions used for voxel mesh gen
 7. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
 8. The route negotiates compressed voxel transport, computes the current ETag from source-file metadata before resolving the mesh body, and exposes timing and queue metrics through response headers.
 
-When `VOXEL_PREGENERATE_ON_STARTUP=true`, the server also walks the chunk index after it starts listening and requests each region once through `VoxelMeshService`. That background pass is best-effort, bounded for concurrency, populates the persistent `VOXEL_CACHE_DIR` cache for new meshes, and leaves recently processed raw payloads hot in the in-memory voxel cache.
+When `VOXEL_PREGENERATE_ON_STARTUP=true`, the server also walks the chunk index after it starts listening and requests each region once through `VoxelMeshService`. That background pass is best-effort, bounded for concurrency, populates the persistent `VOXEL_CACHE_DIR` cache for new meshes, and keeps recently processed raw payloads hot in the in-memory voxel cache.
 
 ### Voxel Benchmarking
 
@@ -157,7 +181,7 @@ It emits:
 - every request gets a request ID, echoed back as `X-Request-Id`
 - validation helpers in `api/validation.ts` throw typed `400` errors at the boundary
 - `api/error-handler.ts` is the final Express error middleware and produces structured JSON errors
-- `api/http.ts` centralizes `ETag` matching and async file-stat helpers
+- `api/http.ts` centralizes ETag matching and async file-stat helpers
 
 ## CORS and Security
 
@@ -195,3 +219,9 @@ HTTP provides authoritative world payloads. WebSocket provides low-latency inval
 - prefer targeted invalidation over full rebuilds
 - batch filesystem churn before broadcasting it to clients
 - expose enough metrics to debug voxel throughput and latency
+
+## Related Documentation
+
+- `docs/architecture-overview.md` for shared system contracts
+- `docs/client-specification.md` for the client-side rendering and invalidation behavior driven by this server
+- `docs/deployment.md` for container runtime setup, publishing, and operations guidance

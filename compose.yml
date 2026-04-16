@@ -1,28 +1,13 @@
 services:
   cubyz-map-viewer:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: cubyz-map-viewer:latest
+    image: ghcr.io/amerkuri/cubyz-map-viewer:latest
     ports:
       - "3000:3000"
-    environment:
-      PORT: 3000
     volumes:
-      - type: bind
-        source: /path/to/your/save
-        target: /data/save
-        read_only: true
-      - type: bind
-        source: /path/to/Cubyz
-        target: /data/cubyz
-        read_only: true
-      - type: volume
-        source: cubyz-map-viewer-cache
-        target: /data/cache
-      - type: volume
-        source: cubyz-map-viewer-logs
-        target: /data/logs
+      - /path/to/your/save:/data/save:ro
+      - /path/to/Cubyz:/data/cubyz:ro
+      - cubyz-map-viewer-logs:/data/logs
+      - cubyz-map-viewer-cache:/data/cache
     restart: unless-stopped
 
 volumes:

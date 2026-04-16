@@ -40,21 +40,13 @@ import {
 import { OverlayPanel } from "../shared/ui/OverlayPanel.js";
 import { uiTheme } from "../shared/ui/theme.js";
 
-type ShareLocationState =
-  | {
-      mode: "terrain";
-      pos: [number, number, number];
-      zoom: number;
-      theta: number;
-      phi: number;
-    }
-  | {
-      mode: "voxel";
-      pos: [number, number, number];
-      zoom: number;
-      theta: number;
-      phi: number;
-    };
+type ShareLocationState = {
+  mode: "terrain" | "voxel";
+  pos: [number, number, number];
+  zoom: number;
+  theta: number;
+  phi: number;
+};
 
 const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
@@ -286,7 +278,7 @@ function DebugStatsPanel({ chunkStats }: { chunkStats: ChunkStats }) {
     <OverlayPanel
       title="Stats"
       position={{ top: 54, right: 12 }}
-      minWidth={280}
+      minWidth={250}
       maxWidth={360}
       collapsible={true}
       defaultCollapsed={true}
@@ -623,7 +615,7 @@ function DebugParametersPanel(args: {
     <OverlayPanel
       title="Parameters"
       position={{ top: 108, right: 12 }}
-      minWidth={280}
+      minWidth={250}
       maxWidth={360}
       collapsible={true}
       defaultCollapsed={true}

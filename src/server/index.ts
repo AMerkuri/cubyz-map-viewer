@@ -412,7 +412,9 @@ async function main() {
 
   wss.on("connection", (ws) => {
     wsClients.add(ws);
-    logger.info("WebSocket client connected", { totalClients: wsClients.size });
+    logger.debug("WebSocket client connected", {
+      totalClients: wsClients.size,
+    });
     ws.send(
       JSON.stringify({
         type: "viewer-ws-connected",
@@ -422,7 +424,7 @@ async function main() {
 
     ws.on("close", () => {
       wsClients.delete(ws);
-      logger.info("WebSocket client disconnected", {
+      logger.debug("WebSocket client disconnected", {
         totalClients: wsClients.size,
       });
     });
@@ -436,7 +438,7 @@ async function main() {
   });
 
   function broadcast(event: WatchEvent): void {
-    logger.info("Watch event broadcast", {
+    logger.debug("Watch event broadcast", {
       eventType: event.type,
       eventData: event.data ?? null,
     });
