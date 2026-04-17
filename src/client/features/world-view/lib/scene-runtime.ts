@@ -151,6 +151,7 @@ export function initializeSceneRuntime(args: {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.domElement.style.touchAction = "none";
   container.appendChild(renderer.domElement);
 
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -484,40 +485,40 @@ export function initializeSceneRuntime(args: {
   function resetTransientInputState() {
     keysHeldRef.current.clear();
     isPointerInteracting = false;
-    cursorHandlers.clearCursorRefreshTimer();
-    onCursorMoveRef.current(null);
+    cursorHandlers.resetCursorInteractionState();
   }
 
   function onPointerEnter() {
     isPointerOverCanvas = true;
     markActive();
+    cursorHandlers.clearTouchLingerTimer();
     if (!isPointerInteracting && keysHeldRef.current.size === 0) {
       cursorHandlers.scheduleCursorTooltipRefresh();
     }
   }
 
-  function onPointerDown() {
+  function onPointerDown(e: PointerEvent) {
     isPointerInteracting = true;
     markActive();
-    cursorHandlers.onPointerDown();
+    cursorHandlers.onPointerDown(e);
   }
 
-  function onPointerUp() {
+  function onPointerUp(e: PointerEvent) {
     isPointerInteracting = false;
     markActive();
-    cursorHandlers.onPointerUp();
+    cursorHandlers.onPointerUp(e);
   }
 
-  function onPointerCancel() {
+  function onPointerCancel(e: PointerEvent) {
     isPointerInteracting = false;
     markActive();
-    cursorHandlers.onPointerCancel();
+    cursorHandlers.onPointerCancel(e);
   }
 
-  function onPointerLeave() {
+  function onPointerLeave(e: PointerEvent) {
     isPointerOverCanvas = false;
     isPointerInteracting = false;
-    cursorHandlers.onPointerLeave();
+    cursorHandlers.onPointerLeave(e);
   }
 
   function onWindowBlur() {
@@ -574,7 +575,7 @@ export function initializeSceneRuntime(args: {
     renderer.domElement.removeEventListener("click", handlePlayerMarkerClick);
     renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
     renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
-    cursorHandlers.clearCursorRefreshTimer();
+    cursorHandlers.resetCursorInteractionState();
 
     clearTerrainTiles();
     clearVoxelTiles();

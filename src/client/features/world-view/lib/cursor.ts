@@ -1,14 +1,20 @@
 import * as THREE from "three";
 
+const TOUCH_HOLD_DELAY_MS = 500;
+const TOUCH_HOLD_MOVE_THRESHOLD_PX = 12;
+const TOUCH_HOLD_LINGER_MS = 1000;
+
 export interface CursorInteractionHandlers {
   clearCursorRefreshTimer: () => void;
+  clearTouchLingerTimer: () => void;
+  resetCursorInteractionState: () => void;
   scheduleCursorTooltipRefresh: () => void;
   updateCursorTooltip: () => void;
   onPointerMove: (e: PointerEvent) => void;
-  onPointerDown: () => void;
-  onPointerUp: () => void;
-  onPointerCancel: () => void;
-  onPointerLeave: () => void;
+  onPointerDown: (e: PointerEvent) => void;
+  onPointerUp: (e: PointerEvent) => void;
+  onPointerCancel: (e: PointerEvent) => void;
+  onPointerLeave: (e: PointerEvent) => void;
 }
 
 export function createCursorInteractionHandlers(args: {
@@ -40,6 +46,12 @@ export function createCursorInteractionHandlers(args: {
   const hoverState = { active: false, clientX: 0, clientY: 0 };
   let isPointerInteracting = false;
   let cursorRefreshTimer: number | null = null;
+  let touchHoldTimer: number | null = null;
+  let touchHideTimer: number | null = null;
+  let touchPointerId: number | null = null;
+  let touchHoldActive = false;
+  let touchStartClientX = 0;
+  let touchStartClientY = 0;
 
   function reportIntersection(
     intersection: THREE.Intersection,
@@ -62,9 +74,89 @@ export function createCursorInteractionHandlers(args: {
     cursorRefreshTimer = null;
   }
 
-  function updateCursorTooltip() {
+  function clearTouchTimers() {
+    if (touchHoldTimer !== null) {
+      window.clearTimeout(touchHoldTimer);
+      touchHoldTimer = null;
+    }
+    if (touchHideTimer !== null) {
+      window.clearTimeout(touchHideTimer);
+      touchHideTimer = null;
+    }
+  }
+
+  function resetTouchState() {
+    touchPointerId = null;
+    touchHoldActive = false;
+  }
+
+  function resetCursorInteractionState() {
+    clearCursorRefreshTimer();
+    clearTouchTimers();
+    hoverState.active = false;
+    isPointerInteracting = false;
+    resetTouchState();
+    onCursorMoveRef.current(null);
+  }
+
+  function clearTouchHideTimer() {
+    if (touchHideTimer === null) return;
+    window.clearTimeout(touchHideTimer);
+    touchHideTimer = null;
+  }
+
+  function clearTouchLingerTimer() {
+    clearTouchHideTimer();
+  }
+
+  function clearTouchHoldTimer() {
+    if (touchHoldTimer === null) return;
+    window.clearTimeout(touchHoldTimer);
+    touchHoldTimer = null;
+  }
+
+  function isTouchMoveBeyondThreshold(clientX: number, clientY: number) {
+    return (
+      Math.abs(clientX - touchStartClientX) > TOUCH_HOLD_MOVE_THRESHOLD_PX ||
+      Math.abs(clientY - touchStartClientY) > TOUCH_HOLD_MOVE_THRESHOLD_PX
+    );
+  }
+
+  function scheduleTouchHold(pointerId: number) {
+    clearTouchHoldTimer();
+    touchHoldTimer = window.setTimeout(() => {
+      touchHoldTimer = null;
+      if (
+        !hoverState.active ||
+        touchPointerId !== pointerId ||
+        keysHeldRef.current.size > 0
+      )
+        return;
+      touchHoldActive = true;
+      updateCursorTooltip(true);
+    }, TOUCH_HOLD_DELAY_MS);
+  }
+
+  function scheduleTouchHide() {
+    clearTouchHideTimer();
+    touchHideTimer = window.setTimeout(() => {
+      touchHideTimer = null;
+      onCursorMoveRef.current(null);
+    }, TOUCH_HOLD_LINGER_MS);
+  }
+
+  function cancelTouchInspection() {
+    clearCursorRefreshTimer();
+    clearTouchTimers();
+    hoverState.active = false;
+    resetTouchState();
+    onCursorMoveRef.current(null);
+  }
+
+  function updateCursorTooltip(allowWhileInteracting = false) {
     if (!hoverState.active) return;
-    if (isPointerInteracting || keysHeldRef.current.size > 0) return;
+    if (!allowWhileInteracting && isPointerInteracting) return;
+    if (keysHeldRef.current.size > 0) return;
 
     const terrainGroup = terrainGroupRef.current;
     const terrainVisible =
@@ -143,39 +235,122 @@ export function createCursorInteractionHandlers(args: {
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (e.pointerType === "touch") {
+      if (touchPointerId !== e.pointerId) return;
+      hoverState.active = true;
+      hoverState.clientX = e.clientX;
+      hoverState.clientY = e.clientY;
+      if (isTouchMoveBeyondThreshold(e.clientX, e.clientY)) {
+        cancelTouchInspection();
+        return;
+      }
+      if (touchHoldActive) {
+        updateCursorTooltip(true);
+      }
+      return;
+    }
+
     hoverState.active = true;
     hoverState.clientX = e.clientX;
     hoverState.clientY = e.clientY;
+    clearTouchLingerTimer();
+    clearCursorRefreshTimer();
     if (isPointerInteracting || keysHeldRef.current.size > 0) return;
     updateCursorTooltip();
   }
 
-  function onPointerDown() {
+  function onPointerDown(e: PointerEvent) {
+    clearTouchTimers();
     isPointerInteracting = true;
     clearCursorRefreshTimer();
+    hoverState.active = true;
+    hoverState.clientX = e.clientX;
+    hoverState.clientY = e.clientY;
+
+    if (e.pointerType === "touch") {
+      if (!e.isPrimary) {
+        cancelTouchInspection();
+        return;
+      }
+
+      touchPointerId = e.pointerId;
+      touchStartClientX = e.clientX;
+      touchStartClientY = e.clientY;
+      touchHoldActive = false;
+      scheduleTouchHold(e.pointerId);
+      onCursorMoveRef.current(null);
+      return;
+    }
+
     onCursorMoveRef.current(null);
   }
 
-  function onPointerUp() {
+  function onPointerUp(e: PointerEvent) {
+    if (e.pointerType === "touch") {
+      if (touchPointerId !== e.pointerId) return;
+
+      isPointerInteracting = false;
+
+      const wasTouchHoldActive = touchHoldActive;
+      clearCursorRefreshTimer();
+      clearTouchHoldTimer();
+      resetTouchState();
+      hoverState.active = false;
+
+      if (wasTouchHoldActive) {
+        scheduleTouchHide();
+      } else {
+        onCursorMoveRef.current(null);
+      }
+      return;
+    }
+
     isPointerInteracting = false;
+    clearCursorRefreshTimer();
     scheduleCursorTooltipRefresh();
   }
 
-  function onPointerCancel() {
+  function onPointerCancel(e: PointerEvent) {
+    if (e.pointerType === "touch" && touchPointerId !== e.pointerId) return;
+
     isPointerInteracting = false;
-    clearCursorRefreshTimer();
-    onCursorMoveRef.current(null);
+
+    clearTouchTimers();
+    cancelTouchInspection();
   }
 
-  function onPointerLeave() {
+  function onPointerLeave(e: PointerEvent) {
+    if (e.pointerType === "touch") {
+      if (touchPointerId !== e.pointerId) return;
+      isPointerInteracting = false;
+      if (e.buttons === 0) {
+        const wasTouchHoldActive = touchHoldActive;
+        clearTouchHoldTimer();
+        resetTouchState();
+        if (wasTouchHoldActive) {
+          scheduleTouchHide();
+        } else {
+          onCursorMoveRef.current(null);
+        }
+        return;
+      }
+
+      clearTouchTimers();
+      cancelTouchInspection();
+      return;
+    }
+
     hoverState.active = false;
     isPointerInteracting = false;
+    clearTouchLingerTimer();
     clearCursorRefreshTimer();
     onCursorMoveRef.current(null);
   }
 
   return {
     clearCursorRefreshTimer,
+    clearTouchLingerTimer,
+    resetCursorInteractionState,
     scheduleCursorTooltipRefresh,
     updateCursorTooltip,
     onPointerMove,

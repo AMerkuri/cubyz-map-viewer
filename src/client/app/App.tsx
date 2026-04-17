@@ -526,6 +526,12 @@ function MapControlsPanel(args: {
             <div>Wheel / middle drag: zoom</div>
           </div>
           <div>
+            <InstructionTitle>Touch</InstructionTitle>
+            <div>Drag: pan</div>
+            <div>Pinch: zoom</div>
+            <div>Press and hold: inspect coordinates</div>
+          </div>
+          <div>
             <InstructionTitle>Keyboard</InstructionTitle>
             <div>W/A/S/D or arrows: move camera target</div>
             <div>Q / E: rotate around center</div>

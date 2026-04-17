@@ -46,6 +46,7 @@ src/client/
 - When the scene is settled, no keyboard input is active, no work queues are pending, and the mouse is not hovering the canvas, the runtime can drop to a lower user-configured idle FPS after a short internal delay. Idle mode also uses a slower internal LOD polling interval.
 - On startup, the client restores persisted graphics preset values and custom parameter overrides from `localStorage`, then keeps those settings in sync as the user changes voxel rendering and parameter-panel values
 - Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
+- Touch uses drag-to-pan and pinch-to-zoom, while a press-and-hold gesture shows world coordinates without stealing normal map drag interactions. The coordinate HUD lingers briefly after touch release so it stays readable.
 - `World3DView.tsx` is the boundary between those two layers
 - `App.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
 
