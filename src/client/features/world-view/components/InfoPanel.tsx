@@ -21,6 +21,10 @@ interface InfoPanelProps {
   onSpawnClick: () => void;
 }
 
+interface InfoPanelContentProps extends InfoPanelProps {
+  compact?: boolean;
+}
+
 export function InfoPanel({
   worldData,
   players,
@@ -29,10 +33,6 @@ export function InfoPanel({
   onPlayerClick,
   onSpawnClick,
 }: InfoPanelProps) {
-  const { worldData: world, loading, error } = worldData;
-  const [hoveredPlayer, setHoveredPlayer] = useState<number | null>(null);
-  const [hoveredSpawn, setHoveredSpawn] = useState(false);
-
   return (
     <OverlayPanel
       title="Cubyz Map Viewer"
@@ -40,13 +40,43 @@ export function InfoPanel({
       minWidth={250}
       maxWidth={320}
       collapsible={true}
-      contentStyle={{
+      style={{
+        boxShadow: infoPanelTheme.shadow,
+      }}
+    >
+      <InfoPanelContent
+        worldData={worldData}
+        players={players}
+        lastUpdateAt={lastUpdateAt}
+        zoomLevel={zoomLevel}
+        onPlayerClick={onPlayerClick}
+        onSpawnClick={onSpawnClick}
+      />
+    </OverlayPanel>
+  );
+}
+
+export function InfoPanelContent({
+  worldData,
+  players,
+  lastUpdateAt,
+  zoomLevel,
+  onPlayerClick,
+  onSpawnClick,
+  compact = false,
+}: InfoPanelContentProps) {
+  const { worldData: world, loading, error } = worldData;
+  const [hoveredPlayer, setHoveredPlayer] = useState<number | null>(null);
+  const [hoveredSpawn, setHoveredSpawn] = useState(false);
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: compact ? 4 : 8,
         fontSize: 12,
         lineHeight: 1.25,
         color: infoPanelTheme.secondary,
-      }}
-      style={{
-        boxShadow: infoPanelTheme.shadow,
       }}
     >
       {loading && (
@@ -56,20 +86,23 @@ export function InfoPanel({
 
       {world && (
         <>
-          <InfoRow label="World name" value={world.name} />
-          <InfoRow label="Seed" value={String(world.seed)} />
+          <InfoRow label="World name" value={world.name} compact={compact} />
+          <InfoRow label="Seed" value={String(world.seed)} compact={compact} />
           {zoomLevel !== null && (
-            <InfoRow label="Zoom" value={String(Math.round(zoomLevel))} />
+            <InfoRow
+              label="Zoom"
+              value={String(Math.round(zoomLevel))}
+              compact={compact}
+            />
           )}
           <InfoRow
             label="Last update"
             value={lastUpdateAt !== null ? formatTime(lastUpdateAt) : "-"}
+            compact={compact}
           />
           <button
             type="button"
             onClick={onSpawnClick}
-            onMouseEnter={() => setHoveredSpawn(true)}
-            onMouseLeave={() => setHoveredSpawn(false)}
             style={{
               border: `2px solid ${hoveredSpawn ? infoPanelTheme.border : "transparent"}`,
               borderRadius: 0,
@@ -82,22 +115,30 @@ export function InfoPanel({
               boxSizing: "content-box",
               boxShadow: hoveredSpawn ? "2px 2px 0 rgba(0,0,0,0.5)" : "none",
             }}
+            onMouseEnter={() => setHoveredSpawn(true)}
+            onMouseLeave={() => setHoveredSpawn(false)}
           >
             <InfoRow
               label="Spawn"
               value={`${world.spawn[0]}, ${world.spawn[1]}, ${world.spawn[2]}`}
+              compact={compact}
             />
           </button>
 
           {players.length > 0 && (
             <div
               style={{
-                marginTop: 8,
+                marginTop: compact ? 2 : 8,
                 borderTop: `2px solid ${infoPanelTheme.border}`,
-                paddingTop: 6,
+                paddingTop: compact ? 2 : 6,
               }}
             >
-              <div style={{ color: infoPanelTheme.muted, marginBottom: 4 }}>
+              <div
+                style={{
+                  color: infoPanelTheme.muted,
+                  marginBottom: compact ? 0 : 4,
+                }}
+              >
                 Players ({players.length})
               </div>
               {players.map((p, i) => {
@@ -131,6 +172,7 @@ export function InfoPanel({
                     <InfoRow
                       label={cleanPlayerName(p.name)}
                       value={`${Math.round(p.position[0])}, ${Math.round(p.position[1])}, ${Math.round(p.position[2])}`}
+                      compact={compact}
                     />
                   </button>
                 );
@@ -139,11 +181,40 @@ export function InfoPanel({
           )}
         </>
       )}
-    </OverlayPanel>
+    </div>
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function InfoRow({
+  label,
+  value,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  compact?: boolean;
+}) {
+  if (compact) {
+    return (
+      <div style={{ display: "grid", gap: 1 }}>
+        <span
+          style={{ color: infoPanelTheme.muted, textTransform: "uppercase" }}
+        >
+          {label}
+        </span>
+        <span
+          style={{
+            color: infoPanelTheme.secondary,
+            wordBreak: "break-word",
+            textShadow: "1px 1px 0 rgba(0,0,0,0.75)",
+          }}
+        >
+          {value}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
       <span style={{ color: infoPanelTheme.muted, textTransform: "uppercase" }}>

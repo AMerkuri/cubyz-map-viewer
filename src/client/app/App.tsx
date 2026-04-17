@@ -7,7 +7,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { InfoPanel } from "../features/world-view/components/InfoPanel.js";
+import {
+  InfoPanel,
+  InfoPanelContent,
+} from "../features/world-view/components/InfoPanel.js";
 import {
   LayerControls,
   type LayerVisibility,
@@ -39,6 +42,12 @@ import {
 } from "../features/world-view/lib/graphics-presets.js";
 import { OverlayPanel } from "../shared/ui/OverlayPanel.js";
 import { uiTheme } from "../shared/ui/theme.js";
+import { MobileHudTray } from "./MobileHudTray.js";
+import {
+  DebugParametersContent,
+  DebugStatsContent,
+  MapControlsContent,
+} from "./mobileHudContents.js";
 
 type ShareLocationState = {
   mode: "terrain" | "voxel";
@@ -52,6 +61,8 @@ const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
 const GRAPHICS_SETTINGS_STORAGE_KEY = "cubyz-map-viewer.graphics-settings";
 const GRAPHICS_SETTINGS_STORAGE_VERSION = 1;
+const COMPACT_VIEWPORT_MAX_WIDTH_PX = 768;
+const COMPACT_VIEWPORT_MAX_HEIGHT_PX = 720;
 
 type StoredGraphicsSettings = {
   renderDistance: number;
@@ -73,6 +84,35 @@ const MapDebugParameters = lazy(async () =>
     ({ MapDebugParameters }) => ({ default: MapDebugParameters }),
   ),
 );
+
+function useCompactViewport(): boolean {
+  const [compact, setCompact] = useState(() => detectCompactViewport());
+
+  useEffect(() => {
+    const updateCompact = () => {
+      setCompact(detectCompactViewport());
+    };
+
+    updateCompact();
+    window.addEventListener("resize", updateCompact);
+    window.addEventListener("orientationchange", updateCompact);
+    return () => {
+      window.removeEventListener("resize", updateCompact);
+      window.removeEventListener("orientationchange", updateCompact);
+    };
+  }, []);
+
+  return compact;
+}
+
+function detectCompactViewport(): boolean {
+  if (typeof window === "undefined") return false;
+
+  return (
+    window.innerWidth < COMPACT_VIEWPORT_MAX_WIDTH_PX ||
+    window.innerHeight <= COMPACT_VIEWPORT_MAX_HEIGHT_PX
+  );
+}
 
 function readFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -194,7 +234,13 @@ function formatNullableBytes(bytes: number | null): string {
   return formatMemoryBytes(Math.round(bytes));
 }
 
-function LoadingIndicator({ visible }: { visible: boolean }) {
+function LoadingIndicator({
+  visible,
+  compact = false,
+}: {
+  visible: boolean;
+  compact?: boolean;
+}) {
   const [mounted, setMounted] = useState(visible);
   const [shown, setShown] = useState(visible);
 
@@ -225,8 +271,10 @@ function LoadingIndicator({ visible }: { visible: boolean }) {
       aria-hidden="true"
       style={{
         position: "absolute",
-        right: 12,
-        bottom: 12,
+        left: compact ? 12 : undefined,
+        top: compact ? 12 : undefined,
+        right: compact ? undefined : 12,
+        bottom: compact ? undefined : 12,
         zIndex: 1000,
         pointerEvents: "none",
         opacity: shown ? 1 : 0,
@@ -526,16 +574,14 @@ function MapControlsPanel(args: {
             <div>Wheel / middle drag: zoom</div>
           </div>
           <div>
-            <InstructionTitle>Touch</InstructionTitle>
-            <div>Drag: pan</div>
-            <div>Pinch: zoom</div>
-            <div>Press and hold: inspect coordinates</div>
-          </div>
-          <div>
             <InstructionTitle>Keyboard</InstructionTitle>
             <div>W/A/S/D or arrows: move camera target</div>
             <div>Q / E: rotate around center</div>
             <div>Space: focus spawn</div>
+          </div>
+          <div>
+            <InstructionTitle>Panels</InstructionTitle>
+            <div>Grab a panel header to drag it around</div>
           </div>
         </div>
       </div>
@@ -548,8 +594,15 @@ function TopRightToolbar(args: {
   onShareLocation: () => void;
   view: "terrain" | "voxel";
   onViewChange: (next: "terrain" | "voxel") => void;
+  compact?: boolean;
 }) {
-  const { shareCopied, onShareLocation, view, onViewChange } = args;
+  const {
+    shareCopied,
+    onShareLocation,
+    view,
+    onViewChange,
+    compact = false,
+  } = args;
 
   return (
     <div
@@ -561,14 +614,14 @@ function TopRightToolbar(args: {
         display: "flex",
         alignItems: "center",
         justifyContent: "flex-end",
-        gap: 10,
+        gap: compact ? 8 : 10,
       }}
     >
       <button
         type="button"
         onClick={onShareLocation}
         style={{
-          padding: "8px 14px",
+          padding: compact ? "7px 12px" : "8px 14px",
           border: `2px solid ${shareCopied ? uiTheme.accent.border : uiTheme.panel.buttonBorder}`,
           borderRadius: 0,
           boxShadow: "3px 3px 0 rgba(0,0,0,0.55)",
@@ -577,7 +630,7 @@ function TopRightToolbar(args: {
             : uiTheme.panel.buttonBackground,
           backdropFilter: "blur(5px)",
           color: shareCopied ? uiTheme.text.onAccent : uiTheme.text.muted,
-          fontSize: 13,
+          fontSize: compact ? 12 : 13,
           fontWeight: 400,
           textTransform: "uppercase",
           cursor: "pointer",
@@ -585,7 +638,7 @@ function TopRightToolbar(args: {
       >
         {shareCopied ? "Copied" : "Copy Location"}
       </button>
-      <ViewToggle view={view} onViewChange={onViewChange} />
+      <ViewToggle view={view} onViewChange={onViewChange} compact={compact} />
     </div>
   );
 }
@@ -665,6 +718,7 @@ function DebugParametersPanel(args: {
 export function App() {
   const initialMode = readInitialMode();
   const initialCameraState = readInitialCameraState();
+  const isCompactViewport = useCompactViewport();
   const restoredGraphicsSettingsRef = useRef<StoredGraphicsSettings | null>(
     null,
   );
@@ -988,11 +1042,15 @@ export function App() {
         onShareLocation={handleShareLocation}
         view={view}
         onViewChange={handleViewChange}
+        compact={isCompactViewport}
       />
 
-      <LoadingIndicator visible={isLoadingBreakdownActive(loadingBreakdown)} />
+      <LoadingIndicator
+        visible={isLoadingBreakdownActive(loadingBreakdown)}
+        compact={isCompactViewport}
+      />
 
-      {layerVisibility.debug && (
+      {layerVisibility.debug && !isCompactViewport && (
         <>
           <DebugStatsPanel chunkStats={chunkStats} />
           <DebugParametersPanel
@@ -1017,7 +1075,7 @@ export function App() {
         style={{
           display: "none",
           position: "absolute",
-          top: 12,
+          top: isCompactViewport ? 54 : 12,
           left: "50%",
           transform: "translateX(-50%)",
           zIndex: 1000,
@@ -1034,24 +1092,71 @@ export function App() {
         }}
       />
 
-      <MapControlsPanel
-        view={view}
-        activeGraphicsPresetId={activeGraphicsPresetId}
-        applyGraphicsPreset={applyGraphicsPreset}
-        layerVisibility={layerVisibility}
-        handleLayerVisibilityChange={handleLayerVisibilityChange}
-      />
+      {isCompactViewport ? (
+        <MobileHudTray
+          showDebugTab={layerVisibility.debug}
+          controlsContent={
+            <MapControlsContent
+              view={view}
+              activeGraphicsPresetId={activeGraphicsPresetId}
+              applyGraphicsPreset={applyGraphicsPreset}
+              layerVisibility={layerVisibility}
+              handleLayerVisibilityChange={handleLayerVisibilityChange}
+              compact={true}
+            />
+          }
+          worldContent={
+            <InfoPanelContent
+              worldData={worldData}
+              players={players.data}
+              lastUpdateAt={lastUpdateAt}
+              zoomLevel={currentZoom}
+              onPlayerClick={handlePlayerClick}
+              onSpawnClick={handleSpawnClick}
+              compact={true}
+            />
+          }
+          debugContent={
+            <>
+              <DebugStatsContent chunkStats={chunkStats} />
+              <DebugParametersContent
+                view={view}
+                mapDebugSettings={mapDebugSettings}
+                setMapDebugSettings={setMapDebugSettings}
+                renderDistance={renderDistance}
+                setRenderDistance={setRenderDistance}
+                voxelLod1MaxDist={voxelLod1MaxDist}
+                setVoxelLod1MaxDist={setVoxelLod1MaxDist}
+                minRenderedVoxelLod={minRenderedVoxelLod}
+                setMinRenderedVoxelLod={setMinRenderedVoxelLod}
+                layerVisibility={layerVisibility}
+                setLayerVisibility={setLayerVisibility}
+              />
+            </>
+          }
+        />
+      ) : (
+        <MapControlsPanel
+          view={view}
+          activeGraphicsPresetId={activeGraphicsPresetId}
+          applyGraphicsPreset={applyGraphicsPreset}
+          layerVisibility={layerVisibility}
+          handleLayerVisibilityChange={handleLayerVisibilityChange}
+        />
+      )}
 
       <style>{`@keyframes cubyz-half-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
-      <InfoPanel
-        worldData={worldData}
-        players={players.data}
-        lastUpdateAt={lastUpdateAt}
-        zoomLevel={currentZoom}
-        onPlayerClick={handlePlayerClick}
-        onSpawnClick={handleSpawnClick}
-      />
+      {!isCompactViewport && (
+        <InfoPanel
+          worldData={worldData}
+          players={players.data}
+          lastUpdateAt={lastUpdateAt}
+          zoomLevel={currentZoom}
+          onPlayerClick={handlePlayerClick}
+          onSpawnClick={handleSpawnClick}
+        />
+      )}
     </div>
   );
 }

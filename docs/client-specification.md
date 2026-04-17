@@ -28,7 +28,7 @@ src/client/
 ## Entry Points
 
 - `src/client/main.tsx`: boots React and creates the shared React Query client
-- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, persisted graphics parameters, debug state, loading indicator state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes local helpers for the toolbar, stats panel, controls panel, and debug-parameters panel around the main scene.
+- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, persisted graphics parameters, debug state, loading indicator state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes either the desktop floating overlays or the compact mobile HUD tray around the main scene.
 
 ## World-View Feature
 
@@ -45,8 +45,10 @@ src/client/
 - Three.js handles the renderer, scene, camera, controls, meshes, labels, markers, and animation loop; the Parameters panel can cap that loop between `30` and `120` FPS, with an `Uncapped` stop shown to the right of `120` and stored internally as `0`
 - When the scene is settled, no keyboard input is active, no work queues are pending, and the mouse is not hovering the canvas, the runtime can drop to a lower user-configured idle FPS after a short internal delay. Idle mode also uses a slower internal LOD polling interval.
 - On startup, the client restores persisted graphics preset values and custom parameter overrides from `localStorage`, then keeps those settings in sync as the user changes voxel rendering and parameter-panel values
+- On compact viewports the client replaces the floating corner panels with a bottom docked `Cubyz Map Viewer` tray. The tray is button-driven with collapsed and expanded states, keeps the share-location button in the top toolbar beside the terrain/voxel toggle, and groups controls, world info, and debug content into tabs so the map stays visible on smaller devices.
+- `MobileHudTray.tsx` is the compact HUD shell; `mobileHudContents.tsx` holds reusable content blocks shared with the desktop overlays.
 - Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
-- Touch uses drag-to-pan and pinch-to-zoom, while a press-and-hold gesture shows world coordinates without stealing normal map drag interactions. The coordinate HUD lingers briefly after touch release so it stays readable.
+- Touch uses drag-to-pan and pinch-to-zoom, while a tap-and-hold gesture shows world coordinates without stealing normal map drag interactions. The coordinate HUD lingers briefly after touch release so it stays readable. A two-finger drag orbits the camera on touch devices.
 - `World3DView.tsx` is the boundary between those two layers
 - `App.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
 

@@ -15,6 +15,7 @@ interface LayerControlsProps {
   visibility: LayerVisibility;
   onChange: (next: LayerVisibility) => void;
   view: "terrain" | "voxel";
+  compact?: boolean;
 }
 
 interface ToggleButtonProps {
@@ -23,7 +24,12 @@ interface ToggleButtonProps {
   onToggle: () => void;
 }
 
-function ToggleButton({ label, active, onToggle }: ToggleButtonProps) {
+function ToggleButton({
+  label,
+  active,
+  onToggle,
+  compact = false,
+}: ToggleButtonProps & { compact?: boolean }) {
   return (
     <button
       type="button"
@@ -32,10 +38,10 @@ function ToggleButton({ label, active, onToggle }: ToggleButtonProps) {
         display: "flex",
         alignItems: "center",
         gap: 6,
-        padding: "6px 8px",
+        padding: compact ? "8px 10px" : "6px 8px",
         border: `2px solid ${active ? uiTheme.accent.border : uiTheme.panel.buttonBorderMuted}`,
         cursor: "pointer",
-        fontSize: 12,
+        fontSize: compact ? 13 : 12,
         fontWeight: 400,
         background: active
           ? uiTheme.accent.surface
@@ -70,6 +76,7 @@ export function LayerControls({
   visibility,
   onChange,
   view,
+  compact = false,
 }: LayerControlsProps) {
   function toggle(key: keyof LayerVisibility) {
     onChange({ ...visibility, [key]: !visibility[key] });
@@ -81,16 +88,19 @@ export function LayerControls({
         label="Biome Labels"
         active={visibility.biomeLabels}
         onToggle={() => toggle("biomeLabels")}
+        compact={compact}
       />
       <ToggleButton
         label="Players"
         active={visibility.players}
         onToggle={() => toggle("players")}
+        compact={compact}
       />
       <ToggleButton
         label="Spawn"
         active={visibility.spawn}
         onToggle={() => toggle("spawn")}
+        compact={compact}
       />
       {view === "voxel" && (
         <>
@@ -98,11 +108,13 @@ export function LayerControls({
             label="Terrain Underlay"
             active={visibility.showVoxelTerrain}
             onToggle={() => toggle("showVoxelTerrain")}
+            compact={compact}
           />
           <ToggleButton
             label="Debug"
             active={visibility.debug}
             onToggle={() => toggle("debug")}
+            compact={compact}
           />
         </>
       )}
@@ -111,6 +123,7 @@ export function LayerControls({
           label="Debug"
           active={visibility.debug}
           onToggle={() => toggle("debug")}
+          compact={compact}
         />
       )}
     </div>

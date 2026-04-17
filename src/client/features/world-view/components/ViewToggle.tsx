@@ -3,9 +3,14 @@ import { uiTheme } from "../../../shared/ui/theme.js";
 interface ViewToggleProps {
   view: "terrain" | "voxel";
   onViewChange: (view: "terrain" | "voxel") => void;
+  compact?: boolean;
 }
 
-export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
+export function ViewToggle({
+  view,
+  onViewChange,
+  compact = false,
+}: ViewToggleProps) {
   return (
     <div
       style={{
@@ -22,10 +27,10 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
         type="button"
         onClick={() => onViewChange("terrain")}
         style={{
-          padding: "8px 16px",
+          padding: compact ? "7px 12px" : "8px 16px",
           border: "none",
           cursor: "pointer",
-          fontSize: 13,
+          fontSize: compact ? 12 : 13,
           fontWeight: 400,
           textTransform: "uppercase",
           background:
@@ -42,11 +47,11 @@ export function ViewToggle({ view, onViewChange }: ViewToggleProps) {
         type="button"
         onClick={() => onViewChange("voxel")}
         style={{
-          padding: "8px 16px",
+          padding: compact ? "7px 12px" : "8px 16px",
           border: "none",
           borderLeft: `2px solid ${uiTheme.panel.buttonBorder}`,
           cursor: "pointer",
-          fontSize: 13,
+          fontSize: compact ? 12 : 13,
           fontWeight: 400,
           textTransform: "uppercase",
           background:
