@@ -11,7 +11,7 @@ import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import {
   createEmptyLoadingBreakdown,
   type LoadingBreakdown,
-} from "../debug.js";
+} from "../../../lib/world-view-debug.js";
 import type {
   ChunkIndexEntry,
   SurfaceIndexEntry,

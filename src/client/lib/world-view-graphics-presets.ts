@@ -1,4 +1,4 @@
-import type { MapDebugSettings } from "../debug.js";
+import type { MapDebugSettings } from "./world-view-debug.js";
 
 const MB = 1024 * 1024;
 

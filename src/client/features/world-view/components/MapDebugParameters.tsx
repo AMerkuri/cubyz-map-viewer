@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { uiTheme } from "../../../shared/ui/theme.js";
+import { uiTheme } from "../../../lib/ui-theme.js";
 import {
   MAP_DEBUG_PARAMETER_DEFINITIONS,
   type MapDebugParameterDefinition,
   type MapDebugSettings,
-} from "../debug.js";
+} from "../../../lib/world-view-debug.js";
 import { LOD_LEVELS } from "../lib/constants.js";
 
 interface MapDebugParametersProps {

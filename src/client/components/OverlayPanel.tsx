@@ -5,7 +5,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { uiTheme } from "./theme.js";
+import { uiTheme } from "../lib/ui-theme.js";
 
 interface OverlayPanelProps {
   title: string;
@@ -220,17 +220,21 @@ export function OverlayPanel({
 
           const panel = panelRef.current;
           if (!panel) return;
-          const rect = panel.getBoundingClientRect();
+
+          const currentPanelPosition =
+            panelPosition ??
+            getDefaultPanelPosition(panel, position, defaultPosition);
 
           dragStateRef.current = {
             pointerId: event.pointerId,
             startPointerX: event.clientX,
             startPointerY: event.clientY,
-            startLeft: rect.left,
-            startTop: rect.top,
+            startLeft: currentPanelPosition.left,
+            startTop: currentPanelPosition.top,
           };
           setDragging(true);
-          (event.currentTarget as HTMLDivElement).setPointerCapture(
+          bringPanelToFront(panelStackIdRef.current);
+          (event.currentTarget as HTMLElement).setPointerCapture(
             event.pointerId,
           );
         }}
@@ -240,45 +244,39 @@ export function OverlayPanel({
           justifyContent: "space-between",
           gap: 8,
           padding: "8px 10px",
+          background: "rgba(88, 62, 45)",
           borderBottom: collapsed
             ? "none"
             : `2px solid ${uiTheme.panel.border}`,
-          background: "rgba(88, 62, 45)",
-          cursor: absolute ? "grab" : "default",
+          color: uiTheme.text.secondary,
+          cursor: absolute ? (dragging ? "grabbing" : "grab") : "default",
+          touchAction: absolute ? "none" : undefined,
           userSelect: "none",
-          touchAction: "none",
+          textTransform: "uppercase",
+          fontSize: 14,
+          fontWeight: 400,
+          textShadow: "2px 2px 0 rgba(0,0,0,0.8)",
         }}
       >
-        <div
-          style={{
-            color: uiTheme.accent.title,
-            fontSize: 14,
-            fontWeight: 400,
-            textTransform: "uppercase",
-            textShadow: "2px 2px 0 rgba(0,0,0,0.8)",
-          }}
-        >
-          {title}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ color: uiTheme.accent.title }}>{title}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {headerRight}
-          {moved && absolute && (
+          {moved && (
             <button
               type="button"
               onClick={() => setPanelPosition(null)}
+              title="Reset position"
               style={headerButtonStyle}
-              title="Reset panel position"
-              aria-label="Reset panel position"
             >
-              <ResetGlyph />
+              {String.fromCharCode(8634).slice(0, RESET_GLYPH_SIZE)}
             </button>
           )}
           {collapsible && (
             <button
               type="button"
-              onClick={() => setCollapsed((v) => !v)}
+              onClick={() => setCollapsed((value) => !value)}
+              title={collapsed ? "Expand panel" : "Collapse panel"}
               style={headerButtonStyle}
-              title={collapsed ? "Restore panel" : "Minimize panel"}
             >
               {collapsed ? "+" : "-"}
             </button>
@@ -288,9 +286,8 @@ export function OverlayPanel({
       {!collapsed && (
         <div
           style={{
-            padding: "8px 10px",
-            maxHeight: "min(70vh, calc(100vh - 96px))",
-            overflowY: "auto",
+            padding: "10px 12px",
+            color: uiTheme.text.secondary,
             ...contentStyle,
           }}
         >
@@ -299,150 +296,6 @@ export function OverlayPanel({
       )}
     </div>
   );
-}
-
-function clampPositionToViewport(
-  position: PanelPosition,
-  panel: HTMLDivElement,
-): PanelPosition {
-  const rect = panel.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const bounds = getPanelBounds(rect, viewportWidth, viewportHeight);
-  let nextPosition = clampPositionToBounds(position, bounds);
-
-  if (Math.abs(nextPosition.left - bounds.minLeft) <= SNAP_DISTANCE_PX) {
-    nextPosition = { ...nextPosition, left: bounds.minLeft };
-  }
-  if (Math.abs(nextPosition.left - bounds.maxLeft) <= SNAP_DISTANCE_PX) {
-    nextPosition = { ...nextPosition, left: bounds.maxLeft };
-  }
-  if (Math.abs(nextPosition.top - bounds.minTop) <= SNAP_DISTANCE_PX) {
-    nextPosition = { ...nextPosition, top: bounds.minTop };
-  }
-  if (Math.abs(nextPosition.top - bounds.maxTop) <= SNAP_DISTANCE_PX) {
-    nextPosition = { ...nextPosition, top: bounds.maxTop };
-  }
-
-  return clampPositionToBounds(nextPosition, bounds);
-}
-
-function subscribeToPanelStack(listener: () => void) {
-  panelStackListeners.add(listener);
-  return () => {
-    panelStackListeners.delete(listener);
-  };
-}
-
-function getPanelStackSnapshot(id: number): string {
-  return `${panelStackOrder.indexOf(id)}:${panelStackOrder.length}`;
-}
-
-function registerPanel(id: number) {
-  if (panelStackOrder.includes(id)) return;
-
-  panelStackOrder.push(id);
-  notifyPanelStackListeners();
-}
-
-function unregisterPanel(id: number) {
-  const panelIndex = panelStackOrder.indexOf(id);
-  if (panelIndex === -1) return;
-
-  panelStackOrder.splice(panelIndex, 1);
-  notifyPanelStackListeners();
-}
-
-function bringPanelToFront(id: number) {
-  const panelIndex = panelStackOrder.indexOf(id);
-  if (panelIndex === -1 || panelIndex === panelStackOrder.length - 1) return;
-
-  panelStackOrder.splice(panelIndex, 1);
-  panelStackOrder.push(id);
-  notifyPanelStackListeners();
-}
-
-function notifyPanelStackListeners() {
-  for (const listener of panelStackListeners) {
-    listener();
-  }
-}
-
-function getStackedPanelZIndex(
-  requestedZIndex: number,
-  panelStackIndex: number,
-  panelStackCount: number,
-): number {
-  const panelLayerCeiling = Math.max(
-    1,
-    Math.min(requestedZIndex, PANEL_LAYER_MAX_Z_INDEX),
-  );
-
-  if (panelStackIndex < 0 || panelStackCount <= 1) {
-    return panelLayerCeiling;
-  }
-
-  return Math.min(
-    panelLayerCeiling,
-    Math.max(1, panelLayerCeiling - panelStackCount + panelStackIndex + 1),
-  );
-}
-
-function getDefaultPanelPosition(
-  panel: HTMLDivElement,
-  position: OverlayPanelProps["position"],
-  fallback: PanelPosition | null,
-): PanelPosition {
-  const rect = panel.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-
-  return {
-    left:
-      position?.left ??
-      (position?.right !== undefined
-        ? viewportWidth - rect.width - position.right
-        : (fallback?.left ?? rect.left)),
-    top:
-      position?.top ??
-      (position?.bottom !== undefined
-        ? viewportHeight - rect.height - position.bottom
-        : (fallback?.top ?? rect.top)),
-  };
-}
-
-function arePanelPositionsEqual(
-  first: PanelPosition,
-  second: PanelPosition,
-): boolean {
-  return first.left === second.left && first.top === second.top;
-}
-
-function clampPositionToBounds(
-  position: PanelPosition,
-  bounds: PanelBounds,
-): PanelPosition {
-  return {
-    left: Math.round(clamp(position.left, bounds.minLeft, bounds.maxLeft)),
-    top: Math.round(clamp(position.top, bounds.minTop, bounds.maxTop)),
-  };
-}
-
-function getPanelBounds(
-  rect: DOMRect,
-  viewportWidth: number,
-  viewportHeight: number,
-): PanelBounds {
-  return {
-    minLeft: VIEWPORT_EDGE_PADDING_PX,
-    maxLeft: viewportWidth - rect.width - VIEWPORT_EDGE_PADDING_PX,
-    minTop: VIEWPORT_EDGE_PADDING_PX,
-    maxTop: viewportHeight - rect.height - VIEWPORT_EDGE_PADDING_PX,
-  };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }
 
 const headerButtonStyle: React.CSSProperties = {
@@ -461,22 +314,128 @@ const headerButtonStyle: React.CSSProperties = {
   fontSize: 14,
 };
 
-function ResetGlyph() {
-  return (
-    <svg
-      width={RESET_GLYPH_SIZE}
-      height={RESET_GLYPH_SIZE}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      style={{ pointerEvents: "none", display: "block" }}
-    >
-      <path d="M3 12a9 9 0 1 0 3-6.708" />
-      <path d="M3 3v6h6" />
-    </svg>
+function getDefaultPanelPosition(
+  panel: HTMLDivElement,
+  position: OverlayPanelProps["position"],
+  fallback: PanelPosition | null,
+): PanelPosition {
+  const panelWidth = panel.offsetWidth;
+  const panelHeight = panel.offsetHeight;
+  const maxLeft = Math.max(
+    VIEWPORT_EDGE_PADDING_PX,
+    window.innerWidth - panelWidth - VIEWPORT_EDGE_PADDING_PX,
   );
+  const maxTop = Math.max(
+    VIEWPORT_EDGE_PADDING_PX,
+    window.innerHeight - panelHeight - VIEWPORT_EDGE_PADDING_PX,
+  );
+
+  const left =
+    position?.left ??
+    (position?.right !== undefined
+      ? window.innerWidth - panelWidth - position.right
+      : (fallback?.left ?? VIEWPORT_EDGE_PADDING_PX));
+  const top =
+    position?.top ??
+    (position?.bottom !== undefined
+      ? window.innerHeight - panelHeight - position.bottom
+      : (fallback?.top ?? VIEWPORT_EDGE_PADDING_PX));
+
+  return {
+    left: clamp(left, VIEWPORT_EDGE_PADDING_PX, maxLeft),
+    top: clamp(top, VIEWPORT_EDGE_PADDING_PX, maxTop),
+  };
+}
+
+function clampPositionToViewport(
+  position: PanelPosition,
+  panel: HTMLDivElement,
+): PanelPosition {
+  const bounds = getPanelBounds(panel);
+  const snappedLeft = snapCoordinate(
+    position.left,
+    bounds.minLeft,
+    bounds.maxLeft,
+  );
+  const snappedTop = snapCoordinate(position.top, bounds.minTop, bounds.maxTop);
+
+  return {
+    left: clamp(snappedLeft, bounds.minLeft, bounds.maxLeft),
+    top: clamp(snappedTop, bounds.minTop, bounds.maxTop),
+  };
+}
+
+function getPanelBounds(panel: HTMLDivElement): PanelBounds {
+  return {
+    minLeft: VIEWPORT_EDGE_PADDING_PX,
+    maxLeft: Math.max(
+      VIEWPORT_EDGE_PADDING_PX,
+      window.innerWidth - panel.offsetWidth - VIEWPORT_EDGE_PADDING_PX,
+    ),
+    minTop: VIEWPORT_EDGE_PADDING_PX,
+    maxTop: Math.max(
+      VIEWPORT_EDGE_PADDING_PX,
+      window.innerHeight - panel.offsetHeight - VIEWPORT_EDGE_PADDING_PX,
+    ),
+  };
+}
+
+function snapCoordinate(value: number, min: number, max: number) {
+  if (Math.abs(value - min) <= SNAP_DISTANCE_PX) return min;
+  if (Math.abs(value - max) <= SNAP_DISTANCE_PX) return max;
+  return value;
+}
+
+function arePanelPositionsEqual(
+  a: PanelPosition | null,
+  b: PanelPosition | null,
+) {
+  return a?.left === b?.left && a?.top === b?.top;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function subscribeToPanelStack(listener: () => void) {
+  panelStackListeners.add(listener);
+  return () => {
+    panelStackListeners.delete(listener);
+  };
+}
+
+function emitPanelStackChange() {
+  for (const listener of panelStackListeners) listener();
+}
+
+function registerPanel(id: number) {
+  if (!panelStackOrder.includes(id)) {
+    panelStackOrder.push(id);
+    emitPanelStackChange();
+  }
+}
+
+function unregisterPanel(id: number) {
+  const index = panelStackOrder.indexOf(id);
+  if (index !== -1) {
+    panelStackOrder.splice(index, 1);
+    emitPanelStackChange();
+  }
+}
+
+function bringPanelToFront(id: number) {
+  const index = panelStackOrder.indexOf(id);
+  if (index === -1 || index === panelStackOrder.length - 1) return;
+  panelStackOrder.splice(index, 1);
+  panelStackOrder.push(id);
+  emitPanelStackChange();
+}
+
+function getPanelStackSnapshot(id: number) {
+  return `${panelStackOrder.indexOf(id)}:${panelStackOrder.length}`;
+}
+
+function getStackedPanelZIndex(base: number, index: number, count: number) {
+  if (index < 0 || count <= 1) return base;
+  return Math.min(base + index, base + PANEL_LAYER_MAX_Z_INDEX);
 }

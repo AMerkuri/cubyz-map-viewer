@@ -1,0 +1,108 @@
+import { uiTheme } from "../../../lib/ui-theme.js";
+import type { ChunkStats } from "../../../lib/world-view-debug.js";
+import {
+  formatMemoryBytes,
+  formatNullableBytes,
+} from "../../../utils/world-view-formatters.js";
+
+export function StatsSectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        color: uiTheme.accent.text,
+        fontWeight: 400,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <div>Mode: {chunkStats.mode === "terrain" ? "Terrain" : "Voxel"}</div>
+      <div>Focus LOD: {chunkStats.focusLod}</div>
+      <div>FPS: {chunkStats.fps}</div>
+      <div>Loading chunks: {chunkStats.loading}</div>
+      <div>Loaded chunks: {chunkStats.loaded}</div>
+
+      <StatsSectionTitle>Loading breakdown</StatsSectionTitle>
+      <div>Terrain loading: {chunkStats.loadingBreakdown.terrain}</div>
+      <div>Voxel loading: {chunkStats.loadingBreakdown.voxels}</div>
+      <div>Fetch queue: {chunkStats.loadingBreakdown.fetchQueue}</div>
+      <div>Mesh queue: {chunkStats.loadingBreakdown.meshQueue}</div>
+
+      <StatsSectionTitle>Voxel health</StatsSectionTitle>
+      <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
+      <div>Failed regions: {chunkStats.voxelHealth.failed}</div>
+
+      <StatsSectionTitle>Loaded by LOD</StatsSectionTitle>
+      <div>
+        {([1, 2, 4, 8, 16, 32] as const)
+          .map((lod) => `L${lod}:${chunkStats.loadedByLod[lod] ?? 0}`)
+          .join("  ")}
+      </div>
+
+      <StatsSectionTitle>Estimated Memory</StatsSectionTitle>
+      <div>Total: {formatMemoryBytes(chunkStats.memoryBytes)}</div>
+      <div>
+        Terrain: {formatMemoryBytes(chunkStats.memoryBreakdown.terrain)}
+      </div>
+      <div>Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}</div>
+      <div>
+        Terrain warm cache:{" "}
+        {formatMemoryBytes(chunkStats.memoryBreakdown.cachedTerrain)} (
+        {chunkStats.warmCacheCount.terrain})
+      </div>
+      <div>
+        Voxel warm cache:{" "}
+        {formatMemoryBytes(chunkStats.memoryBreakdown.cachedVoxels)} (
+        {chunkStats.warmCacheCount.voxels})
+      </div>
+      <div>Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}</div>
+      <div>
+        JS heap:{" "}
+        {chunkStats.jsHeapBytes === null
+          ? "n/a"
+          : formatMemoryBytes(chunkStats.jsHeapBytes)}
+      </div>
+
+      <StatsSectionTitle>Memory by LOD</StatsSectionTitle>
+      <div>
+        {([1, 2, 4, 8, 16, 32] as const)
+          .map(
+            (lod) =>
+              `L${lod}:${formatMemoryBytes(chunkStats.memoryByLod[lod] ?? 0)}`,
+          )
+          .join("  ")}
+      </div>
+
+      <StatsSectionTitle>Voxel Benchmark</StatsSectionTitle>
+      <div>Samples: {chunkStats.voxelBenchmark.samples}</div>
+      <div>Encoding: {chunkStats.voxelBenchmark.contentEncoding ?? "n/a"}</div>
+      <div>Avg fetch: {chunkStats.voxelBenchmark.avgFetchMs.toFixed(1)} ms</div>
+      <div>
+        Avg decode: {chunkStats.voxelBenchmark.avgDecodeMs.toFixed(1)} ms
+      </div>
+      <div>Avg total: {chunkStats.voxelBenchmark.avgTotalMs.toFixed(1)} ms</div>
+      <div>
+        Avg transfer:{" "}
+        {formatNullableBytes(chunkStats.voxelBenchmark.avgTransferBytes)}
+      </div>
+      <div>
+        Avg encoded:{" "}
+        {formatNullableBytes(chunkStats.voxelBenchmark.avgEncodedBodyBytes)}
+      </div>
+      <div>
+        Avg decoded:{" "}
+        {formatNullableBytes(chunkStats.voxelBenchmark.avgDecodedBodyBytes)}
+      </div>
+      <div>
+        Avg worker input:{" "}
+        {formatNullableBytes(chunkStats.voxelBenchmark.avgRawBufferBytes)}
+      </div>
+    </div>
+  );
+}

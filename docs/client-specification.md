@@ -6,58 +6,107 @@ The client is a React 19 application that composes the UI and delegates 3D scene
 
 This document describes client-owned behavior. Shared contracts such as coordinates, LODs, transport roles, and event names are defined in `docs/architecture-overview.md`.
 
+The client follows a Bulletproof React-style project structure: application composition lives in `app/`, feature-specific code lives in `features/`, shared UI components live in `components/`, shared hooks in `hooks/`, reusable client infrastructure in `lib/`, shared type contracts in `types/`, and pure helpers in `utils/`. Reference: https://raw.githubusercontent.com/alan2207/bulletproof-react/refs/heads/master/docs/project-structure.md
+
 ## Top-Level Structure
 
 ```text
 src/client/
   app/
     App.tsx
+    components/
+      CursorHud.tsx
+      WorldViewHud.tsx
+      WorldViewPage.tsx
+      WorldViewPageContent.tsx
+      WorldViewScene.tsx
+    hooks/
+      useWorldViewRefreshSubscriptions.ts
+      useWorldViewShareLocation.ts
+  components/
+    OverlayPanel.tsx
   features/
+    world-controls/
+      components/
+      WorldControlsProvider.tsx
     world-view/
       components/
       hooks/
       lib/
       workers/
-      debug.ts
-  shared/
-    ui/
-      OverlayPanel.tsx
+  hooks/
+    useCompactViewport.ts
+  lib/
+    ui-theme.ts
+    world-view-debug.ts
+    world-view-graphics-presets.ts
+    world-view-storage.ts
+    world-view-url-state.ts
+  types/
+    world-view.ts
+  utils/
+    world-view-formatters.ts
   main.tsx
 ```
 
 ## Entry Points
 
 - `src/client/main.tsx`: boots React and creates the shared React Query client
-- `src/client/app/App.tsx`: owns the current view mode, initial camera state, share-location state, layer visibility, voxel preset selection, persisted graphics parameters, debug state, loading indicator state, overlay placement, and the lazy-loading boundary for optional debug UI. It composes either the desktop floating overlays or the compact mobile HUD tray around the main scene.
+- `src/client/app/App.tsx`: thin entry component that renders the world-view page
+- `src/client/app/components/WorldViewPage.tsx`: bootstrap component that reads initial URL state and mounts the page-level provider tree
+- `src/client/app/components/WorldViewPageContent.tsx`: application composition root that wires live data, controls state, share-location behavior, scene callbacks, and the desktop/mobile HUD shells
+- `src/client/app/components/WorldViewScene.tsx`: thin adapter that connects app-level composition to `World3DView`
+- `src/client/app/components/WorldViewHud.tsx`: app-level chrome that composes controls, info overlays, loading feedback, and the compact/mobile HUD
+- `src/client/app/hooks/useWorldViewShareLocation.ts`: isolated clipboard/share-location state and URL generation flow
+- `src/client/app/hooks/useWorldViewRefreshSubscriptions.ts`: isolated WebSocket-driven invalidation flow for world and index queries
+
+## World-Controls Feature
+
+- `features/world-controls/WorldControlsProvider.tsx`: owns the low-frequency viewer control state with a reducer-backed context, including view mode, layer visibility, persisted graphics settings, active preset detection, debug panel state, and fly-to requests
+- `features/world-controls/components`: HUD, controls, toolbar, loading indicator, desktop debug panels, and the compact mobile tray
+- `world-controls` depends on shared client `lib/`, `types/`, and `components/`, but not on `world-view/lib`, so the scene/runtime feature stays isolated from UI-only concerns
 
 ## World-View Feature
 
-- `features/world-view/components`: scene UI, info panel, controls, mode toggle, and debug parameters
+- `features/world-view/components`: scene boundary, info panel, and debug parameter form
 - `MapDebugParameters.tsx` is section-driven and reuses shared parameter-row chrome for sliders and resets, including performance controls for active and idle frame rate
 - `features/world-view/hooks`: world data, player data, and WebSocket hooks
 - `features/world-view/lib`: scene bootstrap, camera behavior, terrain loading, voxel scheduling, labels, markers, and feature types
 - `features/world-view/workers`: `voxel-mesh.worker.ts` decodes mesh data off the main thread
-- `features/world-view/debug.ts`: debug tuning defaults and chunk stats shape
+
+## Shared Client Layers
+
+- `components/OverlayPanel.tsx`: shared draggable/collapsible panel chrome used across desktop overlays
+- `hooks/useCompactViewport.ts`: shared viewport-size hook used by app composition
+- `lib/ui-theme.ts`: shared HUD design tokens used by app and feature UI
+- `lib/world-view-debug.ts`: debug tuning defaults, parameter definitions, loading breakdown shape, and chunk stats contract
+- `lib/world-view-graphics-presets.ts`: preset definitions and matching logic shared by controls and scene configuration
+- `lib/world-view-storage.ts`: localStorage schema/versioning and persisted graphics settings helpers
+- `lib/world-view-url-state.ts`: initial mode/camera parsing and share-location URL generation
+- `types/world-view.ts`: shared mode, camera, layer visibility, share state, and fly-to contracts
+- `utils/world-view-formatters.ts`: lightweight display helpers used by HUD and debug overlays
 
 ## Rendering Model
 
 - React handles composition, data fetching, overlays, and socket subscription
+- `WorldControlsProvider` keeps low-frequency controls in context so `App.tsx` stays small while high-frequency scene output remains outside shared context
+- App composition follows a unidirectional shape consistent with Bulletproof React: shared client layers feed features, and `app/` is the layer where `world-controls` and `world-view` are composed together.
 - Three.js handles the renderer, scene, camera, controls, meshes, labels, markers, and animation loop; the Parameters panel can cap that loop between `30` and `120` FPS, with an `Uncapped` stop shown to the right of `120` and stored internally as `0`
 - When the scene is settled, no keyboard input is active, no work queues are pending, and the mouse is not hovering the canvas, the runtime can drop to a lower user-configured idle FPS after a short internal delay. Idle mode also uses a slower internal LOD polling interval.
 - On startup, the client restores persisted graphics preset values and custom parameter overrides from `localStorage`, then keeps those settings in sync as the user changes voxel rendering and parameter-panel values
 - On compact viewports the client replaces the floating corner panels with a bottom docked `Cubyz Map Viewer` tray. The tray is button-driven with collapsed and expanded states, keeps the share-location button in the top toolbar beside the terrain/voxel toggle, and groups controls, world info, and debug content into tabs so the map stays visible on smaller devices.
-- `MobileHudTray.tsx` is the compact HUD shell; `mobileHudContents.tsx` holds reusable content blocks shared with the desktop overlays.
+- `features/world-controls/components/MobileHudTray.tsx` is the compact HUD shell, and its tab content reuses the same control/debug/info components as the desktop overlays through `WorldViewHud.tsx`.
 - Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
 - Touch uses drag-to-pan and pinch-to-zoom, while a tap-and-hold gesture shows world coordinates without stealing normal map drag interactions. The coordinate HUD lingers briefly after touch release so it stays readable. A two-finger drag orbits the camera on touch devices.
 - `World3DView.tsx` is the boundary between those two layers
-- `App.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
+- `WorldViewPageContent.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
 
 ## Data Flow
 
 ### Initial Load
 
 1. `main.tsx` creates the React Query client and renders `App`.
-2. `App` loads world data, players, and the WebSocket connection.
+2. `WorldViewPageContent` loads world data, players, and the WebSocket connection.
 3. `World3DView` initializes once world data is available.
 4. Terrain and voxel resources load from camera position and the current mode.
 5. Player marker model/texture assets load lazily once the player layer is visible or player data is present, and marker styling reads the server-provided `isActive` flag instead of recomputing stale state client-side.
@@ -76,13 +125,13 @@ src/client/
 
 ### Voxel Mode
 
-1. `App` enables chunk index loading.
+1. `WorldControlsProvider` enables chunk index loading once the user enters voxel mode.
 2. `useWorldData` fetches `/api/world/chunk-index`.
 3. The voxel runtime selects regions based on camera focus, distance, render distance, minimum voxel LOD, and preset tuning.
 4. `/api/voxels/:lod/:regionX/:regionY` returns compressed binary payloads with `max-age=0` and ETag revalidation.
 5. The worker converts mesh buffers into typed arrays, bakes voxel face shading plus a wall depth gradient into base vertex colors, and keeps raw per-face AO separate from those base colors.
 6. The main thread uploads the data to Three.js geometries within a frame budget and applies final seam-aware AO after voxel LOD visibility and parent-child fallback coverage are resolved. Top-face AO runs on `L1` and `L2`, while side faces currently rely on the baked face tint and depth cue only. The Parameters panel exposes a runtime AO intensity control for tuning the top-face effect.
-7. The 3D runtime also publishes a lightweight loading breakdown every frame, and `App` uses it to drive the spinner even when debug stats are hidden.
+7. The 3D runtime also publishes a lightweight loading breakdown every frame, and `WorldViewHud` uses it to drive the spinner even when debug stats are hidden.
 8. Cursor hover prefers voxel meshes and falls back to the terrain underlay when enabled, converting the underlay hit back to the terrain's real world height.
 9. Transient hover suppression from held keys or pointer drags is reset when the browser window loses focus so OS-level app switching cannot leave the coordinate HUD stuck hidden after returning.
 
@@ -108,9 +157,10 @@ src/client/
 
 ## Design Principles
 
-- keep feature code in `world-view` unless it is truly reusable
+- keep scene/runtime code in `world-view`, control and HUD code in `world-controls`, and shared cross-feature code in `components/`, `hooks/`, `lib/`, `types/`, and `utils/`
 - keep React responsible for composition, not per-frame 3D updates
 - prefer direct imports over barrels
+- compose features at the `app/` layer instead of importing feature internals across features
 - use bounded queues and frame budgets for heavy terrain and voxel processing
 - cap the shared render loop when lower idle CPU is preferable to max refresh-rate rendering
 - prefer a lower idle frame rate once the scene is settled and the user is no longer interacting with the canvas

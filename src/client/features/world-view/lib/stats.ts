@@ -1,4 +1,4 @@
-import type { ChunkStats } from "../debug.js";
+import type { ChunkStats } from "../../../lib/world-view-debug.js";
 
 import {
   addMemoryToLod,

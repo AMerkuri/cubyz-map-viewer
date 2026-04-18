@@ -1,20 +1,13 @@
-import { uiTheme } from "../../../shared/ui/theme.js";
-
-export interface LayerVisibility {
-  biomeLabels: boolean;
-  players: boolean;
-  spawn: boolean;
-  debug: boolean;
-  chunkBorders: boolean;
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
-  voxelHeightLabels: boolean;
-}
+import { uiTheme } from "../../../lib/ui-theme.js";
+import type {
+  LayerVisibility,
+  WorldViewMode,
+} from "../../../types/world-view.js";
 
 interface LayerControlsProps {
   visibility: LayerVisibility;
   onChange: (next: LayerVisibility) => void;
-  view: "terrain" | "voxel";
+  view: WorldViewMode;
   compact?: boolean;
 }
 

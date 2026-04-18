@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
-import type { MapDebugSettings } from "../debug.js";
+import type { MapDebugSettings } from "../../../lib/world-view-debug.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 import {

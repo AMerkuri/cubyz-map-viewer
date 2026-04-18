@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react";
-import { uiTheme } from "../shared/ui/theme.js";
+import { uiTheme } from "../../../lib/ui-theme.js";
 
 export type MobileHudTab = "controls" | "world" | "debug";
 

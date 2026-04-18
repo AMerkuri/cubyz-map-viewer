@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { OverlayPanel } from "../../../shared/ui/OverlayPanel.js";
+import { OverlayPanel } from "../../../components/OverlayPanel.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 import { cleanPlayerName } from "../lib/utils.js";

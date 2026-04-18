@@ -1,8 +1,9 @@
-import { uiTheme } from "../../../shared/ui/theme.js";
+import { uiTheme } from "../../../lib/ui-theme.js";
+import type { WorldViewMode } from "../../../types/world-view.js";
 
 interface ViewToggleProps {
-  view: "terrain" | "voxel";
-  onViewChange: (view: "terrain" | "voxel") => void;
+  view: WorldViewMode;
+  onViewChange: (view: WorldViewMode) => void;
   compact?: boolean;
 }
 

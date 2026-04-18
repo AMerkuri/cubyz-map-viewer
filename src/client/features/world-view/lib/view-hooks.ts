@@ -6,7 +6,7 @@ import {
   type ChunkStats,
   createEmptyChunkStats,
   type MapDebugSettings,
-} from "../debug.js";
+} from "../../../lib/world-view-debug.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { TerrainUpdatesBatchEvent } from "../hooks/useWebSocket.js";
 import type {
