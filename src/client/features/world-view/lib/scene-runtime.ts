@@ -295,6 +295,7 @@ export function initializeSceneRuntime(args: {
   let fpsValue = 0;
   let nextFrameAt = performance.now();
   let nextLodPollAt = performance.now() + ACTIVE_LOD_POLL_INTERVAL_MS;
+  let lastMotionFrameAt = performance.now();
   let isPointerOverCanvas = false;
   let isPointerInteracting = false;
   let lastActiveAt = performance.now();
@@ -364,9 +365,17 @@ export function initializeSceneRuntime(args: {
       nextFrameAt = now;
     }
 
-    updateKeyboardCameraMotion(camera, controls, keysHeldRef.current);
+    const deltaSeconds = Math.min((now - lastMotionFrameAt) / 1000, 0.25);
+    lastMotionFrameAt = now;
 
-    controls.update();
+    updateKeyboardCameraMotion(
+      camera,
+      controls,
+      keysHeldRef.current,
+      deltaSeconds,
+    );
+
+    controls.update(deltaSeconds);
     updateMarkerScales(camera, controls);
 
     const builtTerrainTile = buildQueuedTerrainMeshes();

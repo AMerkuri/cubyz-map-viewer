@@ -66,11 +66,13 @@ export function updateKeyboardCameraMotion(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   keys: Set<string>,
+  deltaSeconds: number,
 ): void {
   if (keys.size === 0) return;
 
   const dist = camera.position.distanceTo(controls.target);
-  const speed = Math.max(1, dist * 0.015);
+  const frameScale = deltaSeconds * 60;
+  const speed = Math.max(1, dist * 0.015) * frameScale;
 
   const fwdX = controls.target.x - camera.position.x;
   const fwdY = controls.target.y - camera.position.y;
@@ -123,7 +125,10 @@ export function updateKeyboardCameraMotion(
   if (keys.has("KeyE")) rotateDir += 1;
   if (rotateDir !== 0) {
     const offset = camera.position.clone().sub(controls.target);
-    offset.applyAxisAngle(new THREE.Vector3(0, 0, 1), rotateDir * 0.025);
+    offset.applyAxisAngle(
+      new THREE.Vector3(0, 0, 1),
+      rotateDir * 0.025 * frameScale,
+    );
     camera.position.copy(controls.target).add(offset);
   }
 }
