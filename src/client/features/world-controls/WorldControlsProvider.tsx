@@ -55,7 +55,10 @@ type WorldControlsContextValue = {
   updateMinRenderedVoxelLod: (value: number) => void;
   setChunkBorders: (active: boolean) => void;
   setVoxelHeightLabels: (active: boolean) => void;
-  flyToPosition: (pos: [number, number, number]) => void;
+  flyToPosition: (
+    pos: [number, number, number],
+    preserveHeight?: boolean,
+  ) => void;
   setChunkStats: (stats: ChunkStats) => void;
   setLoadingBreakdown: (loadingBreakdown: LoadingBreakdown) => void;
 };
@@ -72,7 +75,7 @@ type WorldControlsAction =
   | { type: "set-render-distance"; value: number }
   | { type: "set-voxel-lod1-max-dist"; value: number }
   | { type: "set-min-rendered-voxel-lod"; value: number }
-  | { type: "fly-to"; pos: [number, number, number] }
+  | { type: "fly-to"; pos: [number, number, number]; preserveHeight: boolean }
   | { type: "set-chunk-stats"; stats: ChunkStats }
   | { type: "set-loading-breakdown"; loadingBreakdown: LoadingBreakdown };
 
@@ -170,6 +173,7 @@ function worldControlsReducer(
         ...state,
         flyToRequest: {
           pos: action.pos,
+          preserveHeight: action.preserveHeight,
           key: (state.flyToRequest?.key ?? 0) + 1,
         },
       };
@@ -316,8 +320,8 @@ export function WorldControlsProvider({
           },
         });
       },
-      flyToPosition(pos) {
-        dispatch({ type: "fly-to", pos });
+      flyToPosition(pos, preserveHeight = false) {
+        dispatch({ type: "fly-to", pos, preserveHeight });
       },
       setChunkStats(stats) {
         dispatch({ type: "set-chunk-stats", stats });

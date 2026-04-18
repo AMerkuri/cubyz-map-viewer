@@ -17,6 +17,7 @@ import type {
 import {
   applyInitialCameraState,
   focusCameraOnWorldPosition,
+  panCameraToWorldPosition,
 } from "./camera.js";
 import { TERRAIN_UNDERLAY_OFFSET_Z } from "./constants.js";
 import { initializeSceneRuntime } from "./scene-runtime.js";
@@ -629,15 +630,28 @@ export function useWorld3DUpdateSubscription(args: {
 export function useWorld3DFlyToEffect(args: {
   flyToRequest: World3DViewProps["flyToRequest"];
   sceneRef: { current: SceneRuntimeState | null };
+  terrainGroupRef: { current: THREE.Group | null };
+  voxelGroupRef: { current: THREE.Group | null };
 }): void {
-  const { flyToRequest, sceneRef } = args;
+  const { flyToRequest, sceneRef, terrainGroupRef, voxelGroupRef } = args;
 
   useEffect(() => {
     if (!flyToRequest || !sceneRef.current) return;
+    if (flyToRequest.preserveHeight) {
+      panCameraToWorldPosition(
+        sceneRef.current.camera,
+        sceneRef.current.controls,
+        flyToRequest.pos,
+        terrainGroupRef.current,
+        voxelGroupRef.current,
+      );
+      return;
+    }
+
     focusCameraOnWorldPosition(
       sceneRef.current.camera,
       sceneRef.current.controls,
       flyToRequest.pos,
     );
-  }, [flyToRequest, sceneRef]);
+  }, [flyToRequest, sceneRef, terrainGroupRef, voxelGroupRef]);
 }

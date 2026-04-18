@@ -28,5 +28,6 @@ export type LayerVisibility = {
 
 export type FlyToRequest = {
   pos: [number, number, number];
+  preserveHeight: boolean;
   key: number;
 };

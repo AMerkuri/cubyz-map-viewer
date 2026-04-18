@@ -101,6 +101,7 @@ src/client/
 - Touch uses drag-to-pan and pinch-to-zoom, while a tap-and-hold gesture shows world coordinates without stealing normal map drag interactions. The coordinate HUD lingers briefly after touch release so it stays readable. A two-finger drag orbits the camera on touch devices.
 - `World3DView.tsx` is the boundary between those two layers
 - `WorldViewPageContent.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
+- Clicking a player pans to their `x` and `y` while keeping the camera above visible terrain or voxel geometry, so underground targets do not pull the view into the ground.
 
 ## Data Flow
 

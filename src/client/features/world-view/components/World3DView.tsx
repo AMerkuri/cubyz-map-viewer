@@ -1422,6 +1422,8 @@ export function World3DView({
   useWorld3DFlyToEffect({
     flyToRequest,
     sceneRef,
+    terrainGroupRef,
+    voxelGroupRef,
   });
 
   return (

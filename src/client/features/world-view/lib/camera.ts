@@ -9,6 +9,9 @@ import {
 import type { InitialCameraState } from "./types.js";
 import { worldToScene } from "./utils.js";
 
+const PLAYER_FOCUS_CLEARANCE_Z = 16;
+const PLAYER_FOCUS_RAYCAST_START_Z = 10_000;
+
 export function focusCameraOnWorldPosition(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
@@ -19,6 +22,68 @@ export function focusCameraOnWorldPosition(
   controls.target.set(sx, sy, sz);
   camera.position.copy(controls.target).add(offset);
   controls.update();
+}
+
+export function panCameraToWorldPosition(
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls,
+  worldPos: [number, number, number],
+  terrainGroup: THREE.Object3D | null,
+  voxelGroup: THREE.Object3D | null,
+): void {
+  const [sx, sy] = worldToScene(worldPos[0], worldPos[1], worldPos[2]);
+  const offset = camera.position.clone().sub(controls.target);
+
+  const target = controls.target.clone();
+  target.set(sx, sy, target.z);
+
+  const cameraPos = target.clone().add(offset);
+  const surfaceZ = findVisibleSurfaceZAtWorldPosition({
+    camera,
+    controls,
+    worldX: sx,
+    worldY: sy,
+    terrainGroup,
+    voxelGroup,
+  });
+
+  if (surfaceZ !== null && cameraPos.z < surfaceZ + PLAYER_FOCUS_CLEARANCE_Z) {
+    const lift = surfaceZ + PLAYER_FOCUS_CLEARANCE_Z - cameraPos.z;
+    target.z += lift;
+    cameraPos.z += lift;
+  }
+
+  controls.target.copy(target);
+  camera.position.copy(cameraPos);
+  controls.update();
+}
+
+function findVisibleSurfaceZAtWorldPosition(args: {
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  worldX: number;
+  worldY: number;
+  terrainGroup: THREE.Object3D | null;
+  voxelGroup: THREE.Object3D | null;
+}): number | null {
+  const { camera, controls, worldX, worldY, terrainGroup, voxelGroup } = args;
+  const raycaster = new THREE.Raycaster();
+  raycaster.ray.origin.set(
+    worldX,
+    worldY,
+    Math.max(camera.position.z, controls.target.z) +
+      PLAYER_FOCUS_RAYCAST_START_Z,
+  );
+  raycaster.ray.direction.set(0, 0, -1);
+
+  const intersections = raycaster.intersectObjects(
+    [terrainGroup, voxelGroup].filter(
+      (group): group is THREE.Object3D => group !== null,
+    ),
+    true,
+  );
+
+  return intersections[0]?.point.z ?? null;
 }
 
 export function applyInitialCameraState(args: {

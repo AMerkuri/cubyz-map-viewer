@@ -222,5 +222,9 @@ export interface World3DViewProps {
     theta: number;
     phi: number;
   }) => void;
-  flyToRequest: { pos: [number, number, number]; key: number } | null;
+  flyToRequest: {
+    pos: [number, number, number];
+    preserveHeight: boolean;
+    key: number;
+  } | null;
 }
