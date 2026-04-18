@@ -251,18 +251,6 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.maxVoxelMeshesPerFrame,
   },
   {
-    key: "voxelAoIntensity",
-    section: "LOD",
-    label: "Voxel AO Intensity",
-    description:
-      "Scales top-face voxel ambient occlusion strength after LOD visibility is resolved. Lower values flatten shading, higher values deepen creases.",
-    min: 0,
-    max: 1.5,
-    step: 0.05,
-    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelAoIntensity,
-    decimals: 2,
-  },
-  {
     key: "terrainLodHysteresisRatio",
     section: "LOD",
     label: "Terrain LOD Hysteresis",

@@ -181,6 +181,8 @@ export function OverlayPanel({
     : zIndex;
   const panelContainerStyle: React.CSSProperties = {
     position: absolute ? "absolute" : "relative",
+    display: "flex",
+    flexDirection: "column",
     ...(absolute
       ? panelPosition
         ? { left: panelPosition.left, top: panelPosition.top }
@@ -192,6 +194,8 @@ export function OverlayPanel({
     borderRadius: 0,
     boxShadow: uiTheme.panel.shadow,
     backdropFilter: "blur(5px)",
+    maxHeight: absolute ? "calc(100vh - 24px)" : undefined,
+    overflow: "hidden",
     minWidth,
     maxWidth,
     imageRendering: "pixelated",
@@ -286,6 +290,8 @@ export function OverlayPanel({
       {!collapsed && (
         <div
           style={{
+            minHeight: 0,
+            overflowY: "auto",
             padding: "10px 12px",
             color: uiTheme.text.secondary,
             ...contentStyle,

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { uiTheme } from "../../../lib/ui-theme.js";
 import {
+  DEFAULT_MAP_DEBUG_SETTINGS,
   MAP_DEBUG_PARAMETER_DEFINITIONS,
   type MapDebugParameterDefinition,
   type MapDebugSettings,
@@ -179,7 +180,7 @@ export function MapDebugParameters({
               min={0}
               max={1.5}
               step={0.05}
-              defaultValue={1}
+              defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelAoIntensity}
               onChange={(value) =>
                 onChange({ ...settings, voxelAoIntensity: value })
               }
