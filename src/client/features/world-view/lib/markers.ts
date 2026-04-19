@@ -182,7 +182,45 @@ function createPlayerMarkerRoot(args: {
   return root;
 }
 
-function updateGroupMarkerScale(group: THREE.Group | null, scale: number) {
+function updateRootMarkerScale(root: THREE.Object3D, scale: number) {
+  for (const nestedChild of root.children) {
+    if (
+      !(nestedChild instanceof THREE.Object3D) ||
+      nestedChild instanceof CSS2DObject
+    ) {
+      continue;
+    }
+    if (nestedChild.userData.markerScalable !== true) {
+      continue;
+    }
+    nestedChild.scale.setScalar(scale);
+  }
+
+  for (const nestedChild of root.children) {
+    if (!(nestedChild instanceof CSS2DObject)) {
+      continue;
+    }
+    const visualRoot = nestedChild.userData.markerLabelVisualRoot as
+      | THREE.Group
+      | undefined;
+    const baseOffset = nestedChild.userData.markerLabelBaseOffset;
+    const dynamicWithScale =
+      nestedChild.userData.markerLabelDynamicWithScale === true;
+    if (
+      !visualRoot ||
+      typeof baseOffset !== "number" ||
+      visualRoot.parent !== root
+    ) {
+      continue;
+    }
+    nestedChild.position.z = dynamicWithScale ? baseOffset * scale : baseOffset;
+  }
+}
+
+function updateGroupMarkerScale(
+  group: THREE.Group | null,
+  getScale: (root: THREE.Object3D) => number,
+) {
   if (!group) {
     return;
   }
@@ -191,49 +229,15 @@ function updateGroupMarkerScale(group: THREE.Group | null, scale: number) {
     if (!(child instanceof THREE.Object3D) || child instanceof CSS2DObject) {
       continue;
     }
-
-    for (const nestedChild of child.children) {
-      if (
-        !(nestedChild instanceof THREE.Object3D) ||
-        nestedChild instanceof CSS2DObject
-      ) {
-        continue;
-      }
-      if (nestedChild.userData.markerScalable !== true) {
-        continue;
-      }
-      nestedChild.scale.setScalar(scale);
-    }
-
-    for (const nestedChild of child.children) {
-      if (!(nestedChild instanceof CSS2DObject)) {
-        continue;
-      }
-      const visualRoot = nestedChild.userData.markerLabelVisualRoot as
-        | THREE.Group
-        | undefined;
-      const baseOffset = nestedChild.userData.markerLabelBaseOffset;
-      const dynamicWithScale =
-        nestedChild.userData.markerLabelDynamicWithScale === true;
-      if (
-        !visualRoot ||
-        typeof baseOffset !== "number" ||
-        visualRoot.parent !== child
-      ) {
-        continue;
-      }
-      nestedChild.position.z = dynamicWithScale
-        ? baseOffset * scale
-        : baseOffset;
-    }
+    updateRootMarkerScale(child, getScale(child));
   }
 }
 
 export function updatePlayerMarkerScale(
   markerGroup: THREE.Group | null,
-  scale: number,
+  getScale: (root: THREE.Object3D) => number,
 ) {
-  updateGroupMarkerScale(markerGroup, scale);
+  updateGroupMarkerScale(markerGroup, getScale);
 }
 
 export function rebuildSpawnMarker(args: {

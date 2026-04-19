@@ -117,10 +117,11 @@ import {
 
 export type { InitialCameraState } from "../lib/types.js";
 
-const PLAYER_MARKER_BASE_SCALE = 3.2;
+const PLAYER_MARKER_BASE_SCALE = 4;
 const PLAYER_MARKER_SCALE_REFERENCE_DISTANCE = 200;
 const PLAYER_MARKER_MIN_SCALE = 1;
-const PLAYER_MARKER_MAX_SCALE = 25;
+const PLAYER_MARKER_MAX_SCALE = 100;
+const TEMP_TO_MARKER = new THREE.Vector3();
 
 export function World3DView({
   mode,
@@ -1048,16 +1049,18 @@ export function World3DView({
       return;
     }
 
-    const cameraDistance = scene.camera.position.distanceTo(
-      scene.controls.target,
-    );
-    const playerScale = THREE.MathUtils.clamp(
-      (cameraDistance / PLAYER_MARKER_SCALE_REFERENCE_DISTANCE) *
-        PLAYER_MARKER_BASE_SCALE,
-      PLAYER_MARKER_MIN_SCALE,
-      PLAYER_MARKER_MAX_SCALE,
-    );
-    updatePlayerMarkerScale(markerGroup, playerScale);
+    updatePlayerMarkerScale(markerGroup, (root) => {
+      const markerDistance = Math.max(
+        1,
+        TEMP_TO_MARKER.copy(root.position).sub(scene.camera.position).length(),
+      );
+      return THREE.MathUtils.clamp(
+        (markerDistance / PLAYER_MARKER_SCALE_REFERENCE_DISTANCE) *
+          PLAYER_MARKER_BASE_SCALE,
+        PLAYER_MARKER_MIN_SCALE,
+        PLAYER_MARKER_MAX_SCALE,
+      );
+    });
   }
 
   function handleTileUpdate(lod: number, tileX: number, tileY: number) {

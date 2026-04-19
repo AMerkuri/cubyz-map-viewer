@@ -115,6 +115,7 @@ src/client/
 4. Terrain and voxel resources load from camera position and the current mode.
 5. Player marker model/texture assets load lazily once the player layer is visible or player data is present, and marker styling reads the server-provided `isActive` flag instead of recomputing stale state client-side.
 6. If the `snale` assets fail to load, the viewer retries once and falls back to a visible marker sprite so players stay visible on the map.
+7. Player marker models scale directly from each marker's Euclidean camera distance rather than from the orbit target distance, so zooming away from a player reliably grows that player's world-space model regardless of whether the player is above or below the current focus plane.
 
 ### Terrain Mode
 
