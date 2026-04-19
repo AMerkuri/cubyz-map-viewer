@@ -7,7 +7,7 @@ import { worldToScene } from "./utils.js";
 
 const PLAYER_LABEL_HEADROOM = 3.5;
 const DOT_LABEL_PIXEL_OFFSET = 40;
-const PLAYER_GROUND_OFFSET_RATIO = 0.4;
+const PLAYER_GROUND_OFFSET_RATIO = 0.3;
 const PLAYER_GROUND_OFFSET_CLEARANCE = 0.1;
 
 function createMarkerRoot(position: [number, number, number]): THREE.Group {
