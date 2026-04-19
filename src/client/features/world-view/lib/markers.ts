@@ -7,6 +7,8 @@ import { worldToScene } from "./utils.js";
 
 const PLAYER_LABEL_HEADROOM = 3.5;
 const DOT_LABEL_PIXEL_OFFSET = 40;
+const PLAYER_GROUND_OFFSET_RATIO = 0.4;
+const PLAYER_GROUND_OFFSET_CLEARANCE = 0.1;
 
 function createMarkerRoot(position: [number, number, number]): THREE.Group {
   const root = new THREE.Group();
@@ -31,6 +33,14 @@ interface PlayerMarkerState {
 function getModelLabelOffset(marker: THREE.Object3D): number {
   const bounds = new THREE.Box3().setFromObject(marker);
   return Math.max(bounds.max.z, 0) + PLAYER_LABEL_HEADROOM;
+}
+
+function getModelGroundOffset(marker: THREE.Object3D): number {
+  const bounds = new THREE.Box3().setFromObject(marker);
+  return Math.max(
+    bounds.max.z * PLAYER_GROUND_OFFSET_RATIO - PLAYER_GROUND_OFFSET_CLEARANCE,
+    0,
+  );
 }
 
 function setMarkerLabelMetadata(args: {
@@ -99,6 +109,7 @@ function createPlayerMarkerVisuals(args: {
   const marker =
     createPlayerMarkerModel(player) ?? createFallbackPlayerMarker(grayscale);
   const usesModel = !(marker instanceof CSS2DObject);
+  const groundOffsetBase = usesModel ? getModelGroundOffset(marker) : 0;
   const label = createFormattedPlayerLabel(
     player.name,
     grayscale,
@@ -117,6 +128,7 @@ function createPlayerMarkerVisuals(args: {
     grayscale,
     usesModel,
     labelBaseOffset,
+    groundOffsetBase,
   };
 }
 
@@ -150,15 +162,22 @@ function createPlayerMarkerRoot(args: {
   );
   const root = createMarkerRoot([px, py, pz]);
   const visualRoot = createMarkerVisualRoot();
-  const { marker, label, grayscale, usesModel, labelBaseOffset } =
-    createPlayerMarkerVisuals({
-      player,
-      createPlayerMarkerModel,
-      createFormattedPlayerLabel,
-    });
+  const {
+    marker,
+    label,
+    grayscale,
+    usesModel,
+    labelBaseOffset,
+    groundOffsetBase,
+  } = createPlayerMarkerVisuals({
+    player,
+    createPlayerMarkerModel,
+    createFormattedPlayerLabel,
+  });
 
   root.userData.playerMarkerRoot = true;
   root.userData.playerKey = player.name;
+  visualRoot.userData.markerGroundOffsetBase = groundOffsetBase;
 
   visualRoot.add(marker);
   root.add(visualRoot);
@@ -194,6 +213,10 @@ function updateRootMarkerScale(root: THREE.Object3D, scale: number) {
       continue;
     }
     nestedChild.scale.setScalar(scale);
+    const groundOffsetBase = nestedChild.userData.markerGroundOffsetBase;
+    if (typeof groundOffsetBase === "number") {
+      nestedChild.position.z = -groundOffsetBase * scale;
+    }
   }
 
   for (const nestedChild of root.children) {
@@ -213,7 +236,11 @@ function updateRootMarkerScale(root: THREE.Object3D, scale: number) {
     ) {
       continue;
     }
-    nestedChild.position.z = dynamicWithScale ? baseOffset * scale : baseOffset;
+    const groundOffsetBase =
+      (visualRoot.userData.markerGroundOffsetBase as number | undefined) ?? 0;
+    nestedChild.position.z = dynamicWithScale
+      ? (baseOffset - groundOffsetBase) * scale
+      : baseOffset - groundOffsetBase;
   }
 }
 
@@ -396,6 +423,7 @@ export function syncPlayerMarkers(args: {
         grayscale: nextGrayscale,
         usesModel,
         labelBaseOffset,
+        groundOffsetBase,
       } = createPlayerMarkerVisuals({
         player,
         createPlayerMarkerModel,
@@ -403,6 +431,7 @@ export function syncPlayerMarkers(args: {
       });
 
       state.visualRoot.add(marker);
+      state.visualRoot.userData.markerGroundOffsetBase = groundOffsetBase;
       setMarkerLabelMetadata({
         label,
         visualRoot: state.visualRoot,
