@@ -251,6 +251,8 @@ export function useWorld3DSceneRuntime(args: {
 export function useWorld3DInitialization(args: {
   initializedRef: { current: boolean };
   sceneRef: { current: SceneRuntimeState | null };
+  terrainGroupRef: { current: THREE.Group | null };
+  voxelGroupRef: { current: THREE.Group | null };
   worldDataLoading: boolean;
   surfaceIndex: SurfaceIndexEntry[];
   chunkIndex: ChunkIndexEntry[];
@@ -269,6 +271,8 @@ export function useWorld3DInitialization(args: {
   const {
     initializedRef,
     sceneRef,
+    terrainGroupRef,
+    voxelGroupRef,
     worldDataLoading,
     surfaceIndex,
     chunkIndex,
@@ -303,6 +307,8 @@ export function useWorld3DInitialization(args: {
       controls,
       initialCameraState,
       spawn,
+      terrainGroup: terrainGroupRef.current,
+      voxelGroup: voxelGroupRef.current,
     });
 
     onAddSpawnMarker();
@@ -316,6 +322,8 @@ export function useWorld3DInitialization(args: {
     initialCameraState,
     initializedRef,
     sceneRef,
+    terrainGroupRef,
+    voxelGroupRef,
     surfaceIndexRef,
     chunkIndexRef,
   ]);

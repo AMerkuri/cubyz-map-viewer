@@ -60,7 +60,7 @@ export function WorldViewPageContent({
 
   const handlePlayerClick = useCallback(
     (player: PlayerData) => {
-      flyToPosition(player.position, true);
+      flyToPosition(player.position);
     },
     [flyToPosition],
   );

@@ -106,6 +106,7 @@ export function createMarkerLabel(
 export function createFormattedPlayerLabel(
   name: string,
   grayscale = false,
+  depthCue: string | null = null,
   pixelOffset = 4,
 ): CSS2DObject {
   const wrapper = document.createElement("div");
@@ -118,6 +119,7 @@ export function createFormattedPlayerLabel(
   const div = document.createElement("div");
   div.style.cssText = [
     "display: inline-block",
+    "text-align: center",
     "font-size: 20px",
     "font-family: 'Unscii', monospace",
     "font-weight: 700",
@@ -127,10 +129,32 @@ export function createFormattedPlayerLabel(
     `transform: translate(-50%, calc(-100% - ${pixelOffset}px))`,
   ].join(";");
 
+  const nameRow = document.createElement("div");
+  nameRow.style.cssText = [
+    "display: inline-block",
+    "white-space: nowrap",
+    "text-align: center",
+  ].join(";");
+
   const segments = parseFormattedPlayerName(name);
 
   for (const segment of segments) {
-    appendPlayerLabelSegment(div, segment, grayscale);
+    appendPlayerLabelSegment(nameRow, segment, grayscale);
+  }
+
+  div.appendChild(nameRow);
+
+  if (depthCue) {
+    const depth = document.createElement("div");
+    depth.textContent = depthCue;
+    depth.style.color = "#aab5c1";
+    depth.style.fontSize = "10px";
+    depth.style.fontWeight = "600";
+    depth.style.marginTop = "5px";
+    depth.style.letterSpacing = "0.02em";
+    depth.style.textAlign = "center";
+    depth.style.whiteSpace = "nowrap";
+    div.appendChild(depth);
   }
 
   wrapper.appendChild(div);
@@ -216,6 +240,7 @@ export function createGrayscaleTexture(texture: THREE.Texture): THREE.Texture {
 export function createPlayerMarkerModel(
   template: THREE.Object3D,
   texture: THREE.Texture,
+  underground = false,
 ): THREE.Object3D {
   const model = template.clone(true);
 
@@ -229,6 +254,7 @@ export function createPlayerMarkerModel(
       depthTest: false,
       depthWrite: false,
       color: 0xffffff,
+      opacity: underground ? 0.6 : 1,
     });
     child.castShadow = false;
     child.receiveShadow = false;

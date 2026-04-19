@@ -12,6 +12,10 @@ import { worldToScene } from "./utils.js";
 const PLAYER_FOCUS_CLEARANCE_Z = 16;
 const PLAYER_FOCUS_RAYCAST_START_Z = 10_000;
 
+function getSpawnFallbackSurfaceZ(worldPos: [number, number, number]): number {
+  return worldPos[2] + PLAYER_FOCUS_CLEARANCE_Z;
+}
+
 export function focusCameraOnWorldPosition(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
@@ -20,6 +24,30 @@ export function focusCameraOnWorldPosition(
   const [sx, sy, sz] = worldToScene(worldPos[0], worldPos[1], worldPos[2]);
   const offset = camera.position.clone().sub(controls.target);
   controls.target.set(sx, sy, sz);
+  camera.position.copy(controls.target).add(offset);
+  controls.update();
+}
+
+export function focusCameraOnVisibleSurfacePosition(
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls,
+  worldPos: [number, number, number],
+  terrainGroup: THREE.Object3D | null,
+  voxelGroup: THREE.Object3D | null,
+): void {
+  const [sx, sy] = worldToScene(worldPos[0], worldPos[1], worldPos[2]);
+  const offset = camera.position.clone().sub(controls.target);
+  const surfaceZ = findVisibleSurfaceZAtWorldPosition({
+    camera,
+    controls,
+    worldX: sx,
+    worldY: sy,
+    terrainGroup,
+    voxelGroup,
+  });
+  const targetZ = surfaceZ ?? getSpawnFallbackSurfaceZ(worldPos);
+
+  controls.target.set(sx, sy, targetZ);
   camera.position.copy(controls.target).add(offset);
   controls.update();
 }
@@ -91,8 +119,17 @@ export function applyInitialCameraState(args: {
   controls: OrbitControls;
   initialCameraState: InitialCameraState | null;
   spawn: [number, number, number] | null | undefined;
+  terrainGroup: THREE.Object3D | null;
+  voxelGroup: THREE.Object3D | null;
 }): void {
-  const { camera, controls, initialCameraState, spawn } = args;
+  const {
+    camera,
+    controls,
+    initialCameraState,
+    spawn,
+    terrainGroup,
+    voxelGroup,
+  } = args;
 
   if (initialCameraState) {
     const { pos, zoom, theta, phi } = initialCameraState;
@@ -115,15 +152,24 @@ export function applyInitialCameraState(args: {
 
   if (!spawn) return;
 
-  const [sx, sy, sz] = worldToScene(spawn[0], spawn[1], spawn[2]);
+  const [sx, sy] = worldToScene(spawn[0], spawn[1], spawn[2]);
   const baseZoom = Math.hypot(DEFAULT_START_OFFSET_Y, DEFAULT_START_OFFSET_Z);
   const zoomScale = INITIAL_CAMERA_ZOOM / baseZoom;
+  const surfaceZ = findVisibleSurfaceZAtWorldPosition({
+    camera,
+    controls,
+    worldX: sx,
+    worldY: sy,
+    terrainGroup,
+    voxelGroup,
+  });
+  const targetZ = surfaceZ ?? getSpawnFallbackSurfaceZ(spawn);
   camera.position.set(
     sx,
     sy - DEFAULT_START_OFFSET_Y * zoomScale,
-    sz + DEFAULT_START_OFFSET_Z * zoomScale,
+    targetZ + DEFAULT_START_OFFSET_Z * zoomScale,
   );
-  controls.target.set(sx, sy, sz);
+  controls.target.set(sx, sy, targetZ);
   controls.update();
 }
 

@@ -5,7 +5,7 @@ import type { PlayerData } from "../hooks/usePlayers.js";
 import { createFallbackPlayerMarker } from "./primitives.js";
 import { worldToScene } from "./utils.js";
 
-const PLAYER_LABEL_HEADROOM = 3.5;
+const PLAYER_LABEL_HEADROOM = 1.5;
 const DOT_LABEL_PIXEL_OFFSET = 40;
 const PLAYER_GROUND_OFFSET_RATIO = 0.3;
 const PLAYER_GROUND_OFFSET_CLEARANCE = 0.1;
@@ -27,7 +27,20 @@ interface PlayerMarkerState {
   marker: THREE.Object3D | CSS2DObject;
   label: CSS2DObject;
   grayscale: boolean;
+  underground: boolean;
+  depthCue: string | null;
   usesModel: boolean;
+}
+
+function isPlayerUnderground(player: PlayerData): boolean {
+  return player.position[2] < 0;
+}
+
+function getPlayerDepthCue(player: PlayerData): string | null {
+  if (!isPlayerUnderground(player)) {
+    return null;
+  }
+  return `Below ground: Z ${Math.round(player.position[2])}`;
 }
 
 function getModelLabelOffset(marker: THREE.Object3D): number {
@@ -101,11 +114,13 @@ function createPlayerMarkerVisuals(args: {
   createFormattedPlayerLabel: (
     text: string,
     grayscale?: boolean,
+    depthCue?: string | null,
     pixelOffset?: number,
   ) => CSS2DObject;
 }) {
   const { player, createPlayerMarkerModel, createFormattedPlayerLabel } = args;
   const grayscale = !player.isActive;
+  const underground = isPlayerUnderground(player);
   const marker =
     createPlayerMarkerModel(player) ?? createFallbackPlayerMarker(grayscale);
   const usesModel = !(marker instanceof CSS2DObject);
@@ -113,8 +128,10 @@ function createPlayerMarkerVisuals(args: {
   const label = createFormattedPlayerLabel(
     player.name,
     grayscale,
+    getPlayerDepthCue(player),
     usesModel ? 4 : DOT_LABEL_PIXEL_OFFSET,
   );
+  const depthCue = getPlayerDepthCue(player);
   const labelBaseOffset = usesModel ? getModelLabelOffset(marker) : 0;
 
   label.userData.player = player;
@@ -126,6 +143,8 @@ function createPlayerMarkerVisuals(args: {
     marker,
     label,
     grayscale,
+    underground,
+    depthCue,
     usesModel,
     labelBaseOffset,
     groundOffsetBase,
@@ -151,6 +170,7 @@ function createPlayerMarkerRoot(args: {
   createFormattedPlayerLabel: (
     text: string,
     grayscale?: boolean,
+    depthCue?: string | null,
     pixelOffset?: number,
   ) => CSS2DObject;
 }): THREE.Group {
@@ -166,6 +186,8 @@ function createPlayerMarkerRoot(args: {
     marker,
     label,
     grayscale,
+    underground,
+    depthCue,
     usesModel,
     labelBaseOffset,
     groundOffsetBase,
@@ -195,6 +217,8 @@ function createPlayerMarkerRoot(args: {
     marker,
     label,
     grayscale,
+    underground,
+    depthCue,
     usesModel,
   } satisfies PlayerMarkerState;
 
@@ -324,6 +348,7 @@ export function syncPlayerMarkers(args: {
   createFormattedPlayerLabel: (
     text: string,
     grayscale?: boolean,
+    depthCue?: string | null,
     pixelOffset?: number,
   ) => CSS2DObject;
   disposePlayerMarkerModel: (model: THREE.Object3D) => void;
@@ -404,8 +429,15 @@ export function syncPlayerMarkers(args: {
     }
 
     const grayscale = !player.isActive;
+    const underground = isPlayerUnderground(player);
+    const depthCue = getPlayerDepthCue(player);
     const shouldUseModel = hasPlayerMarkerModel;
-    if (state.grayscale !== grayscale || state.usesModel !== shouldUseModel) {
+    if (
+      state.grayscale !== grayscale ||
+      state.underground !== underground ||
+      state.depthCue !== depthCue ||
+      state.usesModel !== shouldUseModel
+    ) {
       disposeMarkerObject({
         object: state.marker,
         disposePlayerMarkerModel,
@@ -421,6 +453,8 @@ export function syncPlayerMarkers(args: {
         marker,
         label,
         grayscale: nextGrayscale,
+        underground: nextUnderground,
+        depthCue: nextDepthCue,
         usesModel,
         labelBaseOffset,
         groundOffsetBase,
@@ -445,6 +479,8 @@ export function syncPlayerMarkers(args: {
         marker,
         label,
         grayscale: nextGrayscale,
+        underground: nextUnderground,
+        depthCue: nextDepthCue,
         usesModel,
       } satisfies PlayerMarkerState;
       continue;

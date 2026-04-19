@@ -5,7 +5,7 @@ import type { MapDebugSettings } from "../../../lib/world-view-debug.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 import {
-  focusCameraOnWorldPosition,
+  focusCameraOnVisibleSurfacePosition,
   updateKeyboardCameraMotion,
 } from "./camera.js";
 import { createCursorInteractionHandlers } from "./cursor.js";
@@ -20,6 +20,16 @@ const MIN_CAMERA_DISTANCE = 1;
 const ACTIVE_LOD_POLL_INTERVAL_MS = 125;
 const IDLE_LOD_POLL_INTERVAL_MS = 1000;
 const IDLE_ENTER_DELAY_MS = 500;
+const TAP_MOVE_THRESHOLD_PX = 12;
+
+interface TapPointerState {
+  clientX: number;
+  clientY: number;
+  moved: boolean;
+  isPrimary: boolean;
+  pointerType: string;
+  isTapCandidate: boolean;
+}
 
 export function initializeSceneRuntime(args: {
   container: HTMLDivElement;
@@ -263,17 +273,52 @@ export function initializeSceneRuntime(args: {
   function focusCameraOnSpawn() {
     const spawn = worldDataRef.current.worldData?.spawn;
     if (!spawn) return;
-    focusCameraOnWorldPosition(camera, controls, spawn);
+    focusCameraOnVisibleSurfacePosition(
+      camera,
+      controls,
+      spawn,
+      terrainGroupRef.current,
+      voxelGroupRef.current,
+    );
     terrainVisibilityDirtyRef.current = true;
     debugLabelsDirtyRef.current = true;
     biomeLabelsDirtyRef.current = true;
   }
 
-  function handlePlayerMarkerClick(e: PointerEvent) {
-    if (!markerGroupRef.current) return;
+  function markCameraDependentStateDirty() {
+    terrainVisibilityDirtyRef.current = true;
+    debugLabelsDirtyRef.current = true;
+    biomeLabelsDirtyRef.current = true;
+  }
 
+  const activeTapPointers = new Map<number, TapPointerState>();
+
+  function suppressTouchTapCandidates() {
+    for (const pointer of activeTapPointers.values()) {
+      if (pointer.pointerType === "touch") {
+        pointer.isTapCandidate = false;
+      }
+    }
+  }
+
+  function shouldHandleTap(pointer: TapPointerState, e: PointerEvent): boolean {
+    if (!pointer.isTapCandidate || pointer.moved || !pointer.isPrimary) {
+      return false;
+    }
+    if (pointer.pointerType === "touch") {
+      return !cursorHandlers.didTouchHoldActivate(e.pointerId);
+    }
+    return e.button === 0;
+  }
+
+  function resolveTapTarget(
+    e: PointerEvent,
+  ):
+    | { type: "player"; player: PlayerData }
+    | { type: "world"; worldPos: [number, number, number] }
+    | null {
     const rect = renderer.domElement.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
+    if (rect.width === 0 || rect.height === 0) return null;
 
     const pointerNdc = new THREE.Vector2(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -282,17 +327,69 @@ export function initializeSceneRuntime(args: {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointerNdc, camera);
 
-    const intersections = raycaster.intersectObjects(
-      markerGroupRef.current.children,
-      true,
-    );
-    const hit = intersections.find(
-      (entry) => entry.object.userData.playerMarker === true,
-    );
-    const player = hit?.object.userData.player as PlayerData | undefined;
-    if (player) {
-      onPlayerClickRef.current(player);
+    if (markerGroupRef.current) {
+      const markerIntersections = raycaster.intersectObjects(
+        markerGroupRef.current.children,
+        true,
+      );
+      const playerHit = markerIntersections.find(
+        (entry) => entry.object.userData.playerMarker === true,
+      );
+      const player = playerHit?.object.userData.player as
+        | PlayerData
+        | undefined;
+      if (player) {
+        return { type: "player", player };
+      }
     }
+
+    const worldTargets: THREE.Object3D[] = [];
+    if (modeRef.current === "voxel" && voxelGroupRef.current) {
+      worldTargets.push(voxelGroupRef.current);
+    }
+    if (
+      shouldRenderTerrainForMode(
+        modeRef.current,
+        showTerrainRef.current,
+        showVoxelTerrainRef.current,
+      ) &&
+      terrainGroupRef.current
+    ) {
+      worldTargets.push(terrainGroupRef.current);
+    }
+    if (worldTargets.length === 0) return null;
+
+    const intersections = raycaster.intersectObjects(worldTargets, true);
+    const hit = intersections.find((entry) => entry.object.visible);
+    if (!hit) return null;
+
+    return {
+      type: "world",
+      worldPos: [
+        Math.round(hit.point.x),
+        Math.round(hit.point.y),
+        Math.round(hit.point.z),
+      ],
+    };
+  }
+
+  function handleCanvasTap(e: PointerEvent) {
+    const target = resolveTapTarget(e);
+    if (!target) return;
+
+    if (target.type === "player") {
+      onPlayerClickRef.current(target.player);
+      return;
+    }
+
+    focusCameraOnVisibleSurfacePosition(
+      camera,
+      controls,
+      target.worldPos,
+      terrainGroupRef.current,
+      voxelGroupRef.current,
+    );
+    markCameraDependentStateDirty();
   }
 
   let animFrameId = 0;
@@ -500,6 +597,7 @@ export function initializeSceneRuntime(args: {
 
   function resetTransientInputState() {
     keysHeldRef.current.clear();
+    activeTapPointers.clear();
     isPointerInteracting = false;
     cursorHandlers.resetCursorInteractionState();
   }
@@ -514,24 +612,62 @@ export function initializeSceneRuntime(args: {
   }
 
   function onPointerDown(e: PointerEvent) {
+    if (e.pointerType === "touch") {
+      suppressTouchTapCandidates();
+    }
+    activeTapPointers.set(e.pointerId, {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      moved: false,
+      isPrimary: e.isPrimary,
+      pointerType: e.pointerType,
+      isTapCandidate: e.pointerType === "touch" ? e.isPrimary : e.button === 0,
+    });
     isPointerInteracting = true;
     markActive();
     cursorHandlers.onPointerDown(e);
   }
 
+  function updateTapPointerMovement(e: PointerEvent) {
+    const pointer = activeTapPointers.get(e.pointerId);
+    if (!pointer) return;
+    if (
+      Math.abs(e.clientX - pointer.clientX) > TAP_MOVE_THRESHOLD_PX ||
+      Math.abs(e.clientY - pointer.clientY) > TAP_MOVE_THRESHOLD_PX
+    ) {
+      pointer.moved = true;
+      if (pointer.pointerType === "touch") {
+        pointer.isTapCandidate = false;
+      }
+    }
+  }
+
   function onPointerUp(e: PointerEvent) {
+    const tapPointer = activeTapPointers.get(e.pointerId);
+    activeTapPointers.delete(e.pointerId);
     isPointerInteracting = false;
     markActive();
+    if (tapPointer && shouldHandleTap(tapPointer, e)) {
+      handleCanvasTap(e);
+    }
+    if (e.pointerType === "touch") {
+      suppressTouchTapCandidates();
+    }
     cursorHandlers.onPointerUp(e);
   }
 
   function onPointerCancel(e: PointerEvent) {
+    if (e.pointerType === "touch") {
+      suppressTouchTapCandidates();
+    }
+    activeTapPointers.delete(e.pointerId);
     isPointerInteracting = false;
     markActive();
     cursorHandlers.onPointerCancel(e);
   }
 
   function onPointerLeave(e: PointerEvent) {
+    activeTapPointers.delete(e.pointerId);
     isPointerOverCanvas = false;
     isPointerInteracting = false;
     cursorHandlers.onPointerLeave(e);
@@ -565,9 +701,9 @@ export function initializeSceneRuntime(args: {
     "pointermove",
     cursorHandlers.onPointerMove,
   );
+  renderer.domElement.addEventListener("pointermove", updateTapPointerMovement);
   renderer.domElement.addEventListener("pointerdown", onPointerDown);
   renderer.domElement.addEventListener("pointerup", onPointerUp);
-  renderer.domElement.addEventListener("click", handlePlayerMarkerClick);
   renderer.domElement.addEventListener("pointercancel", onPointerCancel);
   renderer.domElement.addEventListener("pointerleave", onPointerLeave);
 
@@ -586,9 +722,12 @@ export function initializeSceneRuntime(args: {
       "pointermove",
       cursorHandlers.onPointerMove,
     );
+    renderer.domElement.removeEventListener(
+      "pointermove",
+      updateTapPointerMovement,
+    );
     renderer.domElement.removeEventListener("pointerdown", onPointerDown);
     renderer.domElement.removeEventListener("pointerup", onPointerUp);
-    renderer.domElement.removeEventListener("click", handlePlayerMarkerClick);
     renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
     renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
     cursorHandlers.resetCursorInteractionState();

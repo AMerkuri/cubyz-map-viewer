@@ -360,10 +360,8 @@ export async function fetchTerrainTile(args: {
       generation,
       meshData,
     });
-  } catch (error) {
-    if (!(error instanceof DOMException && error.name === "AbortError")) {
-      loadingTerrainRef.current.delete(key);
-    }
+  } catch (_error) {
+    loadingTerrainRef.current.delete(key);
   } finally {
     onFinally(key);
   }

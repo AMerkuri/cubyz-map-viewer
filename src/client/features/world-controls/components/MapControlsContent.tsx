@@ -149,6 +149,7 @@ export function MapControlsContent({
         {compact ? (
           <>
             <InstructionTitle>Touch</InstructionTitle>
+            <div>Tap: focus point</div>
             <div>Drag: pan</div>
             <div>Pinch: zoom</div>
             <div>Two-finger drag: orbit</div>
@@ -158,6 +159,7 @@ export function MapControlsContent({
           <>
             <div>
               <InstructionTitle>Mouse</InstructionTitle>
+              <div>Click: focus point</div>
               <div>Left drag: pan</div>
               <div>Right drag: orbit</div>
               <div>Wheel / middle drag: zoom</div>

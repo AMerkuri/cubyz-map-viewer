@@ -9,6 +9,7 @@ const TOUCH_HOLD_LINGER_MS = 1000;
 export interface CursorInteractionHandlers {
   clearCursorRefreshTimer: () => void;
   clearTouchLingerTimer: () => void;
+  didTouchHoldActivate: (pointerId: number) => boolean;
   resetCursorInteractionState: () => void;
   scheduleCursorTooltipRefresh: () => void;
   updateCursorTooltip: () => void;
@@ -188,6 +189,10 @@ export function createCursorInteractionHandlers(args: {
     if (touchHoldTimer === null) return;
     window.clearTimeout(touchHoldTimer);
     touchHoldTimer = null;
+  }
+
+  function didTouchHoldActivate(pointerId: number): boolean {
+    return touchPointerId === pointerId && touchHoldActive;
   }
 
   function isTouchMoveBeyondThreshold(clientX: number, clientY: number) {
@@ -433,6 +438,7 @@ export function createCursorInteractionHandlers(args: {
   return {
     clearCursorRefreshTimer,
     clearTouchLingerTimer,
+    didTouchHoldActivate,
     resetCursorInteractionState,
     scheduleCursorTooltipRefresh,
     updateCursorTooltip,

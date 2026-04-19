@@ -1030,6 +1030,7 @@ export function World3DView({
                 player.isActive
                   ? playerMarkerTexture
                   : playerMarkerGrayscaleTexture,
+                player.position[2] < 0,
               )
           : () => null,
       createFormattedPlayerLabel,
@@ -1354,6 +1355,8 @@ export function World3DView({
   useWorld3DInitialization({
     initializedRef,
     sceneRef,
+    terrainGroupRef,
+    voxelGroupRef,
     worldDataLoading: worldData.loading,
     surfaceIndex: worldData.surfaceIndex,
     chunkIndex: worldData.chunkIndex,

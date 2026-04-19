@@ -100,10 +100,14 @@ src/client/
 - On compact viewports the client replaces the floating corner panels with a bottom docked `Cubyz Map Viewer` tray. The tray is button-driven with collapsed and expanded states, keeps the share-location button in the top toolbar beside the terrain/voxel toggle, and groups controls, world info, and debug content into tabs so the map stays visible on smaller devices.
 - `features/world-controls/components/MobileHudTray.tsx` is the compact HUD shell, and its tab content reuses the same control/debug/info components as the desktop overlays through `WorldViewHud.tsx`.
 - Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
-- Touch uses drag-to-pan and pinch-to-zoom, while a tap-and-hold gesture shows world coordinates without stealing normal map drag interactions. The coordinate HUD lingers briefly after touch release so it stays readable. A two-finger drag orbits the camera on touch devices.
+- A left-click, pen tap, or single-finger tap recenters the view on the hit terrain or voxel point and re-anchors the focus height to that surface, so zoom is local to the clicked location. Tapping a player marker reuses the existing player focus flow. The scene ignores inputs that move beyond a small threshold so drag-to-pan stays reliable.
+- Right-drag remains orbit-only. On touch, pinch zoom and two-finger orbit explicitly suppress tap-to-focus, while tap-and-hold shows world coordinates without triggering focus on release. The coordinate HUD lingers briefly after touch release so it stays readable.
 - `World3DView.tsx` is the boundary between those two layers
 - `WorldViewPageContent.tsx` keeps `World3DView` eager so scene bootstrap stays deterministic, and lazy-loads the debug-parameters panel because it is optional UI
-- Clicking a player pans to their `x` and `y` while keeping the camera above visible terrain or voxel geometry, so underground targets do not pull the view into the ground.
+- Spawn focus keeps the current camera offset but re-anchors orbiting to visible terrain or voxel surface geometry at the spawn `x` and `y`, so zooming can continue down to terrain level instead of staying centered on the raw spawn elevation.
+- When visible terrain or voxel geometry is not loaded yet, initial spawn focus falls back to a lifted spawn-relative height instead of the previous camera target so the camera does not start underground while surface data is still loading.
+- Clicking or tapping a player re-anchors the focus to the player's position, while keeping the camera above visible terrain or voxel geometry when needed, so the zoom level resets around the selected player instead of inheriting the previous focus height.
+- Player markers keep their current world-scaled size when underground. The name and underground note stay center-aligned, underground models drop to `0.6` opacity, and an extra second label line in muted gray shows a smaller `Below ground: Z -34`-style depth cue that updates with the player's live `z` position.
 
 ## Data Flow
 
