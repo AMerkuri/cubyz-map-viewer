@@ -13,7 +13,7 @@ type StoredBiomeLabelsByMode = {
   voxel: boolean;
 };
 
-type StoredLayerVisibility = {
+export type StoredLayerVisibility = {
   players: boolean;
   spawn: boolean;
   debug: boolean;
@@ -96,12 +96,16 @@ export function readStoredGraphicsSettings(): StoredGraphicsSettings | null {
     if (raw === null) return null;
 
     const parsed = JSON.parse(raw) as StoredGraphicsSettingsPayload | null;
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      (parsed.version !== GRAPHICS_SETTINGS_STORAGE_VERSION &&
-        parsed.version !== 1)
-    ) {
+    if (parsed === null || typeof parsed !== "object") {
+      return null;
+    }
+
+    if (parsed.version < GRAPHICS_SETTINGS_STORAGE_VERSION) {
+      window.localStorage.removeItem(GRAPHICS_SETTINGS_STORAGE_KEY);
+      return null;
+    }
+
+    if (parsed.version !== GRAPHICS_SETTINGS_STORAGE_VERSION) {
       return null;
     }
 

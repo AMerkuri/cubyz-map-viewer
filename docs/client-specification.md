@@ -24,7 +24,7 @@ This document covers client-owned architecture and runtime behavior. Shared cont
 - React Query is the source of truth for HTTP data. `main.tsx` sets `staleTime: Infinity`, so refresh is event-driven rather than focus-driven.
 - `useWorldData()` always loads world metadata and the surface index. Chunk-index loading stays disabled until voxel mode is entered.
 - `useWebSocket()` maintains the `/ws` connection, and `useWorldViewRefreshSubscriptions()` maps socket events to query invalidation.
-- `WorldControlsProvider` owns low-frequency UI state and persists graphics/layer settings through `src/client/lib/world-view-storage.ts`.
+- `WorldControlsProvider` owns low-frequency UI state and persists graphics/layer settings through `src/client/lib/world-view-storage.ts`; older stored versions are discarded and the app falls back to defaults.
 - `World3DView.tsx` keeps scene state in refs and delegates most runtime work to `features/world-view/lib/`; avoid moving per-frame state into React state.
 - Terrain and voxel loading both use bounded fetch/build queues plus warm caches to avoid rebuilding everything during camera movement.
 - `src/client/features/world-view/workers/voxel-mesh.worker.ts` decodes voxel mesh payloads off the main thread before Three.js upload.
