@@ -128,15 +128,15 @@ export function InfoPanelContent({
           {players.length > 0 && (
             <div
               style={{
-                marginTop: compact ? 2 : 8,
+                marginTop: 2,
                 borderTop: `2px solid ${infoPanelTheme.border}`,
-                paddingTop: compact ? 2 : 6,
+                paddingTop: compact ? 6 : 8,
               }}
             >
               <div
                 style={{
                   color: infoPanelTheme.muted,
-                  marginBottom: compact ? 0 : 4,
+                  marginBottom: compact ? 2 : 4,
                 }}
               >
                 Players ({players.length})

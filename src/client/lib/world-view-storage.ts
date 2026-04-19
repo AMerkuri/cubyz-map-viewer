@@ -7,7 +7,21 @@ export const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 export const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
 export const GRAPHICS_SETTINGS_STORAGE_KEY =
   "cubyz-map-viewer.graphics-settings";
-export const GRAPHICS_SETTINGS_STORAGE_VERSION = 1;
+export const GRAPHICS_SETTINGS_STORAGE_VERSION = 2;
+
+export type StoredBiomeLabelsByMode = {
+  terrain: boolean;
+  voxel: boolean;
+};
+
+export type StoredLayerVisibility = {
+  players: boolean;
+  spawn: boolean;
+  debug: boolean;
+  showTerrain: boolean;
+  showVoxelTerrain: boolean;
+  biomeLabelsByMode: StoredBiomeLabelsByMode;
+};
 
 export type StoredGraphicsSettings = {
   renderDistance: number;
@@ -18,6 +32,7 @@ export type StoredGraphicsSettings = {
     chunkBorders: boolean;
     voxelHeightLabels: boolean;
   };
+  layerVisibility: StoredLayerVisibility;
 };
 
 type StoredGraphicsSettingsPayload = StoredGraphicsSettings & {
@@ -30,6 +45,34 @@ function readFiniteNumber(value: unknown, fallback: number): number {
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function sanitizeBiomeLabelsByMode(value: unknown): StoredBiomeLabelsByMode {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    terrain: readBoolean((source as Record<string, unknown>).terrain, true),
+    voxel: readBoolean((source as Record<string, unknown>).voxel, false),
+  };
+}
+
+function sanitizeLayerVisibility(value: unknown): StoredLayerVisibility {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    players: readBoolean((source as Record<string, unknown>).players, true),
+    spawn: readBoolean((source as Record<string, unknown>).spawn, true),
+    debug: readBoolean((source as Record<string, unknown>).debug, false),
+    showTerrain: readBoolean(
+      (source as Record<string, unknown>).showTerrain,
+      true,
+    ),
+    showVoxelTerrain: readBoolean(
+      (source as Record<string, unknown>).showVoxelTerrain,
+      false,
+    ),
+    biomeLabelsByMode: sanitizeBiomeLabelsByMode(
+      (source as Record<string, unknown>).biomeLabelsByMode,
+    ),
+  };
 }
 
 function sanitizeMapDebugSettings(value: unknown): MapDebugSettings {
@@ -57,7 +100,8 @@ export function readStoredGraphicsSettings(): StoredGraphicsSettings | null {
     if (
       parsed === null ||
       typeof parsed !== "object" ||
-      parsed.version !== GRAPHICS_SETTINGS_STORAGE_VERSION
+      (parsed.version !== GRAPHICS_SETTINGS_STORAGE_VERSION &&
+        parsed.version !== 1)
     ) {
       return null;
     }
@@ -86,6 +130,7 @@ export function readStoredGraphicsSettings(): StoredGraphicsSettings | null {
           false,
         ),
       },
+      layerVisibility: sanitizeLayerVisibility(parsed.layerVisibility),
     };
   } catch {
     return null;

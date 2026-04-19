@@ -42,7 +42,21 @@ export function MapControlsContent({
 }: MapControlsContentProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {view === "voxel" && (
+      <span
+        style={{
+          color: uiTheme.accent.text,
+          fontWeight: 400,
+        }}
+      >
+        Toggles
+      </span>
+      <LayerControls
+        visibility={layerVisibility}
+        onChange={handleLayerVisibilityChange}
+        view={view}
+        compact={compact}
+      />
+      {view === "voxel" && layerVisibility.debug && (
         <div style={{ display: "grid", gap: 6 }}>
           <div
             style={{
@@ -123,12 +137,6 @@ export function MapControlsContent({
           </div>
         </div>
       )}
-      <LayerControls
-        visibility={layerVisibility}
-        onChange={handleLayerVisibilityChange}
-        view={view}
-        compact={compact}
-      />
       <div
         style={{
           fontSize: 12,

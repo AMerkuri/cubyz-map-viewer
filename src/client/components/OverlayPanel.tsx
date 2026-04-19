@@ -272,7 +272,7 @@ export function OverlayPanel({
               title="Reset position"
               style={headerButtonStyle}
             >
-              {String.fromCharCode(8634).slice(0, RESET_GLYPH_SIZE)}
+              <ResetGlyph />
             </button>
           )}
           {collapsible && (
@@ -319,6 +319,26 @@ const headerButtonStyle: React.CSSProperties = {
   boxShadow: "2px 2px 0 rgba(0,0,0,0.65)",
   fontSize: 14,
 };
+
+function ResetGlyph() {
+  return (
+    <svg
+      width={RESET_GLYPH_SIZE}
+      height={RESET_GLYPH_SIZE}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ pointerEvents: "none", display: "block" }}
+    >
+      <path d="M3 12a9 9 0 1 0 3-6.708" />
+      <path d="M3 3v6h6" />
+    </svg>
+  );
+}
 
 function getDefaultPanelPosition(
   panel: HTMLDivElement,

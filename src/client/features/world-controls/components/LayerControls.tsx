@@ -96,29 +96,19 @@ export function LayerControls({
         compact={compact}
       />
       {view === "voxel" && (
-        <>
-          <ToggleButton
-            label="Terrain Underlay"
-            active={visibility.showVoxelTerrain}
-            onToggle={() => toggle("showVoxelTerrain")}
-            compact={compact}
-          />
-          <ToggleButton
-            label="Debug"
-            active={visibility.debug}
-            onToggle={() => toggle("debug")}
-            compact={compact}
-          />
-        </>
-      )}
-      {view === "terrain" && (
         <ToggleButton
-          label="Debug"
-          active={visibility.debug}
-          onToggle={() => toggle("debug")}
+          label="Terrain Underlay"
+          active={visibility.showVoxelTerrain}
+          onToggle={() => toggle("showVoxelTerrain")}
           compact={compact}
         />
       )}
+      <ToggleButton
+        label="Advanced"
+        active={visibility.debug}
+        onToggle={() => toggle("debug")}
+        compact={compact}
+      />
     </div>
   );
 }

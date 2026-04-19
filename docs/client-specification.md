@@ -62,8 +62,9 @@ src/client/
 
 ## World-Controls Feature
 
-- `features/world-controls/WorldControlsProvider.tsx`: owns the low-frequency viewer control state with a reducer-backed context, including view mode, layer visibility, persisted graphics settings, active preset detection, debug panel state, and fly-to requests
+- `features/world-controls/WorldControlsProvider.tsx`: owns the low-frequency viewer control state with a reducer-backed context, including view mode, per-mode layer visibility, persisted graphics settings, active preset detection, debug panel state, and fly-to requests
 - `features/world-controls/components`: HUD, controls, toolbar, loading indicator, desktop debug panels, and the compact mobile tray
+- `MapControlsContent.tsx` shows graphics presets only while debug mode is enabled, and renders them below the toggle list and above the usage instructions
 - `world-controls` depends on shared client `lib/`, `types/`, and `components/`, but not on `world-view/lib`, so the scene/runtime feature stays isolated from UI-only concerns
 
 ## World-View Feature
@@ -94,7 +95,8 @@ src/client/
 - Three.js handles the renderer, scene, camera, controls, meshes, labels, markers, and animation loop; the Parameters panel can cap that loop between `30` and `120` FPS, with an `Uncapped` stop shown to the right of `120` and stored internally as `0`
 - Keyboard camera motion and `Q`/`E` orbiting are scaled by elapsed time, so their speed stays consistent even when the render loop is capped.
 - When the scene is settled, no keyboard input is active, no work queues are pending, and the mouse is not hovering the canvas, the runtime can drop to a lower user-configured idle FPS after a short internal delay. Idle mode also uses a slower internal LOD polling interval.
-- On startup, the client restores persisted graphics preset values and custom parameter overrides from `localStorage`, then keeps those settings in sync as the user changes voxel rendering and parameter-panel values
+- On startup, the client restores persisted graphics preset values, layer toggles, and custom parameter overrides from `localStorage`, then keeps those settings in sync as the user changes voxel rendering and parameter-panel values
+- Biome labels remember separate terrain and voxel visibility choices, so switching modes restores the last toggle used in that mode
 - On compact viewports the client replaces the floating corner panels with a bottom docked `Cubyz Map Viewer` tray. The tray is button-driven with collapsed and expanded states, keeps the share-location button in the top toolbar beside the terrain/voxel toggle, and groups controls, world info, and debug content into tabs so the map stays visible on smaller devices.
 - `features/world-controls/components/MobileHudTray.tsx` is the compact HUD shell, and its tab content reuses the same control/debug/info components as the desktop overlays through `WorldViewHud.tsx`.
 - Orbit controls enforce a small non-zero minimum camera distance so wheel zoom cannot get stuck at the target point
