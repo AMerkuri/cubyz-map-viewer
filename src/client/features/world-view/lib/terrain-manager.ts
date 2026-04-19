@@ -6,10 +6,7 @@ import {
   TERRAIN_LOD_DISTANCE_THRESHOLDS,
   TERRAIN_UNDERLAY_OFFSET_Z,
 } from "./constants.js";
-import {
-  getLodForDistance,
-  getLodForDistanceWithHysteresis,
-} from "./lod-utils.js";
+import { getLodForDistanceWithHysteresis } from "./lod-utils.js";
 import { buildFullTileMesh } from "./terrain-builders.js";
 import type {
   LoadedTerrainTile,
@@ -27,7 +24,7 @@ export function terrainTileKey(
   return `${lod}/${tileX}/${tileY}`;
 }
 
-export function terrainTileKeyAtWorld(
+function terrainTileKeyAtWorld(
   lod: number,
   worldXPos: number,
   worldYPos: number,
@@ -38,7 +35,7 @@ export function terrainTileKeyAtWorld(
   return terrainTileKey(lod, tileX, tileY);
 }
 
-export function hasLoadedTerrainTileAtWorld(
+function hasLoadedTerrainTileAtWorld(
   loadedTerrain: Map<string, LoadedTerrainTile>,
   lod: number,
   worldXPos: number,
@@ -47,7 +44,7 @@ export function hasLoadedTerrainTileAtWorld(
   return loadedTerrain.has(terrainTileKeyAtWorld(lod, worldXPos, worldYPos));
 }
 
-export function hasAllImmediateFinerTerrainChildrenLoaded(
+function hasAllImmediateFinerTerrainChildrenLoaded(
   loadedTerrain: Map<string, LoadedTerrainTile>,
   tile: LoadedTerrainTile,
 ): boolean {
@@ -113,7 +110,7 @@ export function queueTerrainFetchRequest(
   queue.sort(compareTerrainFetchRequests);
 }
 
-export function disposeTerrainTile(
+function disposeTerrainTile(
   tile: LoadedTerrainTile,
   terrainGroup: THREE.Group | null,
   chunkBorderGroup: THREE.Group | null,
@@ -680,23 +677,4 @@ export function syncTerrainLod(args: {
 
   updateTerrainVisibility(target, camDist);
   terrainVisibilityDirtyRef.current = false;
-}
-
-export function getTerrainLodForDistance(
-  dist: number,
-  previousLod: number,
-  terrainLodHysteresisRatio: number,
-): number {
-  return getLodForDistanceWithHysteresis(
-    dist,
-    previousLod,
-    TERRAIN_LOD_DISTANCE_THRESHOLDS,
-    terrainLodHysteresisRatio,
-  );
-}
-
-export function getTerrainLodForDistanceWithoutHysteresis(
-  dist: number,
-): number {
-  return getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS);
 }

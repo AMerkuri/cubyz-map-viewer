@@ -29,7 +29,7 @@ interface WorkerSlot {
   currentJobStartedAt: number;
 }
 
-export type VoxelWorkerRuntimeMode = "source" | "dist";
+type VoxelWorkerRuntimeMode = "source" | "dist";
 
 export class VoxelWorkerPool {
   private readonly workerData: VoxelWorkerData;

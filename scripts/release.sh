@@ -144,6 +144,7 @@ main() {
     ensure_required_environment
 
     npm --prefix "$REPO_ROOT" run check
+    npm --prefix "$REPO_ROOT" run check:knip
     npm --prefix "$REPO_ROOT" run typecheck
     run_release
     run_post_release

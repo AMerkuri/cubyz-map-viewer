@@ -5,16 +5,15 @@ import {
 
 export const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 export const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
-export const GRAPHICS_SETTINGS_STORAGE_KEY =
-  "cubyz-map-viewer.graphics-settings";
-export const GRAPHICS_SETTINGS_STORAGE_VERSION = 2;
+const GRAPHICS_SETTINGS_STORAGE_KEY = "cubyz-map-viewer.graphics-settings";
+const GRAPHICS_SETTINGS_STORAGE_VERSION = 2;
 
-export type StoredBiomeLabelsByMode = {
+type StoredBiomeLabelsByMode = {
   terrain: boolean;
   voxel: boolean;
 };
 
-export type StoredLayerVisibility = {
+type StoredLayerVisibility = {
   players: boolean;
   spawn: boolean;
   debug: boolean;
@@ -23,7 +22,7 @@ export type StoredLayerVisibility = {
   biomeLabelsByMode: StoredBiomeLabelsByMode;
 };
 
-export type StoredGraphicsSettings = {
+type StoredGraphicsSettings = {
   renderDistance: number;
   voxelLod1MaxDist: number;
   minRenderedVoxelLod: number;

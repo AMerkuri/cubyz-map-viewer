@@ -1,82 +1,82 @@
 # Cubyz Map Viewer – Agent Guide
 
-- Work only inside `cubyz-map-viewer/`. Do not modify the parent `Cubyz` game code when working on this repo.
-- Keep documentation up to date. Whenever you change behavior, structure, or workflows, update the corresponding files in `docs/` in the same task.
-- Architecture docs live in:
-  - `docs/architecture-overview.md`: system-level overview and shared client/server contracts
-  - `docs/client-specification.md`: client architecture, rendering behavior, state ownership, and live-update handling
-  - `docs/server-specification.md`: server architecture, API and WebSocket flows, caching, workers, and runtime configuration
-- Operational docs:
-  - `docs/deployment.md`: container setup, publishing, mounts, and deployment troubleshooting
-- When a change affects a shared contract such as coordinates, event names, payload shape, or LOD behavior, update `docs/architecture-overview.md` and the relevant side-specific doc together.
+- Work only inside `cubyz-map-viewer/`. Do not modify the parent `Cubyz` repo from this workspace.
+- Keep docs in sync with behavior. If you change client/server contracts, runtime flow, or contributor workflow, update the matching file in `docs/` in the same task.
+- Shared contract changes must update `docs/architecture-overview.md` plus the affected side doc (`docs/client-specification.md` or `docs/server-specification.md`).
 
 ## Read First
 
-- `package.json` for the real dev/build/check commands
-- `biome.json` for formatting and import-order behavior
-- `vite.config.ts` for client dev-server proxying and build output
-- `tsconfig.json` and `tsconfig.server.json` for client/server build boundaries
-- `src/client/app/App.tsx` for client composition
-- `src/server/index.ts` for server startup, routing, WebSocket, and watcher flow
+- `package.json`: real commands and release entrypoints
+- `biome.json`: formatter/linter/import ordering behavior
+- `vite.config.ts`: client proxying and build output
+- `src/client/app/components/WorldViewPageContent.tsx`: app-level composition
+- `src/client/features/world-view/components/World3DView.tsx`: real scene/runtime boundary
+- `src/server/index.ts`: server composition root, path resolution, WebSocket wiring, watcher wiring, optional voxel warmup
 
 ## Commands
 
-- `npm run dev` starts both server and client
-- `npm run dev:server` runs the Express server via `tsx watch`
-- `npm run dev:client` runs Vite on `:5173`
-- `npm run check` runs Biome; use this as the main verification step for edits
-- `npm run check:write` applies Biome fixes, including import ordering
-- `npm run build` builds the Vite client and compiles `src/server` to `dist/server`
-- `npm start` runs `dist/server/index.js`
+- `npm run dev`: starts server and client together
+- `npm run dev:server`: runs the Express server through `tsx watch`
+- `npm run dev:client`: Vite dev server on `:5173`
+- `npm run check`: Biome
+- `npm run check:write`: Biome with fixes
+- `npm run check:knip`: unused exports/dependencies check
+- `npm run typecheck`: client and server TS configs
+- `npm run build`: Vite client build plus `tsc -p tsconfig.server.json`
+- `npm start`: runs `dist/server/index.js`
 
-## Runtime Paths And Args
+## Verification Order
 
-- Server defaults to auto-detecting a save under `~/.cubyz/saves/`
-- Override the save with `SAVE_PATH=/path/to/save npm run dev:server` or `--save /path/to/save`
-- Override the Cubyz asset source with `CUBYZ_PATH=/path/to/Cubyz` or `--cubyz /path/to/Cubyz`
-- Client dev requests to `/api` and `/ws` are proxied to `http://localhost:3001` by Vite
+- Default for code changes: `npm run check && npm run check:knip && npm run typecheck`
+- Also run `npm run build` when changing build paths, worker wiring, route payloads, or TypeScript boundaries.
+- There is no test runner configured.
 
-## Verification
+## Runtime Gotchas
 
-- There is no test runner configured
-- After code changes, run `npm run check` and `npm run typecheck`
-- Run `npm run build` for changes that affect bundling, types, workers, routing, or path moves
-- Manual smoke checks that match the repo:
-  - `curl http://localhost:3001/api/health`
-  - `curl http://localhost:3001/api/world`
+- The server does not load `.env` files automatically.
+- `SAVE_PATH` and `CUBYZ_PATH` can be set by env var or `--save` / `--cubyz` CLI args.
+- If `SAVE_PATH` is unset, the server auto-picks the newest directory under `~/.cubyz/saves/`.
+- If `CUBYZ_PATH` is unset, the server expects the parent of this repo to contain `assets/cubyz`.
+- Vite proxies `/api` to `http://localhost:3001` and `/ws` to `ws://localhost:3001`.
+- Voxel requests require `br` or `gzip`; `/api/voxels` returns `406` if the client does not advertise one of them.
 
-## Client Structure
+## Structure That Matters
 
-- Client entrypoint: `src/client/main.tsx`
-- App composition: `src/client/app/App.tsx`
-- Main feature: `src/client/features/world-view/`
-- Shared UI: `src/client/shared/ui/OverlayPanel.tsx`
-- The Three.js scene is managed imperatively inside the `world-view` feature; avoid moving per-frame scene state into React state
-- `features/world-view/workers/voxel-mesh.worker.ts` is part of the feature; if you move related files, re-check worker import URLs and run `npm run build`
+- `src/client/main.tsx` creates the shared React Query client.
+- `src/client/app/` composes features; keep cross-feature wiring there.
+- `src/client/features/world-controls/` owns control state, persistence, and HUD controls.
+- `src/client/features/world-view/` owns the Three.js scene, data loading/runtime, labels, markers, and the browser worker.
+- `World3DView.tsx` is intentionally imperative and ref-heavy; avoid pushing per-frame scene state into React state.
+- `src/server/index.ts` is the only real server composition root.
+- Keep server layering clear: `api/` for HTTP/WebSocket boundary logic, `parsers/` for file decoding, `services/` for runtime/business logic, `workers/` for voxel worker entrypoints/protocol.
+- Routes should go through `VoxelMeshService`; do not bypass it when serving voxel payloads.
 
-## Server Structure
+## Repo Conventions
 
-- `src/server/index.ts` is the composition root: path resolution, palette/biome loading, router registration, WebSocket setup, watcher setup, shutdown
-- Server layering is real and should stay clear:
-  - `api/`: HTTP validation and responses
-  - `parsers/`: file format decoding only
-  - `services/`: caches, rendering, watcher, voxel orchestration
-  - `workers/`: voxel worker entrypoints/protocol
-- `VoxelMeshService` handles voxel caching, in-flight dedupe, and worker-pool orchestration; be careful not to bypass it from routes
-- `SaveWatcher` drives live updates; if you change watch event types or payloads, update both server and client WebSocket handling and docs
+- ESM everywhere: local imports use the `.js` extension.
+- Use named exports.
+- Prefer relative imports even though `tsconfig.json` defines `@client/*` and `@server/*` paths.
+- Biome organizes imports; if check failures are only ordering, use `npm run check:write`.
+- Knip is enforced without `ignoreExportsUsedInFile`; keep module-local helpers/types unexported unless another file imports them.
 
-## Repo Conventions That Matter
+## Worker And Build Notes
 
-- ESM everywhere: local imports require the `.js` extension
-- Named exports only
-- Use relative imports even though `@client/*` and `@server/*` are configured in `tsconfig.json`
-- Biome enforces import organization; if `npm run check` fails only on import order, `npm run check:write` is the fast fix
-- Build output is split across `dist/client` and `dist/server`
+- Client worker: `src/client/features/world-view/workers/voxel-mesh.worker.ts`.
+- Server worker entrypoints: `src/server/workers/voxel-worker.ts` and `src/server/workers/voxel-worker-dev.js`.
+- Dev server uses the source worker through the `tsx` bootstrap; production uses the built worker under `dist/server/workers/`.
+- If you move worker-related files or import paths, run `npm run build` before finishing.
 
-## Binary-Format Facts Worth Remembering
+## Binary / Contract Facts
 
-- Surface tiles come from `maps/{lod}/{worldX}/{worldY}.surface`
-- Region voxel data comes from `chunks/{lod}/{worldX}/{worldY}/{worldZ}.region`
-- Surface tile size is `MAP_SIZE = 256`
-- Supported LODs are `1, 2, 4, 8, 16, 32`
-- Coordinate convention used by the viewer is `X,Y` horizontal and `Z` vertical
+- Coordinate convention is `X,Y` horizontal and `Z` vertical.
+- Surface tiles: `maps/{lod}/{worldX}/{worldY}.surface`
+- Region voxel data: `chunks/{lod}/{worldX}/{worldY}/{worldZ}.region`
+- Supported LODs: `1, 2, 4, 8, 16, 32`
+- `MAP_SIZE = 256`
+- WebSocket event names are `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`.
+
+## Release / Ops
+
+- Release automation is local-script driven, not CI-driven: `npm run release*` calls `scripts/release.sh`.
+- Releases require a clean worktree on `master` and run `check`, `check:knip`, and `typecheck` before tagging/pushing.
+- Image publishing goes through `scripts/build-and-push.sh` and infers `GITHUB_REPOSITORY` / `GITHUB_ACTOR` from `origin` when possible.

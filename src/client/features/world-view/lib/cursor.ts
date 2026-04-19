@@ -6,7 +6,7 @@ const TOUCH_HOLD_DELAY_MS = 500;
 const TOUCH_HOLD_MOVE_THRESHOLD_PX = 12;
 const TOUCH_HOLD_LINGER_MS = 1000;
 
-export interface CursorInteractionHandlers {
+interface CursorInteractionHandlers {
   clearCursorRefreshTimer: () => void;
   clearTouchLingerTimer: () => void;
   didTouchHoldActivate: (pointerId: number) => boolean;

@@ -4,10 +4,7 @@ import { estimateLoadedTerrainTileBytes } from "./memory.js";
 import { buildSurfaceTileBorderLines } from "./terrain-builders.js";
 import type { LoadedTerrainTile, WarmCachedTerrainTile } from "./types.js";
 
-const MB = 1024 * 1024;
-export const DEFAULT_WARM_TERRAIN_CACHE_MAX_BYTES = 256 * MB;
-
-export function attachTerrainTileToScene(
+function attachTerrainTileToScene(
   tile: LoadedTerrainTile,
   terrainGroup: THREE.Group | null,
   chunkBorderGroup: THREE.Group | null,
@@ -25,7 +22,7 @@ export function attachTerrainTileToScene(
   }
 }
 
-export function detachTerrainTileFromScene(
+function detachTerrainTileFromScene(
   tile: LoadedTerrainTile,
   terrainGroup: THREE.Group | null,
   chunkBorderGroup: THREE.Group | null,
@@ -122,7 +119,7 @@ export function evictWarmCachedTerrainTile(
   );
 }
 
-export function trimWarmTerrainCache(
+function trimWarmTerrainCache(
   warmCachedTerrain: Map<string, WarmCachedTerrainTile>,
   warmCachedTerrainBytesRef: { current: number },
   maxBytes: number,

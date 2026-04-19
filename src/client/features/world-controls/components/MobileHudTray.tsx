@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { uiTheme } from "../../../lib/ui-theme.js";
 
-export type MobileHudTab = "controls" | "world" | "debug";
+type MobileHudTab = "controls" | "world" | "debug";
 
 interface MobileHudTrayProps {
   showDebugTab: boolean;

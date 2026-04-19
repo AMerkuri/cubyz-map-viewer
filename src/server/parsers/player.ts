@@ -9,7 +9,7 @@ import { parseZon, type ZonValue } from "./zon.js";
 export const DEFAULT_PLAYER_ACTIVE_WINDOW_MS = 60 * 1000;
 export const DEFAULT_PLAYER_RETENTION_MS = 60 * 5 * 1000;
 
-export interface PlayerLoadOptions {
+interface PlayerLoadOptions {
   activeWindowMs?: number;
   retentionMs?: number;
   now?: number;
@@ -28,7 +28,7 @@ export interface PlayerData {
   isActive: boolean;
 }
 
-export async function parsePlayerFile(
+async function parsePlayerFile(
   filePath: string,
   options: PlayerLoadOptions = {},
 ): Promise<PlayerData> {

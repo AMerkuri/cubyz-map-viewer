@@ -411,7 +411,3 @@ export function useWorldControlsActions() {
     updateVoxelLod1MaxDist,
   };
 }
-
-export function useWorldControlsPresetId() {
-  return useWorldControls().activeGraphicsPresetId;
-}

@@ -24,13 +24,6 @@ export class NotFoundError extends HttpError {
   }
 }
 
-export class InternalServerError extends HttpError {
-  constructor(message: string, code = "INTERNAL_SERVER_ERROR") {
-    super(message, 500, code);
-    this.name = "InternalServerError";
-  }
-}
-
 export function isNodeErrorWithCode(
   error: unknown,
 ): error is NodeJS.ErrnoException {

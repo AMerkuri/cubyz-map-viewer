@@ -10,8 +10,8 @@ import { BinaryReader } from "./binary-reader.js";
 
 export const CHUNK_SIZE = 32;
 export const REGION_SIZE = 4;
-export const REGION_VOLUME = REGION_SIZE ** 3; // 64
-export const CHUNK_VOLUME = CHUNK_SIZE ** 3; // 32768
+const REGION_VOLUME = REGION_SIZE ** 3; // 64
+const CHUNK_VOLUME = CHUNK_SIZE ** 3; // 32768
 
 /** Compression algorithm enum matching Cubyz storage.zig */
 enum ChunkCompressionAlgo {
@@ -42,30 +42,6 @@ export interface RegionData {
   voxelSize: number;
 }
 
-/**
- * Get the top (highest Z) non-air block at each (x, y) column in a chunk.
- * Returns an object with topBlocks[x*32+y] = block type index (0=air means no solid block).
- */
-export function getChunkTopBlocks(chunk: ChunkData): Uint16Array {
-  const top = new Uint16Array(CHUNK_SIZE * CHUNK_SIZE);
-  for (let x = 0; x < CHUNK_SIZE; x++) {
-    for (let y = 0; y < CHUNK_SIZE; y++) {
-      // Scan from top (z=31) down to z=0
-      for (let z = CHUNK_SIZE - 1; z >= 0; z--) {
-        const idx = x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z;
-        const blockValue = chunk.blocks[idx];
-        const typ = blockValue & 0xffff;
-        if (typ !== 0) {
-          // Non-air block found
-          top[x * CHUNK_SIZE + y] = typ;
-          break;
-        }
-      }
-    }
-  }
-  return top;
-}
-
 export async function parseRegionFile(
   filePath: string,
   worldX: number,
@@ -77,7 +53,7 @@ export async function parseRegionFile(
   return parseRegionBuffer(raw, worldX, worldY, worldZ, voxelSize, filePath);
 }
 
-export function parseRegionBuffer(
+function parseRegionBuffer(
   raw: Buffer,
   worldX: number,
   worldY: number,

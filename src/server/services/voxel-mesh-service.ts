@@ -23,13 +23,13 @@ interface CachedVoxelVariant {
   etag: string;
 }
 
-export interface VoxelEncodingBenchmark {
+interface VoxelEncodingBenchmark {
   encoding: VoxelContentEncoding;
   byteLength: number;
   generateMs: number;
 }
 
-export interface VoxelMeshBenchmark {
+interface VoxelMeshBenchmark {
   key: string;
   rawByteLength: number;
   variants: VoxelEncodingBenchmark[];
@@ -67,7 +67,7 @@ const BROTLI_RESPONSE_OPTIONS = {
 };
 const GZIP_RESPONSE_OPTIONS = { level: 6 };
 
-export interface VoxelRequestMetrics {
+interface VoxelRequestMetrics {
   source: "cache" | "worker";
   queueMs: number;
   runMs: number;
@@ -87,7 +87,7 @@ export interface VoxelRequestMetrics {
   maxWorldZ?: number;
 }
 
-export interface VoxelServiceMetricsSnapshot {
+interface VoxelServiceMetricsSnapshot {
   workers: number;
   workerRuntimeMode: "source" | "dist";
   queueDepth: number;

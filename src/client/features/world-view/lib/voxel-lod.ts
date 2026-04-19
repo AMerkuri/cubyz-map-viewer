@@ -22,7 +22,7 @@ import {
 } from "./voxel-index.js";
 import { compareVoxelFetchRequests } from "./voxel-requests.js";
 
-export function addVisibleQuadrant(
+function addVisibleQuadrant(
   maskMap: Map<string, number>,
   key: string,
   quadrant: number,
@@ -30,7 +30,7 @@ export function addVisibleQuadrant(
   maskMap.set(key, (maskMap.get(key) ?? 0) | voxelQuadrantBit(quadrant));
 }
 
-export function getTileEffectiveDist(
+function getTileEffectiveDist(
   cameraPosition: THREE.Vector3,
   entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">,
   loadedTile?: Pick<LoadedVoxelTile, "minZ" | "maxZ">,
@@ -61,7 +61,7 @@ export function getTileEffectiveDist(
   return Math.hypot(dx, dy, dz);
 }
 
-export function getTileLodSelectionDist(args: {
+function getTileLodSelectionDist(args: {
   entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">;
   loadedTile?: Pick<LoadedVoxelTile, "minZ" | "maxZ">;
   cameraPosition: THREE.Vector3;
@@ -101,7 +101,7 @@ export function getTileLodSelectionDist(args: {
   });
 }
 
-export function getSelectionDistForLod(
+function getSelectionDistForLod(
   lod: number,
   voxelThresholds: { maxDist: number; lod: number }[],
   lodUnloadHysteresis: number,
@@ -115,7 +115,7 @@ export function getSelectionDistForLod(
   return Number.isFinite(unloadDist) ? unloadDist : renderDistance;
 }
 
-export function noteVoxelRequest(args: {
+function noteVoxelRequest(args: {
   requestMap: Map<string, PendingVoxelFetchRequest>;
   lod: number;
   regionX: number;
@@ -151,7 +151,7 @@ export function noteVoxelRequest(args: {
   }
 }
 
-export function mergeVoxelRequest(
+function mergeVoxelRequest(
   requestMap: Map<string, PendingVoxelFetchRequest>,
   request: PendingVoxelFetchRequest,
 ): void {

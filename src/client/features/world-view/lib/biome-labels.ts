@@ -17,7 +17,7 @@ import type {
 } from "./types.js";
 import { formatBiomeName, regionWorldSize } from "./utils.js";
 
-export async function fetchBiomes(
+async function fetchBiomes(
   queryClient: QueryClient,
   lod: number,
   tileX: number,

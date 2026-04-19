@@ -2,9 +2,9 @@ import type * as THREE from "three";
 
 import type { LoadedTerrainTile, LoadedVoxelTile } from "./types.js";
 
-export const ESTIMATED_TEXT_SPRITE_BYTES = 256 * 64 * 4;
+const ESTIMATED_TEXT_SPRITE_BYTES = 256 * 64 * 4;
 
-export function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
+function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   let total = 0;
 
   for (const attr of Object.values(geometry.attributes)) {

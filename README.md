@@ -14,7 +14,7 @@ Interactive 3D terrain and voxel map viewer for Cubyz worlds, with realtime worl
 
 - Client: React 19, TypeScript, Vite, Three.js, React Query
 - Server: Node.js, Express, WebSocket (`ws`), Chokidar, Sharp, Winston
-- Shared tooling: TypeScript, Biome formatter
+- Shared tooling: TypeScript, Biome formatter, Knip
 
 ## Quick Start
 
@@ -46,6 +46,14 @@ If `SAVE_PATH` is not set, the server auto-detects the most recently modified sa
 If `CUBYZ_PATH` is not set, the server checks the parent of this project directory and expects to find Cubyz assets at `assets/cubyz` there.
 
 The server does not auto-load `.env` files, so export variables in your shell or set them in your process manager.
+
+## Static Checks
+
+```bash
+npm run check
+npm run typecheck
+npm run check:knip
+```
 
 ## Docker Deployment
 

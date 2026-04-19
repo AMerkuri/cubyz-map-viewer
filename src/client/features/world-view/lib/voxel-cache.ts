@@ -3,7 +3,7 @@ import type * as THREE from "three";
 import { estimateLoadedVoxelTileBytes } from "./memory.js";
 import type { LoadedVoxelTile, WarmCachedVoxelTile } from "./types.js";
 
-export function detachVoxelTileFromScene(
+function detachVoxelTileFromScene(
   tile: LoadedVoxelTile,
   voxelGroup: THREE.Group | null,
   chunkBorderGroup: THREE.Group | null,
@@ -16,7 +16,7 @@ export function detachVoxelTileFromScene(
   tile.borderLines.visible = false;
 }
 
-export function attachVoxelTileToScene(
+function attachVoxelTileToScene(
   tile: LoadedVoxelTile,
   voxelGroup: THREE.Group | null,
   chunkBorderGroup: THREE.Group | null,
@@ -59,7 +59,7 @@ export function evictWarmCachedVoxelTile(
   disposeVoxelTileResources(cached.tile, voxelGroup, chunkBorderGroup);
 }
 
-export function trimWarmVoxelCache(
+function trimWarmVoxelCache(
   warmCachedVoxels: Map<string, WarmCachedVoxelTile>,
   warmCachedVoxelBytesRef: { current: number },
   maxBytes: number,

@@ -1,5 +1,4 @@
 export const LOD_LEVELS = [1, 2, 4, 8, 16, 32];
-export const FULL_VOXEL_QUADRANT_MASK = 0b1111;
 
 export const LOD_BORDER_COLORS: Record<
   number,

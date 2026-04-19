@@ -1,23 +1,20 @@
 import { BadRequestError } from "./errors.js";
 
-export const VALID_LODS = [1, 2, 4, 8, 16, 32] as const;
+const VALID_LODS = [1, 2, 4, 8, 16, 32] as const;
 
-export interface TileParams {
+interface TileParams {
   lod: number;
   x: number;
   y: number;
 }
 
-export interface RegionParams {
+interface RegionParams {
   lod: number;
   regionX: number;
   regionY: number;
 }
 
-export function parseIntegerParam(
-  value: string | undefined,
-  name: string,
-): number {
+function parseIntegerParam(value: string | undefined, name: string): number {
   if (value === undefined) {
     throw new BadRequestError(`Missing ${name}`);
   }
@@ -34,7 +31,7 @@ export function parseIntegerParam(
   return parsed;
 }
 
-export function parseLodParam(value: string | undefined): number {
+function parseLodParam(value: string | undefined): number {
   const lod = parseIntegerParam(value, "lod");
   if (!VALID_LODS.includes(lod as (typeof VALID_LODS)[number])) {
     throw new BadRequestError("Invalid lod");

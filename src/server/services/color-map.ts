@@ -13,7 +13,7 @@ import type { Palette } from "../parsers/palette.js";
 import { parseZon, type ZonValue } from "../parsers/zon.js";
 import { logger } from "./logger.js";
 
-export interface RGB {
+interface RGB {
   r: number;
   g: number;
   b: number;

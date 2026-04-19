@@ -13,7 +13,7 @@ import type { WorldMetadata } from "../parsers/world-meta.js";
 import { buildChunkIndex } from "../services/chunk-index.js";
 import { isNodeErrorWithCode } from "./errors.js";
 
-export interface SurfaceIndex {
+interface SurfaceIndex {
   lod: number;
   worldX: number;
   worldY: number;

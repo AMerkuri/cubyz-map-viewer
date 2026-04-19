@@ -30,7 +30,7 @@ function parseGroundEntry(entry: string): string {
   return parts[parts.length - 1];
 }
 
-export async function parseBiomeFile(
+async function parseBiomeFile(
   filePath: string,
   biomeId: string,
 ): Promise<BiomeDefinition> {

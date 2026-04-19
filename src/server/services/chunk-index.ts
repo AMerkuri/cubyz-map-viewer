@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-export interface ChunkIndexEntry {
+interface ChunkIndexEntry {
   lod: number;
   regionX: number;
   regionY: number;

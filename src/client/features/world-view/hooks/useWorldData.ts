@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
-export interface WorldData {
+interface WorldData {
   name: string;
   version: number;
   seed: number;

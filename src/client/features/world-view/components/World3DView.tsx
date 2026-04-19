@@ -115,8 +115,6 @@ import {
   updateVoxelLod as updateVoxelLodManaged,
 } from "../lib/voxel-runtime.js";
 
-export type { InitialCameraState } from "../lib/types.js";
-
 const PLAYER_MARKER_BASE_SCALE = 4;
 const PLAYER_MARKER_SCALE_REFERENCE_DISTANCE = 200;
 const PLAYER_MARKER_MIN_SCALE = 1;

@@ -54,6 +54,7 @@ Before creating a release, `scripts/release.sh` runs these preflight checks:
 - verifies required commands are installed
 - verifies `GITHUB_TOKEN` is set
 - runs `npm run check`
+- runs `npm run check:knip`
 - runs `npm run typecheck`
 
 After the checks pass, the script runs:

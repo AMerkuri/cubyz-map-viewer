@@ -38,7 +38,7 @@ export async function parseSurfaceFile(
   return parseSurfaceBuffer(raw, worldX, worldY, voxelSize);
 }
 
-export async function parseSurfaceBuffer(
+async function parseSurfaceBuffer(
   raw: Buffer,
   worldX: number,
   worldY: number,

@@ -39,10 +39,6 @@ export function countBits16(v: number): number {
   return c;
 }
 
-export function isVoxelTileComplete(chunkCoverage: number): boolean {
-  return (chunkCoverage & 0xffff) === 0xffff;
-}
-
 export function formatBiomeName(biomeId: string): string {
   const name = biomeId.includes(":") ? biomeId.split(":")[1] : biomeId;
   const parts = name.split(/[/_]/).filter(Boolean);

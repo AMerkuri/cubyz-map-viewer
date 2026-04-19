@@ -7,9 +7,9 @@ import { MAP_SIZE, type SurfaceData } from "../parsers/surface.js";
 import { type ColorMapService, WATER_COLOR } from "./color-map.js";
 
 export const DEFAULT_TERRAIN_CELL_RESOLUTION = 128;
-export const DEFAULT_TERRAIN_GUTTER = 1;
+const DEFAULT_TERRAIN_GUTTER = 1;
 
-export interface TerrainMeshData {
+interface TerrainMeshData {
   meshWidth: number;
   meshHeight: number;
   sampleWidth: number;

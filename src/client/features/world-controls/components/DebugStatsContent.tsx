@@ -5,7 +5,7 @@ import {
   formatNullableBytes,
 } from "../../../utils/world-view-formatters.js";
 
-export function StatsSectionTitle({ children }: { children: React.ReactNode }) {
+function StatsSectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <div
       style={{
