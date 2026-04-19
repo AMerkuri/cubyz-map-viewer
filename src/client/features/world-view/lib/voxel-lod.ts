@@ -4,6 +4,7 @@ import type { ChunkIndexEntry } from "../hooks/useWorldData.js";
 import { LOD_LEVELS } from "./constants.js";
 import { VOXEL_TOP_AO } from "./daylight.js";
 import {
+  applyBehindCameraDistanceBias,
   getLodForDistanceWithHysteresis,
   getUnloadDistForLod,
 } from "./lod-utils.js";
@@ -12,12 +13,7 @@ import type {
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
 } from "./types.js";
-import {
-  isVoxelTileComplete,
-  parseVoxelKey,
-  regionWorldSize,
-  voxelQuadrantBit,
-} from "./utils.js";
+import { parseVoxelKey, regionWorldSize, voxelQuadrantBit } from "./utils.js";
 import {
   getImmediateFinerVoxelChildren,
   getVoxelParentRegion,
@@ -35,64 +31,60 @@ export function addVisibleQuadrant(
 }
 
 export function getTileEffectiveDist(
-  target: THREE.Vector3,
-  camDist: number,
-  lod: number,
-  regionX: number,
-  regionY: number,
+  cameraPosition: THREE.Vector3,
+  entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">,
+  loadedTile?: Pick<LoadedVoxelTile, "minZ" | "maxZ">,
 ): number {
-  const size = regionWorldSize(lod);
+  const size = regionWorldSize(entry.lod);
   const dx =
-    target.x < regionX
-      ? regionX - target.x
-      : target.x > regionX + size
-        ? target.x - (regionX + size)
+    cameraPosition.x < entry.regionX
+      ? entry.regionX - cameraPosition.x
+      : cameraPosition.x > entry.regionX + size
+        ? cameraPosition.x - (entry.regionX + size)
         : 0;
   const dy =
-    target.y < regionY
-      ? regionY - target.y
-      : target.y > regionY + size
-        ? target.y - (regionY + size)
+    cameraPosition.y < entry.regionY
+      ? entry.regionY - cameraPosition.y
+      : cameraPosition.y > entry.regionY + size
+        ? cameraPosition.y - (entry.regionY + size)
         : 0;
-  return Math.max(Math.hypot(dx, dy), camDist);
+  const minZ = loadedTile ? Math.min(loadedTile.minZ, loadedTile.maxZ) : null;
+  const maxZ = loadedTile ? Math.max(loadedTile.minZ, loadedTile.maxZ) : null;
+  const dz =
+    minZ === null || maxZ === null
+      ? 0
+      : cameraPosition.z < minZ
+        ? minZ - cameraPosition.z
+        : cameraPosition.z > maxZ
+          ? cameraPosition.z - maxZ
+          : 0;
+  return Math.hypot(dx, dy, dz);
 }
 
 export function getTileLodSelectionDist(args: {
-  target: THREE.Vector3;
-  camDist: number;
-  lod: number;
-  regionX: number;
-  regionY: number;
+  entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">;
+  loadedTile?: Pick<LoadedVoxelTile, "minZ" | "maxZ">;
   cameraPosition: THREE.Vector3;
   cameraForward: THREE.Vector3;
   voxelBehindCameraDotStart: number;
   voxelBehindCameraMaxMultiplier: number;
 }): number {
   const {
-    target,
-    camDist,
-    lod,
-    regionX,
-    regionY,
+    entry,
+    loadedTile,
     cameraPosition,
     cameraForward,
     voxelBehindCameraDotStart,
     voxelBehindCameraMaxMultiplier,
   } = args;
-  const effectiveDist = getTileEffectiveDist(
-    target,
-    camDist,
-    lod,
-    regionX,
-    regionY,
-  );
+  const effectiveDist = getTileEffectiveDist(cameraPosition, entry, loadedTile);
   const forwardLenSq =
     cameraForward.x * cameraForward.x + cameraForward.y * cameraForward.y;
   if (forwardLenSq <= 1e-6) return effectiveDist;
 
-  const size = regionWorldSize(lod);
-  const toCenterX = regionX + size / 2 - cameraPosition.x;
-  const toCenterY = regionY + size / 2 - cameraPosition.y;
+  const size = regionWorldSize(entry.lod);
+  const toCenterX = entry.regionX + size / 2 - cameraPosition.x;
+  const toCenterY = entry.regionY + size / 2 - cameraPosition.y;
   const toCenterLen = Math.hypot(toCenterX, toCenterY);
   if (toCenterLen <= 1e-6) return effectiveDist;
 
@@ -100,17 +92,13 @@ export function getTileLodSelectionDist(args: {
     (cameraForward.x * toCenterX + cameraForward.y * toCenterY) / toCenterLen;
   if (dot >= voxelBehindCameraDotStart) return effectiveDist;
 
-  const blend = THREE.MathUtils.clamp(
-    (-dot + voxelBehindCameraDotStart) / (1 + voxelBehindCameraDotStart),
-    0,
-    1,
-  );
-  const multiplier = THREE.MathUtils.lerp(
-    1,
-    voxelBehindCameraMaxMultiplier,
-    blend,
-  );
-  return effectiveDist * multiplier;
+  return applyBehindCameraDistanceBias({
+    effectiveDist,
+    objectWorldSize: size,
+    dot,
+    dotStart: voxelBehindCameraDotStart,
+    maxMultiplier: voxelBehindCameraMaxMultiplier,
+  });
 }
 
 export function getSelectionDistForLod(
@@ -174,8 +162,6 @@ export function mergeVoxelRequest(
 }
 
 export function runVoxelLodSelection(args: {
-  target: THREE.Vector3;
-  camDist: number;
   focusLod: number;
   cameraPosition: THREE.Vector3;
   cameraForward: THREE.Vector3;
@@ -209,8 +195,6 @@ export function runVoxelLodSelection(args: {
   debugLabelsDirty: boolean;
 } {
   const {
-    target,
-    camDist,
     focusLod,
     cameraPosition,
     cameraForward,
@@ -263,7 +247,12 @@ export function runVoxelLodSelection(args: {
   };
 
   const getEffectiveDist = (lod: number, regionX: number, regionY: number) => {
-    return getTileEffectiveDist(target, camDist, lod, regionX, regionY);
+    const key = voxelTileKey(lod, regionX, regionY);
+    return getTileEffectiveDist(
+      cameraPosition,
+      { lod, regionX, regionY },
+      loadedVoxels.get(key),
+    );
   };
 
   const getLodSelectionDist = (
@@ -272,11 +261,8 @@ export function runVoxelLodSelection(args: {
     regionY: number,
   ) => {
     return getTileLodSelectionDist({
-      target,
-      camDist,
-      lod,
-      regionX,
-      regionY,
+      entry: { lod, regionX, regionY },
+      loadedTile: loadedVoxels.get(voxelTileKey(lod, regionX, regionY)),
       cameraPosition,
       cameraForward,
       voxelBehindCameraDotStart: debugSettings.voxelBehindCameraDotStart,
@@ -340,9 +326,6 @@ export function runVoxelLodSelection(args: {
     );
     const loadedTile = loadedVoxels.get(key);
     const selfLoaded = !!loadedTile;
-    const selfComplete = loadedTile
-      ? isVoxelTileComplete(loadedTile.chunkCoverage)
-      : false;
     const selfStale = isVoxelTileStale(key);
     let hasSelectedCoverage = false;
     let needsSelfFallback = false;
@@ -375,14 +358,14 @@ export function runVoxelLodSelection(args: {
       }
     } else {
       needsSelfFallback = isAllowedLod(entry.lod);
-      if (selfLoaded && selfComplete && isAllowedLod(entry.lod)) {
+      if (selfLoaded && isAllowedLod(entry.lod)) {
+        // A partial chunkCoverage mask means some 32x32 columns are empty, not
+        // that the finer tile failed to cover its valid geometry. Treat any
+        // loaded tile as valid coverage so empty child columns do not force a
+        // coarser parent quadrant over nearby visible detail.
+        retainedLoadedVoxelKeys.add(key);
         visibleQuadrantMasks.set(key, 0b1111);
         hasSelectedCoverage = true;
-      } else if (selfLoaded && isAllowedLod(entry.lod)) {
-        retainedLoadedVoxelKeys.add(key);
-        if (!hasLoadedFallback) {
-          visibleQuadrantMasks.set(key, 0b1111);
-        }
       }
     }
 

@@ -55,7 +55,9 @@ At a high level:
 ### Voxel Contract
 
 - voxel payloads are requested by LOD and region coordinates
+- `/api/world/chunk-index` returns one entry per available voxel region column with `lod`, `regionX`, and `regionY`
 - the server generates payloads from `.region` files and keeps coordinate space in world units
+- the client uses loaded voxel mesh bounds to keep nearby visible geometry detailed, while unloaded regions still rely on cheap region-aligned distance heuristics from the chunk index
 - the client may apply final visibility-dependent shading after LOD coverage is resolved, so the payload structure and face-data semantics must stay aligned across both sides
 
 ### Live Update Contract

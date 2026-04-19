@@ -186,8 +186,14 @@ export interface PerformanceMemoryInfo {
 export interface VoxelFocusState {
   point: THREE.Vector3;
   zoomDist: number;
-  lastHitAt: number;
+  lastSampleAt: number;
   initialized: boolean;
+}
+
+export interface CursorHoverInfo {
+  pos: [number, number, number];
+  voxelChunkLod?: number;
+  voxelRegion?: [number, number];
 }
 
 export interface World3DViewProps {
@@ -210,7 +216,7 @@ export interface World3DViewProps {
   minRenderedVoxelLod: number;
   debugEnabled: boolean;
   debugSettings: MapDebugSettings;
-  onCursorMove: (pos: [number, number, number] | null) => void;
+  onCursorMove: (info: CursorHoverInfo | null) => void;
   onPlayerClick: (player: PlayerData) => void;
   onChunkStatsChange: (stats: ChunkStats) => void;
   onLoadingBreakdownChange: (loadingBreakdown: LoadingBreakdown) => void;

@@ -7,6 +7,7 @@ import type { PlayerData } from "../../features/world-view/hooks/usePlayers.js";
 import { usePlayers } from "../../features/world-view/hooks/usePlayers.js";
 import { useWebSocket } from "../../features/world-view/hooks/useWebSocket.js";
 import { useWorldData } from "../../features/world-view/hooks/useWorldData.js";
+import type { CursorHoverInfo } from "../../features/world-view/lib/types.js";
 import { useCompactViewport } from "../../hooks/useCompactViewport.js";
 import type {
   InitialCameraState,
@@ -42,19 +43,20 @@ export function WorldViewPageContent({
     worldData,
   });
 
-  const handleCursorMove = useCallback(
-    (pos: [number, number, number] | null) => {
-      const el = cursorHudRef.current;
-      if (!el) return;
-      if (!pos) {
-        el.style.display = "none";
-        return;
-      }
-      el.style.display = "";
-      el.textContent = `X ${pos[0]}  Y ${pos[1]}  Z ${pos[2]}`;
-    },
-    [],
-  );
+  const handleCursorMove = useCallback((info: CursorHoverInfo | null) => {
+    const el = cursorHudRef.current;
+    if (!el) return;
+    if (!info) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "";
+    const [x, y, z] = info.pos;
+    el.textContent =
+      info.voxelChunkLod !== undefined
+        ? `X ${x}  Y ${y}  Z ${z}  LOD ${info.voxelChunkLod} ${info.voxelRegion?.[0] ?? "?"}/${info.voxelRegion?.[1] ?? "?"}`
+        : `X ${x}  Y ${y}  Z ${z}`;
+  }, []);
 
   const handlePlayerClick = useCallback(
     (player: PlayerData) => {

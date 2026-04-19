@@ -65,7 +65,8 @@ export function rebuildVoxelIndex(entries: ChunkIndexEntry[]): {
 } {
   const availableKeys = new Set<string>();
   for (const entry of entries) {
-    availableKeys.add(voxelTileKey(entry.lod, entry.regionX, entry.regionY));
+    const key = voxelTileKey(entry.lod, entry.regionX, entry.regionY);
+    availableKeys.add(key);
   }
 
   const roots: ChunkIndexEntry[] = [];

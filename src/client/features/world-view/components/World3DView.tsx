@@ -326,7 +326,7 @@ export function World3DView({
   const voxelFocusStateRef = useRef<VoxelFocusState>({
     point: new THREE.Vector3(),
     zoomDist: 0,
-    lastHitAt: 0,
+    lastSampleAt: 0,
     initialized: false,
   });
 
@@ -922,15 +922,11 @@ export function World3DView({
   }
 
   function updateVoxelLod(
-    target: THREE.Vector3,
-    camDist: number,
     focusLod: number,
     cameraPosition: THREE.Vector3,
     cameraForward: THREE.Vector3,
   ) {
     updateVoxelLodManaged({
-      target,
-      camDist,
       focusLod,
       cameraPosition,
       cameraForward,
@@ -1125,11 +1121,17 @@ export function World3DView({
       syncTerrainLod,
       updateTerrainVisibility,
       terrainVisibilityDirtyRef,
-      resolveVoxelLodFocus: (activeCamera, activeControls) =>
+      resolveVoxelLodFocus: (activeCamera, activeControls, cameraForward) =>
         resolveVoxelLodFocus({
           camera: activeCamera,
           controls: activeControls,
           voxelGroup: voxelGroupRef.current,
+          loadedVoxels: loadedVoxelsRef.current,
+          cameraForward,
+          voxelBehindCameraDotStart:
+            debugSettingsRef.current.voxelBehindCameraDotStart,
+          voxelBehindCameraMaxMultiplier:
+            debugSettingsRef.current.voxelBehindCameraMaxMultiplier,
           state: voxelFocusStateRef.current,
           stickyMs: debugSettingsRef.current.voxelFocusStickyMs,
           smoothAlpha: debugSettingsRef.current.voxelFocusSmoothAlpha,
@@ -1314,12 +1316,14 @@ export function World3DView({
     modeRef,
     showTerrainRef,
     showVoxelTerrainRef,
+    showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
     debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,
+    loadedVoxelsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,

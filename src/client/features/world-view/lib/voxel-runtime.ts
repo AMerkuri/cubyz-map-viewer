@@ -1,4 +1,5 @@
 import type * as THREE from "three";
+import type { ChunkIndexEntry } from "../hooks/useWorldData.js";
 import type {
   LoadedVoxelTile,
   PendingVoxelFetchRequest,
@@ -285,12 +286,10 @@ export function drainVoxelFetchQueue(args: {
 }
 
 export function updateVoxelLod(args: {
-  target: THREE.Vector3;
-  camDist: number;
   focusLod: number;
   cameraPosition: THREE.Vector3;
   cameraForward: THREE.Vector3;
-  voxelRootEntries: { lod: number; regionX: number; regionY: number }[];
+  voxelRootEntries: ChunkIndexEntry[];
   availableVoxelKeys: Set<string>;
   loadedVoxels: Map<string, LoadedVoxelTile>;
   loadingVoxels: Set<string>;
@@ -323,8 +322,6 @@ export function updateVoxelLod(args: {
   debugLabelsDirtyRef: { current: boolean };
 }): void {
   const {
-    target,
-    camDist,
     focusLod,
     cameraPosition,
     cameraForward,
@@ -364,8 +361,6 @@ export function updateVoxelLod(args: {
     now - voxelLastMotionAt >= voxelDetailRequestDebounceMs;
 
   const result = runVoxelLodSelection({
-    target,
-    camDist,
     focusLod,
     cameraPosition,
     cameraForward,
@@ -604,6 +599,7 @@ export function buildQueuedVoxelMeshes(args: {
 
         for (const sm of built.subMeshes) {
           sm.mesh.visible = false;
+          sm.mesh.userData.voxelKey = item.key;
           voxelGroup.add(sm.mesh);
         }
         chunkBorderGroup?.add(borderLines);

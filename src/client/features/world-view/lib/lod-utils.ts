@@ -72,3 +72,25 @@ export function clampDistanceToLodRange(
   const upper = Number.isFinite(upperBase) ? upperBase - 0.001 : Infinity;
   return Math.min(Math.max(dist, lower), upper);
 }
+
+export function applyBehindCameraDistanceBias(args: {
+  effectiveDist: number;
+  objectWorldSize: number;
+  dot: number;
+  dotStart: number;
+  maxMultiplier: number;
+}): number {
+  const { effectiveDist, objectWorldSize, dot, dotStart, maxMultiplier } = args;
+  if (dot >= dotStart) return effectiveDist;
+
+  const blend = Math.min(
+    Math.max((-dot + dotStart) / Math.max(1e-6, 1 + dotStart), 0),
+    1,
+  );
+  const multiplier = 1 + (maxMultiplier - 1) * blend;
+
+  // Multiplying alone barely affects very close rear tiles, so add a
+  // size-aware penalty that scales with the same behind-camera blend.
+  const sizePenalty = objectWorldSize * multiplier * 2 * blend;
+  return effectiveDist * multiplier + sizePenalty;
+}

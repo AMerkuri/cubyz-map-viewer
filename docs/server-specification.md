@@ -114,6 +114,8 @@ At startup the server treats `CUBYZ_PATH/assets/*` as the base asset set and `SA
 2. The route reads the relevant save metadata or directory structure.
 3. The server returns compact JSON used to bootstrap the client scene and populate the world summary.
 
+`/api/world/chunk-index` stays a cheap directory-backed index with one entry per voxel region column: `lod`, `regionX`, and `regionY`.
+
 ### Player Metadata and Textures
 
 1. The client requests `/api/players` for current player positions, rotation, and health.
@@ -147,6 +149,8 @@ At startup the server treats `CUBYZ_PATH/assets/*` as the base asset set and `SA
 6. The binary mesh payload preserves direct world `X/Y/Z` coordinates and carries separate per-quad color, packed face AO, winding, and vertex-position sections so the client can defer final top-face AO application until after LOD visibility is known.
 7. The service drops stale results using epoch-based invalidation, caches the raw payload, and lazily caches `br` and `gzip` encoded variants keyed by `Accept-Encoding`.
 8. The route negotiates compressed voxel transport, computes the current ETag from source-file metadata before resolving the mesh body, and exposes timing and queue metrics through response headers.
+
+The mesh route remains the authoritative source for renderable geometry and for detailed voxel bounds. The client can use those loaded mesh bounds to improve LOD prioritization without making `/api/world/chunk-index` expensive.
 
 When `VOXEL_PREGENERATE_ON_STARTUP=true`, the server also walks the chunk index after it starts listening and requests each region once through `VoxelMeshService`. That background pass is best-effort, bounded for concurrency, populates the persistent `VOXEL_CACHE_DIR` cache for new meshes, and keeps recently processed raw payloads hot in the in-memory voxel cache.
 

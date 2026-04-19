@@ -6,6 +6,7 @@ import { World3DView } from "../../features/world-view/components/World3DView.js
 import type { PlayerData } from "../../features/world-view/hooks/usePlayers.js";
 import type { useWebSocket } from "../../features/world-view/hooks/useWebSocket.js";
 import type { useWorldData } from "../../features/world-view/hooks/useWorldData.js";
+import type { CursorHoverInfo } from "../../features/world-view/lib/types.js";
 import type {
   InitialCameraState,
   ShareLocationState,
@@ -24,7 +25,7 @@ export function WorldViewScene({
   players: PlayerData[];
   subscribe: ReturnType<typeof useWebSocket>["subscribe"];
   worldData: ReturnType<typeof useWorldData>;
-  onCursorMove: (pos: [number, number, number] | null) => void;
+  onCursorMove: (info: CursorHoverInfo | null) => void;
   onPlayerClick: (player: PlayerData) => void;
   onShareStateChange: (state: ShareLocationState) => void;
 }) {

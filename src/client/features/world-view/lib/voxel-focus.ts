@@ -1,13 +1,21 @@
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { clampDistanceToLodRange } from "./lod-utils.js";
-import type { VoxelFocusState } from "./types.js";
+import {
+  applyBehindCameraDistanceBias,
+  clampDistanceToLodRange,
+} from "./lod-utils.js";
+import type { LoadedVoxelTile, VoxelFocusState } from "./types.js";
+import { regionWorldSize } from "./utils.js";
 
 export function resolveVoxelLodFocus(args: {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   voxelGroup: THREE.Group | null;
+  loadedVoxels: Map<string, LoadedVoxelTile>;
+  cameraForward: THREE.Vector3;
+  voxelBehindCameraDotStart: number;
+  voxelBehindCameraMaxMultiplier: number;
   state: VoxelFocusState;
   stickyMs: number;
   smoothAlpha: number;
@@ -21,6 +29,10 @@ export function resolveVoxelLodFocus(args: {
     camera,
     controls,
     voxelGroup,
+    loadedVoxels,
+    cameraForward,
+    voxelBehindCameraDotStart,
+    voxelBehindCameraMaxMultiplier,
     state,
     stickyMs,
     smoothAlpha,
@@ -33,9 +45,23 @@ export function resolveVoxelLodFocus(args: {
 
   let rawPoint = fallbackPoint;
   let rawZoomDist = fallbackZoomDist;
-  let hadRayHit = false;
+  let sampled = false;
 
-  if (voxelGroup && voxelGroup.children.length > 0) {
+  const nearestEntry = findNearestLoadedVoxelFocus(
+    loadedVoxels,
+    camera.position,
+    cameraForward,
+    voxelBehindCameraDotStart,
+    voxelBehindCameraMaxMultiplier,
+  );
+  if (nearestEntry) {
+    sampled = true;
+    rawPoint.copy(nearestEntry.point);
+    rawZoomDist = nearestEntry.distance;
+    state.lastSampleAt = now;
+  }
+
+  if (!sampled && voxelGroup && voxelGroup.children.length > 0) {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     const intersections = raycaster.intersectObjects(
@@ -43,15 +69,15 @@ export function resolveVoxelLodFocus(args: {
       false,
     );
     if (intersections.length > 0) {
-      hadRayHit = true;
+      sampled = true;
       rawPoint = intersections[0].point.clone();
       const hitZoomDist = camera.position.distanceTo(intersections[0].point);
       rawZoomDist = Math.min(fallbackZoomDist, hitZoomDist);
-      state.lastHitAt = now;
+      state.lastSampleAt = now;
     }
   }
 
-  if (!hadRayHit && state.initialized && now - state.lastHitAt <= stickyMs) {
+  if (!sampled && state.initialized && now - state.lastSampleAt <= stickyMs) {
     rawPoint = state.point.clone();
     rawZoomDist = clampDistanceToLodRange(
       state.zoomDist,
@@ -81,4 +107,71 @@ export function resolveVoxelLodFocus(args: {
     point: state.point.clone(),
     zoomDist: state.zoomDist,
   };
+}
+
+function findNearestLoadedVoxelFocus(
+  loadedVoxels: Map<string, LoadedVoxelTile>,
+  cameraPosition: THREE.Vector3,
+  cameraForward: THREE.Vector3,
+  voxelBehindCameraDotStart: number,
+  voxelBehindCameraMaxMultiplier: number,
+): { point: THREE.Vector3; distance: number } | null {
+  let best: {
+    point: THREE.Vector3;
+    distance: number;
+  } | null = null;
+  const hasForward = cameraForward.lengthSq() > 1e-6;
+
+  for (const tile of loadedVoxels.values()) {
+    const candidate = getLoadedTileFocusPoint(tile, cameraPosition);
+    const distance = candidate.distanceTo(cameraPosition);
+    if (!Number.isFinite(distance)) continue;
+
+    let weightedDistance = distance;
+    if (hasForward) {
+      const toCandidateX = candidate.x - cameraPosition.x;
+      const toCandidateY = candidate.y - cameraPosition.y;
+      const horizontalLen = Math.hypot(toCandidateX, toCandidateY);
+      if (horizontalLen > 1e-6) {
+        const dot =
+          (cameraForward.x * toCandidateX + cameraForward.y * toCandidateY) /
+          horizontalLen;
+        if (dot < voxelBehindCameraDotStart) {
+          weightedDistance = applyBehindCameraDistanceBias({
+            effectiveDist: weightedDistance,
+            objectWorldSize: regionWorldSize(tile.lod),
+            dot,
+            dotStart: voxelBehindCameraDotStart,
+            maxMultiplier: voxelBehindCameraMaxMultiplier,
+          });
+        }
+      }
+    }
+
+    if (!best || weightedDistance < best.distance) {
+      best = { point: candidate, distance: weightedDistance };
+    }
+  }
+
+  return best;
+}
+
+function getLoadedTileFocusPoint(
+  tile: LoadedVoxelTile,
+  cameraPosition: THREE.Vector3,
+): THREE.Vector3 {
+  const size = regionWorldSize(tile.lod);
+  const minZ = Math.min(tile.minZ, tile.maxZ);
+  const maxZ = Math.max(tile.minZ, tile.maxZ);
+  return new THREE.Vector3(
+    clamp(cameraPosition.x, tile.regionX, tile.regionX + size),
+    clamp(cameraPosition.y, tile.regionY, tile.regionY + size),
+    Number.isFinite(minZ) && Number.isFinite(maxZ)
+      ? clamp(cameraPosition.z, minZ, maxZ)
+      : cameraPosition.z,
+  );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }

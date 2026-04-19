@@ -13,7 +13,7 @@ import {
   DAYLIGHT_FILL_POSITION,
   DAYLIGHT_MAIN_SUN_POSITION,
 } from "./daylight.js";
-import type { WorkerOut } from "./types.js";
+import type { CursorHoverInfo, LoadedVoxelTile, WorkerOut } from "./types.js";
 import { shouldRenderTerrainForMode } from "./utils.js";
 
 const MIN_CAMERA_DISTANCE = 1;
@@ -45,6 +45,7 @@ export function initializeSceneRuntime(args: {
   modeRef: { current: "terrain" | "voxel" };
   showTerrainRef: { current: boolean };
   showVoxelTerrainRef: { current: boolean };
+  showChunkBordersRef: { current: boolean };
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
   debugSettingsRef: { current: MapDebugSettings };
@@ -53,7 +54,8 @@ export function initializeSceneRuntime(args: {
   worldDataRef: {
     current: ReturnType<typeof useWorldData>;
   };
-  onCursorMoveRef: { current: (pos: [number, number, number] | null) => void };
+  loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };
   terrainVisibilityDirtyRef: { current: boolean };
   debugLabelsDirtyRef: { current: boolean };
@@ -106,12 +108,14 @@ export function initializeSceneRuntime(args: {
     modeRef,
     showTerrainRef,
     showVoxelTerrainRef,
+    showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
     debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,
+    loadedVoxelsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,
@@ -247,8 +251,11 @@ export function initializeSceneRuntime(args: {
     modeRef,
     showTerrainRef,
     showVoxelTerrainRef,
+    showChunkBordersRef,
+    debugEnabledRef,
     terrainGroupRef,
     voxelGroupRef,
+    loadedVoxelsRef,
     keysHeldRef,
     onCursorMoveRef,
   });

@@ -21,7 +21,12 @@ import {
 } from "./camera.js";
 import { TERRAIN_UNDERLAY_OFFSET_Z } from "./constants.js";
 import { initializeSceneRuntime } from "./scene-runtime.js";
-import type { InitialCameraState, World3DViewProps } from "./types.js";
+import type {
+  CursorHoverInfo,
+  InitialCameraState,
+  LoadedVoxelTile,
+  World3DViewProps,
+} from "./types.js";
 import { shouldRenderTerrainForMode } from "./utils.js";
 
 interface SceneRuntimeState {
@@ -48,6 +53,7 @@ export function useWorld3DSceneRuntime(args: {
   modeRef: { current: "terrain" | "voxel" };
   showTerrainRef: { current: boolean };
   showVoxelTerrainRef: { current: boolean };
+  showChunkBordersRef: { current: boolean };
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
   debugSettingsRef: { current: MapDebugSettings };
@@ -56,7 +62,8 @@ export function useWorld3DSceneRuntime(args: {
   worldDataRef: {
     current: ReturnType<typeof useWorldData>;
   };
-  onCursorMoveRef: { current: (pos: [number, number, number] | null) => void };
+  loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };
   terrainVisibilityDirtyRef: { current: boolean };
   debugLabelsDirtyRef: { current: boolean };
@@ -109,12 +116,14 @@ export function useWorld3DSceneRuntime(args: {
     modeRef,
     showTerrainRef,
     showVoxelTerrainRef,
+    showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
     debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,
+    loadedVoxelsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,
@@ -174,12 +183,14 @@ export function useWorld3DSceneRuntime(args: {
       modeRef,
       showTerrainRef,
       showVoxelTerrainRef,
+      showChunkBordersRef,
       showBiomeLabelsRef,
       debugEnabledRef,
       debugSettingsRef,
       keysHeldRef,
       terrainLoadGenerationRef,
       worldDataRef,
+      loadedVoxelsRef,
       onCursorMoveRef,
       onPlayerClickRef,
       terrainVisibilityDirtyRef,
@@ -219,12 +230,14 @@ export function useWorld3DSceneRuntime(args: {
     modeRef,
     showTerrainRef,
     showVoxelTerrainRef,
+    showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
     debugSettingsRef,
     keysHeldRef,
     terrainLoadGenerationRef,
     worldDataRef,
+    loadedVoxelsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,

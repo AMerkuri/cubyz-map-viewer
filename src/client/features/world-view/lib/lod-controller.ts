@@ -30,13 +30,12 @@ export function checkAndUpdateLod(args: {
   resolveVoxelLodFocus: (
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
+    cameraForward: THREE.Vector3,
   ) => { point: THREE.Vector3; zoomDist: number };
   voxelLodThresholds: { maxDist: number; lod: number }[];
   minRenderedVoxelLod: number;
   voxelLodHysteresisRatio: number;
   updateVoxelLod: (
-    target: THREE.Vector3,
-    camDist: number,
     focusLod: number,
     cameraPosition: THREE.Vector3,
     cameraForward: THREE.Vector3,
@@ -132,7 +131,7 @@ export function checkAndUpdateLod(args: {
       cameraForward.set(0, 0, 0);
     }
 
-    const focus = resolveVoxelLodFocus(camera, controls);
+    const focus = resolveVoxelLodFocus(camera, controls, cameraForward);
     const unclampedFocusLod = getLodForDistanceWithHysteresis(
       focus.zoomDist,
       activeFocusLodRef.current,
@@ -147,13 +146,7 @@ export function checkAndUpdateLod(args: {
         )
       ];
     activeFocusLodRef.current = focusLod;
-    updateVoxelLod(
-      focus.point,
-      focus.zoomDist,
-      focusLod,
-      camera.position,
-      cameraForward,
-    );
+    updateVoxelLod(focusLod, camera.position, cameraForward);
   }
 
   if (debugLabelsDirtyRef.current) {

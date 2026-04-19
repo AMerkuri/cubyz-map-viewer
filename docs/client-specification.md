@@ -128,14 +128,15 @@ src/client/
 ### Voxel Mode
 
 1. `WorldControlsProvider` enables chunk index loading once the user enters voxel mode.
-2. `useWorldData` fetches `/api/world/chunk-index`.
-3. The voxel runtime selects regions based on camera focus, distance, render distance, minimum voxel LOD, and preset tuning.
+2. `useWorldData` fetches `/api/world/chunk-index`, which stays a cheap list of available voxel region columns.
+3. The voxel runtime prioritizes detail from already loaded voxel mesh bounds and falls back to cheap region-aligned distance for unloaded regions, so nearby off-center structures can stay detailed without making chunk-index fetches expensive. Loaded-tile focus selection is still weighted by camera direction, and behind-camera bias adds a size-aware penalty so nearby rear chunks can fall back more aggressively during turns. In practice the rear multiplier is intentionally capped to a narrow range and the start threshold does most of the tuning.
 4. `/api/voxels/:lod/:regionX/:regionY` returns compressed binary payloads with `max-age=0` and ETag revalidation.
 5. The worker converts mesh buffers into typed arrays, bakes voxel face shading plus a wall depth gradient into base vertex colors, and keeps raw per-face AO separate from those base colors.
-6. The main thread uploads the data to Three.js geometries within a frame budget and applies final seam-aware AO after voxel LOD visibility and parent-child fallback coverage are resolved. Top-face AO runs on `L1` and `L2`, while side faces currently rely on the baked face tint and depth cue only. The Parameters panel exposes a runtime AO intensity control for tuning the top-face effect.
+6. The main thread uploads the data to Three.js geometries within a frame budget and applies final seam-aware AO after voxel LOD visibility and parent-child fallback coverage are resolved. Loaded finer voxel tiles count as valid visible coverage even when their chunk-column mask is partial, so coarse parent quadrants do not incorrectly override visible fine geometry just because some child columns are empty. Top-face AO runs on `L1` and `L2`, while side faces currently rely on the baked face tint and depth cue only. The Parameters panel exposes a runtime AO intensity control for tuning the top-face effect.
 7. The 3D runtime also publishes a lightweight loading breakdown every frame, and `WorldViewHud` uses it to drive the spinner even when debug stats are hidden.
 8. Cursor hover prefers voxel meshes and falls back to the terrain underlay when enabled, converting the underlay hit back to the terrain's real world height.
-9. Transient hover suppression from held keys or pointer drags is reset when the browser window loses focus so OS-level app switching cannot leave the coordinate HUD stuck hidden after returning.
+9. When Debug and Chunk Borders are both enabled in voxel mode, the same hover HUD also shows the hovered voxel chunk LOD and region coordinates beside the world coordinates, for example `LOD 1 1536/6016`.
+10. Transient hover suppression from held keys or pointer drags is reset when the browser window loses focus so OS-level app switching cannot leave the coordinate HUD stuck hidden after returning.
 
 ## Live Updates
 

@@ -1,5 +1,7 @@
 import * as THREE from "three";
 
+import type { CursorHoverInfo, LoadedVoxelTile } from "./types.js";
+
 const TOUCH_HOLD_DELAY_MS = 500;
 const TOUCH_HOLD_MOVE_THRESHOLD_PX = 12;
 const TOUCH_HOLD_LINGER_MS = 1000;
@@ -23,10 +25,13 @@ export function createCursorInteractionHandlers(args: {
   modeRef: { current: "terrain" | "voxel" };
   showTerrainRef: { current: boolean };
   showVoxelTerrainRef: { current: boolean };
+  showChunkBordersRef: { current: boolean };
+  debugEnabledRef: { current: boolean };
   terrainGroupRef: { current: THREE.Group | null };
   voxelGroupRef: { current: THREE.Group | null };
+  loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
   keysHeldRef: { current: Set<string> };
-  onCursorMoveRef: { current: (pos: [number, number, number] | null) => void };
+  onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
 }): CursorInteractionHandlers {
   const {
     renderer,
@@ -34,8 +39,11 @@ export function createCursorInteractionHandlers(args: {
     modeRef,
     showTerrainRef,
     showVoxelTerrainRef,
+    showChunkBordersRef,
+    debugEnabledRef,
     terrainGroupRef,
     voxelGroupRef,
+    loadedVoxelsRef,
     keysHeldRef,
     onCursorMoveRef,
   } = args;
@@ -56,16 +64,83 @@ export function createCursorInteractionHandlers(args: {
   function reportIntersection(
     intersection: THREE.Intersection,
     isTerrain: boolean,
+    voxelChunkLod?: number,
+    voxelRegion?: [number, number],
   ) {
     const point = intersection.point;
     const terrainOffsetZ = isTerrain
       ? intersection.object.getWorldPosition(objectWorldPosition).z
       : 0;
-    onCursorMoveRef.current([
+    const pos: [number, number, number] = [
       Math.round(point.x),
       Math.round(point.y),
       Math.round(point.z - terrainOffsetZ),
-    ]);
+    ];
+    onCursorMoveRef.current({ pos, voxelChunkLod, voxelRegion });
+  }
+
+  function resolveHoveredVoxelTile(
+    intersection: THREE.Intersection,
+  ): LoadedVoxelTile | undefined {
+    if (!debugEnabledRef.current || !showChunkBordersRef.current) {
+      return undefined;
+    }
+
+    let node: THREE.Object3D | null = intersection.object;
+    while (node) {
+      const voxelKey = node.userData.voxelKey as string | undefined;
+      if (voxelKey) {
+        return loadedVoxelsRef.current.get(voxelKey);
+      }
+      node = node.parent;
+    }
+
+    return undefined;
+  }
+
+  function isObjectEffectivelyVisible(object: THREE.Object3D): boolean {
+    let node: THREE.Object3D | null = object;
+    while (node) {
+      if (!node.visible) return false;
+      node = node.parent;
+    }
+    return true;
+  }
+
+  function selectBestVoxelIntersection(
+    intersections: THREE.Intersection[],
+  ): { intersection: THREE.Intersection; tile?: LoadedVoxelTile } | null {
+    let best: {
+      intersection: THREE.Intersection;
+      tile?: LoadedVoxelTile;
+    } | null = null;
+
+    for (const intersection of intersections) {
+      if (!isObjectEffectivelyVisible(intersection.object)) continue;
+      const tile = resolveHoveredVoxelTile(intersection);
+      if (!best) {
+        best = { intersection, tile };
+        continue;
+      }
+
+      const distDelta = Math.abs(
+        intersection.distance - best.intersection.distance,
+      );
+      if (distDelta <= 0.5) {
+        const bestLod = best.tile?.lod ?? Number.POSITIVE_INFINITY;
+        const nextLod = tile?.lod ?? Number.POSITIVE_INFINITY;
+        if (nextLod < bestLod) {
+          best = { intersection, tile };
+        }
+        continue;
+      }
+
+      if (intersection.distance < best.intersection.distance) {
+        best = { intersection, tile };
+      }
+    }
+
+    return best;
   }
 
   function clearCursorRefreshTimer() {
@@ -191,8 +266,16 @@ export function createCursorInteractionHandlers(args: {
 
     if (voxelTargets.length > 0) {
       const voxelIntersections = raycaster.intersectObjects(voxelTargets, true);
-      if (voxelIntersections.length > 0) {
-        reportIntersection(voxelIntersections[0], false);
+      const voxelHit = selectBestVoxelIntersection(voxelIntersections);
+      if (voxelHit) {
+        reportIntersection(
+          voxelHit.intersection,
+          false,
+          voxelHit.tile?.lod,
+          voxelHit.tile
+            ? [voxelHit.tile.regionX, voxelHit.tile.regionY]
+            : undefined,
+        );
         return;
       }
     }
