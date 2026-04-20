@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { ChunkIndexEntry } from "../hooks/useWorldData.js";
 
 import { LOD_LEVELS } from "./constants.js";
-import { VOXEL_TOP_AO } from "./daylight.js";
+import { VOXEL_TOP_AO, VOXEL_WALL_AO } from "./daylight.js";
 import {
   applyBehindCameraDistanceBias,
   getLodForDistanceWithHysteresis,
@@ -182,7 +182,8 @@ export function runVoxelLodSelection(args: {
     voxelBehindCameraMaxMultiplier: number;
     lodUnloadHysteresis: number;
     voxelLodHysteresisRatio: number;
-    voxelAoIntensity: number;
+    voxelTopAoIntensity: number;
+    voxelWallAoIntensity: number;
     voxelUnloadGraceMs: number;
   };
   getVoxelRefreshVersion: (key: string) => number;
@@ -426,10 +427,11 @@ export function runVoxelLodSelection(args: {
       const smVisible =
         (quadrantMask & voxelQuadrantBit(sm.quadrantIndex)) !== 0;
       if (smVisible) {
-        applyTopAoToSubMesh(
+        applyVoxelAoToSubMesh(
           tile,
           sm,
-          debugSettings.voxelAoIntensity,
+          debugSettings.voxelTopAoIntensity,
+          debugSettings.voxelWallAoIntensity,
           visibleQuadrantMasks,
           loadedVoxels,
           requestedVoxelRequests,
@@ -490,10 +492,11 @@ export function runVoxelLodSelection(args: {
   };
 }
 
-function applyTopAoToSubMesh(
+function applyVoxelAoToSubMesh(
   tile: LoadedVoxelTile,
   subMesh: LoadedVoxelTile["subMeshes"][number],
-  aoIntensity: number,
+  topAoIntensity: number,
+  wallAoIntensity: number,
   visibleQuadrantMasks: Map<string, number>,
   loadedVoxels: Map<string, LoadedVoxelTile>,
   requestedVoxelRequests: Map<string, PendingVoxelFetchRequest>,
@@ -501,7 +504,13 @@ function applyTopAoToSubMesh(
   const topAoEnabled = VOXEL_TOP_AO.enabledLods.includes(
     tile.lod as (typeof VOXEL_TOP_AO.enabledLods)[number],
   );
-  if (!topAoEnabled || aoIntensity <= 0) {
+  const wallAoEnabled = VOXEL_WALL_AO.enabledLods.includes(
+    tile.lod as (typeof VOXEL_WALL_AO.enabledLods)[number],
+  );
+  if (
+    (!topAoEnabled && !wallAoEnabled) ||
+    (topAoIntensity <= 0 && wallAoIntensity <= 0)
+  ) {
     restoreSubMeshBaseColors(subMesh);
     return;
   }
@@ -512,51 +521,71 @@ function applyTopAoToSubMesh(
   const normalAttr = geometry.getAttribute("normal");
   if (!colorAttr || !positionAttr || !normalAttr) return;
 
-  const boundaryState = getAoBoundaryState(
-    tile,
-    subMesh.quadrantIndex,
-    visibleQuadrantMasks,
-    loadedVoxels,
-    requestedVoxelRequests,
-  );
-  const intensityKey = Math.round(aoIntensity * 100);
-  const signature = `${boundaryState.west}${boundaryState.east}${boundaryState.south}${boundaryState.north}:${intensityKey}`;
+  const topIntensityKey = Math.round(topAoIntensity * 100);
+  const wallIntensityKey = Math.round(wallAoIntensity * 100);
+  const boundaryState = topAoEnabled
+    ? getAoBoundaryState(
+        tile,
+        subMesh.quadrantIndex,
+        visibleQuadrantMasks,
+        loadedVoxels,
+        requestedVoxelRequests,
+      )
+    : null;
+  const signature = boundaryState
+    ? `${boundaryState.west}${boundaryState.east}${boundaryState.south}${boundaryState.north}:${topIntensityKey}:${wallIntensityKey}`
+    : `wall:${topIntensityKey}:${wallIntensityKey}`;
   if (subMesh.aoBoundarySignature === signature) {
     return;
   }
 
   const colors = colorAttr.array as Float32Array;
   colors.set(subMesh.baseColors);
-  const regionSize = regionWorldSize(tile.lod);
-  const blendWorld = VOXEL_TOP_AO.seamBlendCells * tile.voxelSize;
+  const regionSize = topAoEnabled ? regionWorldSize(tile.lod) : 0;
+  const blendWorld = topAoEnabled
+    ? VOXEL_TOP_AO.seamBlendCells * tile.voxelSize
+    : 0;
 
   for (let i = 0; i < positionAttr.count; i++) {
     const normalZ = normalAttr.getZ(i);
-    if (normalZ < 0.5) continue;
     const aoLevel = subMesh.faceAo[i] ?? 0;
     if (aoLevel <= 0) continue;
 
-    const worldX = positionAttr.getX(i);
-    const worldY = positionAttr.getY(i);
-    const localX = worldX - tile.regionX;
-    const localY = worldY - tile.regionY;
-    const seamLift = getAoSeamLift(
-      localX,
-      localY,
-      regionSize,
-      blendWorld,
-      boundaryState,
-    );
-    const minShade = THREE.MathUtils.lerp(
-      VOXEL_TOP_AO.minShade,
-      VOXEL_TOP_AO.seamMinShade,
-      seamLift,
-    );
-    const shade = THREE.MathUtils.lerp(
-      1,
-      minShade,
-      Math.min(1, (aoLevel / 3) * aoIntensity),
-    );
+    const topFace = topAoEnabled && normalZ >= 0.5;
+    const wallFace = wallAoEnabled && Math.abs(normalZ) < 0.5;
+    if (!topFace && !wallFace) continue;
+
+    let shade = 1;
+    if (topFace && boundaryState) {
+      const worldX = positionAttr.getX(i);
+      const worldY = positionAttr.getY(i);
+      const localX = worldX - tile.regionX;
+      const localY = worldY - tile.regionY;
+      const seamLift = getAoSeamLift(
+        localX,
+        localY,
+        regionSize,
+        blendWorld,
+        boundaryState,
+      );
+      const minShade = THREE.MathUtils.lerp(
+        VOXEL_TOP_AO.minShade,
+        VOXEL_TOP_AO.seamMinShade,
+        seamLift,
+      );
+      shade = THREE.MathUtils.lerp(
+        1,
+        minShade,
+        getTopAoWeight(aoLevel, topAoIntensity),
+      );
+    } else if (wallFace) {
+      shade = THREE.MathUtils.lerp(
+        1,
+        VOXEL_WALL_AO.minShade,
+        getWallAoWeight(aoLevel, wallAoIntensity),
+      );
+    }
+
     colors[i * 3] *= shade;
     colors[i * 3 + 1] *= shade;
     colors[i * 3 + 2] *= shade;
@@ -564,6 +593,20 @@ function applyTopAoToSubMesh(
 
   colorAttr.needsUpdate = true;
   subMesh.aoBoundarySignature = signature;
+}
+
+function getWallAoWeight(aoLevel: number, aoIntensity: number): number {
+  const clampedIntensity = Math.max(0, aoIntensity);
+  const baseWeight =
+    aoLevel >= 3 ? 1 : aoLevel === 2 ? 0.58 : aoLevel === 1 ? 0.03 : 0;
+  return Math.min(1, baseWeight * clampedIntensity);
+}
+
+function getTopAoWeight(aoLevel: number, aoIntensity: number): number {
+  const clampedIntensity = Math.max(0, aoIntensity);
+  const baseWeight =
+    aoLevel >= 3 ? 1 : aoLevel === 2 ? 0.22 : aoLevel === 1 ? 0.05 : 0;
+  return Math.min(1, baseWeight * clampedIntensity);
 }
 
 function restoreSubMeshBaseColors(

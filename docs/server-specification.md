@@ -37,6 +37,7 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 - `VoxelWorkerPool` runs the TypeScript worker through `src/server/workers/voxel-worker-dev.js` in dev and the built worker from `dist/server/workers/` in production.
 - Global Express compression explicitly skips `/api/voxels`; that route negotiates and caches its own compressed variants.
 - The route rejects clients that do not advertise `br` or `gzip` support.
+- The voxel generator keeps the binary layout compact by reusing the existing per-quad AO byte for LOD `1/2` top faces and concave vertical wall corners instead of adding a separate wall-lighting payload.
 
 ## Assets And Overrides
 

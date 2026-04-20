@@ -173,16 +173,29 @@ export function MapDebugParameters({
               onChange={onMinRenderedVoxelLodChange}
             />
             <SliderRow
-              label="AO Intensity"
-              description="Scales seam-aware top-face voxel ambient occlusion for L1 and L2 after visible LOD coverage is resolved."
-              value={settings.voxelAoIntensity}
-              displayValue={settings.voxelAoIntensity.toFixed(2)}
+              label="Top AO Intensity"
+              description="Scales seam-aware top-face AO for L1 and L2."
+              value={settings.voxelTopAoIntensity}
+              displayValue={settings.voxelTopAoIntensity.toFixed(2)}
               min={0}
               max={1.5}
               step={0.05}
-              defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelAoIntensity}
+              defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelTopAoIntensity}
               onChange={(value) =>
-                onChange({ ...settings, voxelAoIntensity: value })
+                onChange({ ...settings, voxelTopAoIntensity: value })
+              }
+            />
+            <SliderRow
+              label="Wall AO Intensity"
+              description="Scales server-baked vertical-wall AO, including full-height concave wall corners, for L1 and L2."
+              value={settings.voxelWallAoIntensity}
+              displayValue={settings.voxelWallAoIntensity.toFixed(2)}
+              min={0}
+              max={1.5}
+              step={0.05}
+              defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelWallAoIntensity}
+              onChange={(value) =>
+                onChange({ ...settings, voxelWallAoIntensity: value })
               }
             />
           </>

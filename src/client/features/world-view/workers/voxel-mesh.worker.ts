@@ -22,8 +22,9 @@ const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
  *     i32 worldX, i32 worldY, i32 worldZBase, u32 quadCount, u32 voxelSize
  *   Per-quad color section (quadCount × 3 bytes, padded to 4-byte alignment):
  *     u8 r, u8 g, u8 b per quad
- *   Per-quad top-face AO section (quadCount bytes, padded to 4-byte alignment):
- *     u8 packedAo per quad: 2 bits per corner for z+ faces, 0 for others
+ *   Per-quad AO section (quadCount bytes, padded to 4-byte alignment):
+ *     u8 packedAo per quad: 2 bits per corner for z+ faces and vertical walls,
+ *     0 for faces without AO
  *   Per-quad winding section (quadCount bytes, padded to 4-byte alignment):
  *     u8 dir per quad: 1 = standard winding, 0 = flipped winding
  *   Per-vertex position section (quadCount × 4 × 4 bytes):

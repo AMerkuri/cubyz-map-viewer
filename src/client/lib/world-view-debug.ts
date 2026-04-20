@@ -59,7 +59,8 @@ export interface MapDebugSettings {
   lodUnloadHysteresis: number;
   maxConcurrentVoxelFetches: number;
   maxConcurrentTerrainFetches: number;
-  voxelAoIntensity: number;
+  voxelTopAoIntensity: number;
+  voxelWallAoIntensity: number;
   voxelFocusStickyMs: number;
   voxelFocusSmoothAlpha: number;
   voxelLodHysteresisRatio: number;
@@ -99,7 +100,8 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   lodUnloadHysteresis: 1.5,
   maxConcurrentVoxelFetches: 8,
   maxConcurrentTerrainFetches: 4,
-  voxelAoIntensity: 1,
+  voxelTopAoIntensity: 1,
+  voxelWallAoIntensity: 1,
   voxelFocusStickyMs: 1500,
   voxelFocusSmoothAlpha: 0.6,
   voxelLodHysteresisRatio: 0.12,

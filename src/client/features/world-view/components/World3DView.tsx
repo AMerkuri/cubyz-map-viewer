@@ -157,6 +157,14 @@ export function World3DView({
     });
   }
 
+  // FOR DEBUGGING
+  // const voxelMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  // if (!voxelMaterialRef.current) {
+  //   voxelMaterialRef.current = new THREE.MeshBasicMaterial({
+  //     vertexColors: true,
+  //     side: THREE.FrontSide,
+  //   });
+  // }
   const voxelMaterialRef = useRef<THREE.MeshLambertMaterial | null>(null);
   if (!voxelMaterialRef.current) {
     voxelMaterialRef.current = new THREE.MeshLambertMaterial({
@@ -950,7 +958,8 @@ export function World3DView({
         lodUnloadHysteresis: debugSettingsRef.current.lodUnloadHysteresis,
         voxelLodHysteresisRatio:
           debugSettingsRef.current.voxelLodHysteresisRatio,
-        voxelAoIntensity: debugSettingsRef.current.voxelAoIntensity,
+        voxelTopAoIntensity: debugSettingsRef.current.voxelTopAoIntensity,
+        voxelWallAoIntensity: debugSettingsRef.current.voxelWallAoIntensity,
         voxelUnloadGraceMs: debugSettingsRef.current.voxelUnloadGraceMs,
       },
       pendingVoxelDetailRequestsRef,

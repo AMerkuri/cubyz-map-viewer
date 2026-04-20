@@ -57,6 +57,7 @@ At a high level:
 - voxel payloads are requested by LOD and region coordinates
 - `/api/world/chunk-index` returns one entry per available voxel region column with `lod`, `regionX`, and `regionY`
 - the server generates payloads from `.region` files and keeps coordinate space in world units
+- voxel mesh payloads include one packed AO byte per quad; at LOD `1` and `2` that AO applies to top faces and to a thin top band on vertical walls so tall cliffs do not get full-height AO gradients, while the client still performs the final visibility-dependent top-edge seam softening after LOD coverage is resolved
 - the client uses loaded voxel mesh bounds to keep nearby visible geometry detailed, while unloaded regions still rely on cheap region-aligned distance heuristics from the chunk index
 - the client may apply final visibility-dependent shading after LOD coverage is resolved, so the payload structure and face-data semantics must stay aligned across both sides
 

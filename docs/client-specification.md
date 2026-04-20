@@ -28,6 +28,8 @@ This document covers client-owned architecture and runtime behavior. Shared cont
 - `World3DView.tsx` keeps scene state in refs and delegates most runtime work to `features/world-view/lib/`; avoid moving per-frame state into React state.
 - Terrain and voxel loading both use bounded fetch/build queues plus warm caches to avoid rebuilding everything during camera movement.
 - `src/client/features/world-view/workers/voxel-mesh.worker.ts` decodes voxel mesh payloads off the main thread before Three.js upload.
+- Voxel meshes use baked vertex colors with an unlit material, so voxel face contrast comes from the worker-generated colors plus AO rather than from runtime Lambert lighting.
+- Voxel AO is split between server and client responsibilities: the server packs per-quad AO for LOD `1/2` top faces and concave vertical wall corners, while the client applies the final wall shading directly, uses separate debug intensities for top and wall AO, and still softens top-face AO near active LOD boundaries after visibility selection.
 
 ## Change-Sensitive Facts
 

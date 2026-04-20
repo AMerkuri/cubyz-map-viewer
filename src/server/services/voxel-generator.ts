@@ -772,8 +772,12 @@ export async function generateVoxelMesh(
     y: number,
     z: number,
   ): Promise<number> {
-    if ((lod !== 1 && lod !== 2) || face !== "z+") return 0;
-    return getPackedTopFaceAo(x, y, z);
+    if (lod !== 1 && lod !== 2) return 0;
+    if (face === "z+") return getPackedTopFaceAo(x, y, z);
+    if (face === "x+" || face === "x-" || face === "y+" || face === "y-") {
+      return getPackedVerticalCornerAo(face, x, y, z);
+    }
+    return 0;
   }
 
   async function getPackedTopFaceAo(
@@ -804,6 +808,100 @@ export async function generateVoxelMesh(
     }
 
     return packed;
+  }
+
+  async function getPackedVerticalCornerAo(
+    face: Direction,
+    x: number,
+    y: number,
+    z: number,
+  ): Promise<number> {
+    let packed = 0;
+
+    for (const edge of getVerticalFaceEdgeDiagonals(face)) {
+      const diagonalSolid = await isSolidCellWorld(
+        x + edge.faceDx + edge.edgeDx,
+        y + edge.faceDy + edge.edgeDy,
+        z,
+      );
+      if (!diagonalSolid) continue;
+
+      for (const cornerIndex of edge.cornerIndices) {
+        packed |= 2 << (cornerIndex * 2);
+      }
+    }
+
+    return packed;
+  }
+
+  function getVerticalFaceEdgeDiagonals(face: Direction): Array<{
+    faceDx: number;
+    faceDy: number;
+    edgeDx: number;
+    edgeDy: number;
+    cornerIndices: [number, number];
+  }> {
+    switch (face) {
+      case "x+":
+        return [
+          {
+            faceDx: 1,
+            faceDy: 0,
+            edgeDx: 0,
+            edgeDy: -1,
+            cornerIndices: [0, 3],
+          },
+          { faceDx: 1, faceDy: 0, edgeDx: 0, edgeDy: 1, cornerIndices: [1, 2] },
+        ];
+      case "x-":
+        return [
+          {
+            faceDx: -1,
+            faceDy: 0,
+            edgeDx: 0,
+            edgeDy: -1,
+            cornerIndices: [0, 3],
+          },
+          {
+            faceDx: -1,
+            faceDy: 0,
+            edgeDx: 0,
+            edgeDy: 1,
+            cornerIndices: [1, 2],
+          },
+        ];
+      case "y+":
+        return [
+          {
+            faceDx: 0,
+            faceDy: 1,
+            edgeDx: -1,
+            edgeDy: 0,
+            cornerIndices: [0, 3],
+          },
+          { faceDx: 0, faceDy: 1, edgeDx: 1, edgeDy: 0, cornerIndices: [1, 2] },
+        ];
+      case "y-":
+        return [
+          {
+            faceDx: 0,
+            faceDy: -1,
+            edgeDx: -1,
+            edgeDy: 0,
+            cornerIndices: [0, 3],
+          },
+          {
+            faceDx: 0,
+            faceDy: -1,
+            edgeDx: 1,
+            edgeDy: 0,
+            cornerIndices: [1, 2],
+          },
+        ];
+      case "z+":
+      case "z-":
+        return [];
+    }
   }
 
   function computeCornerAo(
@@ -1188,7 +1286,11 @@ function buildMergedQuads(faceMap: Map<string, FaceEntry>): BinaryQuad[] {
             ? Math.min(COLUMN_VOXELS, v + cellsUntilChunkBoundary(v))
             : Number.MAX_SAFE_INTEGER;
         let dv = 1;
-        while (v + dv < maxV && row.get(v + dv)?.typ === entry.typ) {
+        while (
+          v + dv < maxV &&
+          row.get(v + dv)?.typ === entry.typ &&
+          row.get(v + dv)?.packedAo === entry.packedAo
+        ) {
           dv++;
         }
 
@@ -1214,7 +1316,16 @@ function buildMergedQuads(faceMap: Map<string, FaceEntry>): BinaryQuad[] {
         }
 
         quads.push(
-          createMergedQuad(face, group.plane, u, v, du, dv, entry.typ, 0),
+          createMergedQuad(
+            face,
+            group.plane,
+            u,
+            v,
+            du,
+            dv,
+            entry.typ,
+            isSideFace ? entry.packedAo : 0,
+          ),
         );
       }
     }
