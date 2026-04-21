@@ -179,7 +179,6 @@ async function warmVoxelCacheOnStartup(
   }
 
   const workers = voxelMeshService.getMetricsSnapshot().workers;
-  const concurrency = Math.max(1, Math.min(workers, 4));
   let nextIndex = 0;
   let completed = 0;
   let warmed = 0;
@@ -188,7 +187,6 @@ async function warmVoxelCacheOnStartup(
 
   logger.info("Voxel startup warmup started", {
     regions: chunkIndex.length,
-    concurrency,
     workers,
   });
 
@@ -237,7 +235,7 @@ async function warmVoxelCacheOnStartup(
     }
   };
 
-  await Promise.all(Array.from({ length: concurrency }, () => warmRegion()));
+  await Promise.all(Array.from({ length: workers }, () => warmRegion()));
 
   logger.info("Voxel startup warmup finished", {
     completed,
