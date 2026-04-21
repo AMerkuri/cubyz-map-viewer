@@ -109,7 +109,7 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   voxelMeshBuildBudgetMs: 5,
   maxVoxelMeshesPerFrame: 8,
   lodUnloadHysteresis: 1.5,
-  voxelBehindCameraDotStart: -0.50,
+  voxelBehindCameraDotStart: -0.5,
   voxelBehindCameraMaxMultiplier: 1.05,
   warmTerrainCacheMaxBytes: 256 * MB,
   warmVoxelCacheLimitBytes: 512 * MB,
