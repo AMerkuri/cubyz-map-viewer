@@ -17,33 +17,22 @@ const VOXEL_MISS_CACHE_CONTROL = "no-store";
 
 type NegotiatedVoxelEncoding = Exclude<VoxelContentEncoding, "identity">;
 
-function encodingPreference(encoding: VoxelContentEncoding): number {
-  switch (encoding) {
-    case "br":
-      return 1;
-    case "gzip":
-      return 0;
-    case "identity":
-      return -1;
-  }
-}
+type PreferredVoxelEncoding = NegotiatedVoxelEncoding;
 
-function pickVoxelEncoding(
+function parseAcceptEncoding(
   acceptEncoding: string | undefined,
-): NegotiatedVoxelEncoding | null {
-  if (!acceptEncoding) return null;
+): Map<NegotiatedVoxelEncoding, number> {
+  const qualities = new Map<NegotiatedVoxelEncoding, number>();
+  if (!acceptEncoding) {
+    return qualities;
+  }
   const entries = acceptEncoding
     .split(",")
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
-  const supported = new Set<NegotiatedVoxelEncoding>(["br", "gzip"]);
-  let best: {
-    encoding: NegotiatedVoxelEncoding;
-    quality: number;
-    order: number;
-  } | null = null;
+  let wildcardQuality: number | null = null;
 
-  for (const [order, entry] of entries.entries()) {
+  for (const entry of entries) {
     const [token, ...params] = entry.split(";").map((part) => part.trim());
     if (!token) continue;
     let quality = 1;
@@ -53,32 +42,64 @@ function pickVoxelEncoding(
       const parsed = Number(rawValue);
       quality = Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : 0;
     }
-    const candidates: NegotiatedVoxelEncoding[] =
-      token === "*"
-        ? ["br", "gzip"]
-        : supported.has(token as NegotiatedVoxelEncoding)
-          ? [token as NegotiatedVoxelEncoding]
-          : [];
-    for (const encoding of candidates) {
-      if (quality <= 0) continue;
-      if (
-        !best ||
-        quality > best.quality ||
-        (quality === best.quality &&
-          (encodingPreference(encoding) > encodingPreference(best.encoding) ||
-            (encodingPreference(encoding) ===
-              encodingPreference(best.encoding) &&
-              order < best.order)))
-      ) {
-        best = { encoding, quality, order };
-      }
+    if (token === "br" || token === "gzip") {
+      qualities.set(token, Math.max(qualities.get(token) ?? 0, quality));
+    } else if (token === "*") {
+      wildcardQuality = Math.max(wildcardQuality ?? 0, quality);
     }
   }
 
-  return best?.encoding ?? null;
+  if (wildcardQuality !== null) {
+    if (!qualities.has("br")) {
+      qualities.set("br", wildcardQuality);
+    }
+    if (!qualities.has("gzip")) {
+      qualities.set("gzip", wildcardQuality);
+    }
+  }
+
+  return qualities;
 }
 
-export function createVoxelsRouter(voxelMeshService: VoxelMeshService): Router {
+function pickVoxelEncoding(
+  acceptEncoding: string | undefined,
+  preferredEncoding: PreferredVoxelEncoding,
+): NegotiatedVoxelEncoding | null {
+  const qualities = parseAcceptEncoding(acceptEncoding);
+  const brQuality = qualities.get("br") ?? 0;
+  const gzipQuality = qualities.get("gzip") ?? 0;
+  const brAccepted = brQuality > 0;
+  const gzipAccepted = gzipQuality > 0;
+
+  if (!brAccepted && !gzipAccepted) {
+    return null;
+  }
+
+  if (brAccepted && !gzipAccepted) {
+    return "br";
+  }
+
+  if (gzipAccepted && !brAccepted) {
+    return "gzip";
+  }
+
+  if (preferredEncoding === "br") {
+    if (brQuality >= gzipQuality) {
+      return "br";
+    }
+    return "gzip";
+  }
+
+  if (gzipQuality >= brQuality) {
+    return "gzip";
+  }
+  return "br";
+}
+
+export function createVoxelsRouter(
+  voxelMeshService: VoxelMeshService,
+  preferredEncoding: PreferredVoxelEncoding,
+): Router {
   const router = Router();
 
   router.get("/metrics", async (req: Request, res: Response) => {
@@ -127,7 +148,10 @@ export function createVoxelsRouter(voxelMeshService: VoxelMeshService): Router {
     assertAlignedRegion(lod, regionX, regionY);
 
     const key = `${lod}/${regionX}/${regionY}`;
-    const contentEncoding = pickVoxelEncoding(req.get("accept-encoding"));
+    const contentEncoding = pickVoxelEncoding(
+      req.get("accept-encoding"),
+      preferredEncoding,
+    );
     if (!contentEncoding) {
       res.status(406).json({
         error: "Voxel responses require br or gzip Accept-Encoding support",

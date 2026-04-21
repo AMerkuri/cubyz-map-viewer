@@ -60,12 +60,12 @@ export type VoxelContentEncoding = CompressedVoxelEncoding | "identity";
 
 const brotliCompressAsync = promisify(brotliCompress);
 const gzipAsync = promisify(gzip);
-const BROTLI_RESPONSE_OPTIONS = {
-  params: {
-    [zlibConstants.BROTLI_PARAM_QUALITY]: 6,
-  },
-};
-const GZIP_RESPONSE_OPTIONS = { level: 6 };
+
+interface VoxelCompressionConfig {
+  brotliQuality: number;
+  brotliLgwin: number;
+  gzipLevel: number;
+}
 
 interface VoxelRequestMetrics {
   source: "cache" | "worker";
@@ -112,6 +112,7 @@ export class VoxelMeshService {
   private readonly pool: VoxelWorkerPool;
   private readonly cache: LRUCache<string, CachedVoxelMesh>;
   private readonly savePath: string;
+  private readonly compressionConfig: VoxelCompressionConfig;
   private readonly inFlight = new Map<string, InFlightJob>();
   private globalEpoch = 0;
   private nextJobId = 1;
@@ -131,10 +132,16 @@ export class VoxelMeshService {
     blockColors: BlockColorTable,
     workerCount?: number,
     cacheSize = 1024,
+    compressionConfig: VoxelCompressionConfig = {
+      brotliQuality: 5,
+      brotliLgwin: 20,
+      gzipLevel: 6,
+    },
   ) {
     this.savePath = savePath;
     this.pool = new VoxelWorkerPool(savePath, blockColors, workerCount);
     this.cache = new LRUCache<string, CachedVoxelMesh>(cacheSize);
+    this.compressionConfig = compressionConfig;
   }
 
   async start(): Promise<void> {
@@ -484,8 +491,20 @@ export class VoxelMeshService {
   ): Promise<CachedVoxelVariant> {
     const compressed =
       contentEncoding === "br"
-        ? await brotliCompressAsync(cached.buf, BROTLI_RESPONSE_OPTIONS)
-        : await gzipAsync(cached.buf, GZIP_RESPONSE_OPTIONS);
+        ? await brotliCompressAsync(cached.buf, {
+            params: {
+              [zlibConstants.BROTLI_PARAM_MODE]:
+                zlibConstants.BROTLI_MODE_GENERIC,
+              [zlibConstants.BROTLI_PARAM_QUALITY]:
+                this.compressionConfig.brotliQuality,
+              [zlibConstants.BROTLI_PARAM_LGWIN]:
+                this.compressionConfig.brotliLgwin,
+              [zlibConstants.BROTLI_PARAM_SIZE_HINT]: cached.buf.byteLength,
+            },
+          })
+        : await gzipAsync(cached.buf, {
+            level: this.compressionConfig.gzipLevel,
+          });
     return {
       buf: compressed,
       etag: this.buildVariantEtag(

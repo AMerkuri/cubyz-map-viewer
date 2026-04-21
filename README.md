@@ -74,6 +74,9 @@ Recommended Docker environment variables:
 
 - `VOXEL_PREGENERATE_ON_STARTUP=true` to warm the voxel cache in the background after startup instead of ondemand when clients request voxel regions
 - `VOXEL_MEMORY_CACHE_SIZE=1024`; this is the default value. Increase it if the container has spare RAM and the save is larger. Decrease it on memory-constrained systems.
+- `VOXEL_PREFERRED_ENCODING=br`; brotli has smaller transfer size but uses more CPU and increases latency. Switch to `gzip` when you want faster compression and slightly larger payloads, especially on CPU-constrained hosts or when response generation latency matters more than transfer size.
+
+See [`.env.example`](./.env.example) for the full list of available environment parameters and their defaults.
 
 Helpful Compose commands:
 

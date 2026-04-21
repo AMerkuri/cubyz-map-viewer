@@ -49,6 +49,30 @@ const VOXEL_MEMORY_CACHE_SIZE = parseInt(
   process.env.VOXEL_MEMORY_CACHE_SIZE ?? "1024",
   10,
 );
+const VOXEL_BROTLI_QUALITY = parseIntegerEnv(
+  process.env.VOXEL_BROTLI_QUALITY,
+  6,
+  0,
+  11,
+  "VOXEL_BROTLI_QUALITY",
+);
+const VOXEL_BROTLI_LGWIN = parseIntegerEnv(
+  process.env.VOXEL_BROTLI_LGWIN,
+  11,
+  10,
+  24,
+  "VOXEL_BROTLI_LGWIN",
+);
+const VOXEL_GZIP_LEVEL = parseIntegerEnv(
+  process.env.VOXEL_GZIP_LEVEL,
+  3,
+  0,
+  9,
+  "VOXEL_GZIP_LEVEL",
+);
+const VOXEL_PREFERRED_ENCODING = parsePreferredEncodingEnv(
+  process.env.VOXEL_PREFERRED_ENCODING,
+);
 const VOXEL_FULL_CLEAR_THROTTLE_MS = parseInt(
   process.env.VOXEL_FULL_CLEAR_THROTTLE_MS ?? "1000",
   10,
@@ -110,6 +134,37 @@ const allowedOrigins = new Set(
 
 function parseBooleanEnv(value: string | undefined): boolean {
   return value === "1" || value === "true";
+}
+
+function parseIntegerEnv(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+  name: string,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+
+  return parsed;
+}
+
+function parsePreferredEncodingEnv(value: string | undefined): "br" | "gzip" {
+  if (value === undefined || value === "") {
+    return "br";
+  }
+
+  if (value === "br" || value === "gzip") {
+    return value;
+  }
+
+  throw new Error('VOXEL_PREFERRED_ENCODING must be "br" or "gzip"');
 }
 
 async function warmVoxelCacheOnStartup(
@@ -342,12 +397,23 @@ async function main() {
       ? parseInt(process.env.VOXEL_WORKERS, 10)
       : undefined,
     VOXEL_MEMORY_CACHE_SIZE,
+    {
+      brotliQuality: VOXEL_BROTLI_QUALITY,
+      brotliLgwin: VOXEL_BROTLI_LGWIN,
+      gzipLevel: VOXEL_GZIP_LEVEL,
+    },
   );
   await voxelMeshService.start();
   const voxelMetrics = voxelMeshService.getMetricsSnapshot();
   logger.info("Voxel worker runtime", {
     mode: voxelMetrics.workerRuntimeMode,
     workers: voxelMetrics.workers,
+    compression: {
+      brotliQuality: VOXEL_BROTLI_QUALITY,
+      brotliLgwin: VOXEL_BROTLI_LGWIN,
+      gzipLevel: VOXEL_GZIP_LEVEL,
+      preferredEncoding: VOXEL_PREFERRED_ENCODING,
+    },
   });
 
   // Create Express app
@@ -410,7 +476,10 @@ async function main() {
   app.use("/api/players", createPlayersRouter(savePath));
   app.use("/api/terrain", createTerrainRouter(savePath, colorMap));
   app.use("/api/biomes", createBiomesRouter(savePath, biomePalette));
-  app.use("/api/voxels", createVoxelsRouter(voxelMeshService));
+  app.use(
+    "/api/voxels",
+    createVoxelsRouter(voxelMeshService, VOXEL_PREFERRED_ENCODING),
+  );
 
   app.get("/api/blocks/colors", (_req, res) => {
     res.json(colorMap.getAllBlockColors());
