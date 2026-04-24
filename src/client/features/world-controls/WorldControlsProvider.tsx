@@ -219,14 +219,6 @@ export function WorldControlsProvider({
   viewRef.current = state.view;
 
   useEffect(() => {
-    if (state.layerVisibility.debug) return;
-    dispatch({
-      type: "set-chunk-stats",
-      stats: createEmptyChunkStats(state.view),
-    });
-  }, [state.layerVisibility.debug, state.view]);
-
-  useEffect(() => {
     biomeLabelsByModeRef.current[state.view] =
       state.layerVisibility.biomeLabels;
     writeStoredGraphicsSettings({

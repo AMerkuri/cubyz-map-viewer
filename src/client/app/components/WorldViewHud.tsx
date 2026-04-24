@@ -71,6 +71,8 @@ export function WorldViewHud({
 
       <LoadingIndicator
         visible={isLoadingBreakdownActive(state.loadingBreakdown)}
+        loadingChunks={state.chunkStats.loading}
+        loadedChunks={state.chunkStats.loaded}
         compact={compact}
       />
 
@@ -149,8 +151,6 @@ export function WorldViewHud({
           handleLayerVisibilityChange={updateLayerVisibility}
         />
       )}
-
-      <style>{`@keyframes cubyz-half-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       {!compact && (
         <InfoPanel

@@ -533,16 +533,14 @@ export function initializeSceneRuntime(args: {
 
     publishLoadingBreakdown();
 
-    if (debugEnabledRef.current) {
-      fpsFrameCounter++;
-      const fpsNow = performance.now();
-      if (fpsNow - fpsLastTs >= 500) {
-        fpsValue = Math.round((fpsFrameCounter * 1000) / (fpsNow - fpsLastTs));
-        fpsFrameCounter = 0;
-        fpsLastTs = fpsNow;
-      }
-      publishChunkStats(fpsValue);
+    fpsFrameCounter++;
+    const fpsNow = performance.now();
+    if (fpsNow - fpsLastTs >= 500) {
+      fpsValue = Math.round((fpsFrameCounter * 1000) / (fpsNow - fpsLastTs));
+      fpsFrameCounter = 0;
+      fpsLastTs = fpsNow;
     }
+    publishChunkStats(fpsValue);
 
     if (now >= nextLodPollAt) {
       runLodUpdate(now, idleEligible);
