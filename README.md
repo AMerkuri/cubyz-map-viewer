@@ -112,6 +112,8 @@ docker run --rm -p 3000:3000 \
   cubyz-map-viewer
 ```
 
+View the map at `http://localhost:3000`.
+
 ## Troubleshooting
 
 ### Terrain Not Loading
