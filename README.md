@@ -6,17 +6,26 @@ Interactive 3D terrain and voxel map viewer for Cubyz worlds, with realtime worl
 
 ## Requirements
 
-- Node.js with `npm`
+- Docker or Node.js 20+ and npm
 - A Cubyz save directory
 - A local clone of [`PixelGuys/Cubyz`](https://github.com/PixelGuys/Cubyz)
 
-### Stack
-
-- Client: React 19, TypeScript, Vite, Three.js, React Query
-- Server: Node.js, Express, WebSocket (`ws`), Chokidar, Sharp, Winston
-- Shared tooling: TypeScript, Biome formatter, Knip
-
 ## Quick Start
+
+### Docker
+
+```bash
+docker run --rm -p 3000:3000 \
+  -v /path/to/your/save:/data/save:ro \
+  -v /path/to/Cubyz:/data/cubyz:ro \
+  ghcr.io/amerkuri/cubyz-map-viewer:latest
+```
+
+See the [Docker Deployment](#docker-deployment) section for more details and compose.yml usage.
+
+## Development
+
+Clone the repo, then run the development server:
 
 ```bash
 npm install
@@ -136,6 +145,12 @@ Cubyz does not save every explored chunk to disk. It mainly saves dirty chunks, 
 Because of that, untouched explored terrain may be missing from the `.region` files and can appear as holes in the voxel layer.
 
 The practical workaround is to enable the terrain underlay.
+
+### Stack
+
+- Client: React 19, TypeScript, Vite, Three.js, React Query
+- Server: Node.js, Express, WebSocket (`ws`), Chokidar, Sharp, Winston
+- Shared tooling: TypeScript, Biome formatter, Knip
 
 ## Attribution
 

@@ -3,6 +3,8 @@ services:
     image: ghcr.io/amerkuri/cubyz-map-viewer:latest
     ports:
       - "3000:3000"
+    environment:
+      - VOXEL_PREGENERATE_ON_STARTUP=true
     volumes:
       - /path/to/your/save:/data/save:ro
       - /path/to/Cubyz:/data/cubyz:ro
