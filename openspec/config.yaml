@@ -1,0 +1,61 @@
+schema: spec-driven
+
+context: |
+  Cubyz Map Viewer is an interactive 3D terrain and voxel viewer for Cubyz worlds.
+  The browser client fetches authoritative world data over HTTP, renders terrain and
+  voxel modes, and reacts to WebSocket invalidation events from the server.
+
+  Tech stack:
+  - Client: React 19, TypeScript, Vite, Three.js, React Query.
+  - Server: Node.js, Express, ws, Chokidar, Sharp, Winston.
+  - Tooling: ESM, TypeScript, Biome, Knip, npm scripts.
+
+  Important project structure:
+  - `src/client/app/` composes features and cross-feature wiring.
+  - `src/client/features/world-controls/` owns control state, persistence, and HUD controls.
+  - `src/client/features/world-view/` owns data hooks, WebSocket handling, Three.js runtime, labels, markers, and the browser voxel worker.
+  - `src/client/features/world-view/components/World3DView.tsx` is the imperative scene/runtime boundary; avoid moving per-frame scene state into React state.
+  - `src/server/index.ts` is the server composition root.
+  - `src/server/api/` owns HTTP/WebSocket boundary logic, `parsers/` decode Cubyz file formats, `services/` own runtime/business logic, and `workers/` own voxel worker entrypoints/protocol.
+  - Voxel routes must go through `VoxelMeshService`.
+
+  Stable shared contracts:
+  - Coordinates use X/Y horizontally and Z vertically.
+  - Surface tiles: `maps/{lod}/{worldX}/{worldY}.surface`.
+  - Region voxel data: `chunks/{lod}/{worldX}/{worldY}/{worldZ}.region`.
+  - Supported LODs are `1, 2, 4, 8, 16, 32`; `MAP_SIZE = 256`.
+  - WebSocket event names are `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`.
+  - `/api/voxels` requires clients to advertise `br` or `gzip`; it returns `406` otherwise.
+
+  Runtime notes:
+  - The server does not load `.env` files automatically.
+  - `SAVE_PATH` and `CUBYZ_PATH` may be env vars or `--save` / `--cubyz` CLI args.
+  - If `SAVE_PATH` is unset, the server picks the newest save under `~/.cubyz/saves/`.
+  - If `CUBYZ_PATH` is unset, the server expects the parent of this repo to contain `assets/cubyz`.
+  - Vite proxies `/api` to `http://localhost:3001` and `/ws` to `ws://localhost:3001`.
+
+  Conventions:
+  - ESM everywhere; local TypeScript imports use `.js` extensions.
+  - Prefer named exports and relative imports.
+  - Keep generated/client-server contract changes synchronized with docs.
+  - Shared contract changes must update `docs/architecture-overview.md` and the affected side doc: `docs/client-specification.md` or `docs/server-specification.md`.
+  - Worker or build-boundary changes should be verified with `npm run build`.
+
+  Verification:
+  - Default verification for code changes is `npm run check && npm run check:knip && npm run typecheck`.
+  - Also run `npm run build` for build paths, worker wiring, route payloads, or TypeScript boundary changes.
+  - There is no test runner configured.
+
+rules:
+  proposal:
+    - Identify whether the change affects client behavior, server behavior, shared contracts, deployment, or tooling.
+    - Call out required documentation updates when contracts, runtime flow, or contributor workflow changes.
+  specs:
+    - Keep client/server contract requirements aligned with `docs/architecture-overview.md`.
+    - Include WebSocket event, route payload, coordinate, LOD, and compression behavior when affected.
+  design:
+    - Preserve the existing layering between app composition, feature modules, server API/parsers/services/workers, and voxel service orchestration.
+    - Prefer minimal changes that keep per-frame Three.js scene state out of React state.
+  tasks:
+    - Include documentation tasks whenever behavior touches shared contracts, runtime flow, or workflow.
+    - Include the expected verification commands, and add `npm run build` when worker, build, route payload, or TypeScript boundary changes are involved.
