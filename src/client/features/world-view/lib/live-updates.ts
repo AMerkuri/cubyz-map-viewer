@@ -114,6 +114,7 @@ export function handleVoxelRegionUpdate(args: {
     controls: OrbitControls,
   ) => void;
   debugLabelsDirtyRef: { current: boolean };
+  biomeLabelsDirtyRef: { current: boolean };
 }): void {
   const {
     lod,
@@ -135,6 +136,7 @@ export function handleVoxelRegionUpdate(args: {
     requestDirectVoxelRefresh,
     checkAndUpdateLOD,
     debugLabelsDirtyRef,
+    biomeLabelsDirtyRef,
   } = args;
 
   const key = voxelTileKey(lod, regionX, regionY);
@@ -157,4 +159,5 @@ export function handleVoxelRegionUpdate(args: {
     requestDirectVoxelRefresh(lod, regionX, regionY, version);
   }
   debugLabelsDirtyRef.current = true;
+  biomeLabelsDirtyRef.current = true;
 }

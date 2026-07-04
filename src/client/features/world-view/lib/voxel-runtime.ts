@@ -162,6 +162,7 @@ export function requestVoxelRegion(args: {
   voxelUnloadGraceMs: number;
   markVoxelTileFresh: (key: string, version: number) => void;
   debugLabelsDirtyRef: { current: boolean };
+  biomeLabelsDirtyRef: { current: boolean };
   missingVoxels: Set<string>;
   failedVoxels: Map<string, number>;
   maxVoxelRetries: number;
@@ -179,6 +180,7 @@ export function requestVoxelRegion(args: {
     voxelUnloadGraceMs,
     markVoxelTileFresh,
     debugLabelsDirtyRef,
+    biomeLabelsDirtyRef,
     missingVoxels,
     failedVoxels,
     maxVoxelRetries,
@@ -196,6 +198,7 @@ export function requestVoxelRegion(args: {
     voxelUnloadGraceUntil.set(key, performance.now() + voxelUnloadGraceMs);
     markVoxelTileFresh(key, request.version);
     debugLabelsDirtyRef.current = true;
+    biomeLabelsDirtyRef.current = true;
     return;
   }
 
@@ -516,6 +519,7 @@ export function buildQueuedVoxelMeshes(args: {
   failedVoxels: Map<string, number>;
   missingVoxels: Set<string>;
   debugLabelsDirtyRef: { current: boolean };
+  biomeLabelsDirtyRef: { current: boolean };
   disposeVoxelTileResources: (tile: LoadedVoxelTile) => void;
 }): boolean {
   const {
@@ -539,6 +543,7 @@ export function buildQueuedVoxelMeshes(args: {
     failedVoxels,
     missingVoxels,
     debugLabelsDirtyRef,
+    biomeLabelsDirtyRef,
     disposeVoxelTileResources,
   } = args;
 
@@ -624,6 +629,7 @@ export function buildQueuedVoxelMeshes(args: {
         markVoxelTileFresh(item.key, item.version);
         failedVoxels.delete(item.key);
         debugLabelsDirtyRef.current = true;
+        biomeLabelsDirtyRef.current = true;
         builtVoxelTile = true;
       } else {
         missingVoxels.add(item.key);

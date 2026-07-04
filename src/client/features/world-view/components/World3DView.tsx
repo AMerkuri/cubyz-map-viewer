@@ -716,6 +716,7 @@ export function World3DView({
     loadedVoxelsRef.current.delete(key);
     loadingVoxelsRef.current.delete(key);
     voxelUnloadGraceUntilRef.current.delete(key);
+    biomeLabelsDirtyRef.current = true;
 
     if (preserveWarmCache) {
       moveVoxelTileToWarmCache(vt);
@@ -871,6 +872,7 @@ export function World3DView({
       voxelFetchControllers: voxelFetchControllersRef.current,
       loadingVoxels: loadingVoxelsRef.current,
       queueVoxelFetchRequest,
+      biomeLabelsDirtyRef,
     });
   }
 
@@ -1110,6 +1112,7 @@ export function World3DView({
       requestDirectVoxelRefresh,
       checkAndUpdateLOD,
       debugLabelsDirtyRef,
+      biomeLabelsDirtyRef,
     });
   }
 
@@ -1244,6 +1247,7 @@ export function World3DView({
       failedVoxels: failedVoxelsRef.current,
       missingVoxels: missingVoxelsRef.current,
       debugLabelsDirtyRef,
+      biomeLabelsDirtyRef,
       disposeVoxelTileResources: (tile) => {
         disposeVoxelTileResourcesManaged(
           tile,

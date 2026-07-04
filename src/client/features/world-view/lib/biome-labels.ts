@@ -6,6 +6,8 @@ import type { SurfaceIndexEntry } from "../hooks/useWorldData.js";
 import {
   MAX_BIOME_LABELS,
   TERRAIN_LOD_DISTANCE_THRESHOLDS,
+  VOXEL_CHUNK_CELLS,
+  VOXEL_REGION_CELLS,
 } from "./constants.js";
 import { clearCssLabelMap } from "./debug-overlays.js";
 import { getLodForDistance } from "./lod-utils.js";
@@ -15,7 +17,46 @@ import type {
   LoadedTerrainTile,
   LoadedVoxelTile,
 } from "./types.js";
-import { formatBiomeName, regionWorldSize } from "./utils.js";
+import { formatBiomeName } from "./utils.js";
+
+const BIOME_LABEL_HEIGHT_OFFSET = 10;
+
+function resolveVoxelBiomeLabelZ(
+  worldX: number,
+  worldY: number,
+  fallbackZ: number,
+  voxelTiles: LoadedVoxelTile[],
+): number {
+  let regionFallbackZ = fallbackZ;
+  for (const tile of voxelTiles) {
+    const regionSize = VOXEL_REGION_CELLS * tile.voxelSize;
+    if (
+      worldX < tile.regionX ||
+      worldX >= tile.regionX + regionSize ||
+      worldY < tile.regionY ||
+      worldY >= tile.regionY + regionSize
+    ) {
+      continue;
+    }
+
+    regionFallbackZ = Math.max(
+      regionFallbackZ,
+      tile.maxZ + BIOME_LABEL_HEIGHT_OFFSET,
+    );
+
+    const chunkWorldSize = VOXEL_CHUNK_CELLS * tile.voxelSize;
+    const chunkX = Math.floor((worldX - tile.regionX) / chunkWorldSize);
+    const chunkY = Math.floor((worldY - tile.regionY) / chunkWorldSize);
+    if (chunkX < 0 || chunkX > 3 || chunkY < 0 || chunkY > 3) continue;
+
+    const localTopZ = tile.chunkTopHeights[chunkX * 4 + chunkY];
+    if (Number.isFinite(localTopZ)) {
+      return localTopZ + BIOME_LABEL_HEIGHT_OFFSET;
+    }
+  }
+
+  return regionFallbackZ;
+}
 
 async function fetchBiomes(
   queryClient: QueryClient,
@@ -89,7 +130,9 @@ export async function refreshBiomeLabels(args: {
         lod: tile.lod,
         tileX: tile.tileX,
         tileY: tile.tileY,
-        z: (tile.mesh.geometry.boundingBox?.max.z ?? 0) + 10,
+        z:
+          (tile.mesh.geometry.boundingBox?.max.z ?? 0) +
+          BIOME_LABEL_HEIGHT_OFFSET,
       });
     }
     visibleTiles.sort((a, b) => {
@@ -118,29 +161,13 @@ export async function refreshBiomeLabels(args: {
       .filter((item) => item.entry.lod === item.desiredLod)
       .sort((a, b) => a.dist - b.dist);
 
-    const voxelTiles = [...loadedVoxels];
     for (const item of indexedTiles) {
-      const tileSize = 256 * item.entry.lod;
-      const tileCenterX = item.entry.worldX + tileSize / 2;
-      const tileCenterY = item.entry.worldY + tileSize / 2;
-      let labelZ = target.z + 12;
-      for (const voxelTile of voxelTiles) {
-        const regionSize = regionWorldSize(voxelTile.lod);
-        if (
-          tileCenterX >= voxelTile.regionX &&
-          tileCenterX < voxelTile.regionX + regionSize &&
-          tileCenterY >= voxelTile.regionY &&
-          tileCenterY < voxelTile.regionY + regionSize
-        ) {
-          labelZ = Math.max(labelZ, voxelTile.maxZ + 10);
-        }
-      }
       visibleTiles.push({
         key: terrainTileKey(item.entry.lod, item.entry.tileX, item.entry.tileY),
         lod: item.entry.lod,
         tileX: item.entry.tileX,
         tileY: item.entry.tileY,
-        z: labelZ,
+        z: target.z + 12,
       });
     }
   }
@@ -167,18 +194,28 @@ export async function refreshBiomeLabels(args: {
     z: number;
     score: number;
   }[] = [];
+  const voxelTiles = mode === "voxel" ? [...loadedVoxels] : [];
 
   for (const item of fetched) {
     if (!item.data) continue;
     let perTile = 0;
     for (const region of item.data.regions) {
       if (region.count < 256) continue;
+      const labelZ =
+        mode === "voxel"
+          ? resolveVoxelBiomeLabelZ(
+              region.centerX,
+              region.centerY,
+              item.tile.z,
+              voxelTiles,
+            )
+          : item.tile.z;
       candidates.push({
         key: `${item.tile.key}#${region.centerX.toFixed(1)}#${region.centerY.toFixed(1)}`,
         text: formatBiomeName(region.biomeName),
         x: region.centerX,
         y: region.centerY,
-        z: item.tile.z,
+        z: labelZ,
         score: region.count,
       });
       perTile++;
