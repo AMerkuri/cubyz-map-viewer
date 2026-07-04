@@ -43,7 +43,7 @@ export function WorldViewHud({
   shareCopied: boolean;
   worldData: ReturnType<typeof useWorldData>;
 }) {
-  const { state, activeGraphicsPresetId, switchView, applyGraphicsPreset } =
+  const { state, activeGraphicsPresetId, applyGraphicsPreset } =
     useWorldControls();
   const {
     setChunkBorders,
@@ -60,12 +60,6 @@ export function WorldViewHud({
       <TopRightToolbar
         shareCopied={shareCopied}
         onShareLocation={onShareLocation}
-        view={state.view}
-        onViewChange={(next) => {
-          const el = cursorHudRef.current;
-          if (el) el.style.display = "none";
-          switchView(next);
-        }}
         compact={compact}
       />
 

@@ -1,20 +1,14 @@
 import { uiTheme } from "../../../lib/ui-theme.js";
-import type { WorldViewMode } from "../../../types/world-view.js";
-import { ViewToggle } from "./ViewToggle.js";
 
 interface TopRightToolbarProps {
   shareCopied: boolean;
   onShareLocation: () => void;
-  view: WorldViewMode;
-  onViewChange: (next: WorldViewMode) => void;
   compact?: boolean;
 }
 
 export function TopRightToolbar({
   shareCopied,
   onShareLocation,
-  view,
-  onViewChange,
   compact = false,
 }: TopRightToolbarProps) {
   return (
@@ -51,7 +45,6 @@ export function TopRightToolbar({
       >
         {shareCopied ? "Copied" : "Copy Location"}
       </button>
-      <ViewToggle view={view} onViewChange={onViewChange} compact={compact} />
     </div>
   );
 }

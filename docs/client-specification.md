@@ -15,14 +15,15 @@ This document covers client-owned architecture and runtime behavior. Shared cont
 ## Ownership By Area
 
 - `src/client/app/`: compose features together; keep cross-feature wiring here
-- `src/client/features/world-controls/`: mode, layer visibility, graphics/debug settings, chunk stats/loading breakdown, loading overlay, and `localStorage` persistence
+- `src/client/features/world-controls/`: voxel-default view state, layer visibility, graphics/debug settings, chunk stats/loading breakdown, loading overlay, and `localStorage` persistence
 - `src/client/features/world-view/`: data hooks, WebSocket hook, scene/runtime code, terrain and voxel loading, labels, markers, and the browser worker
 - `src/client/lib/`, `src/client/hooks/`, `src/client/types/`, `src/client/utils/`: shared client infrastructure used across features
 
 ## Runtime Model
 
 - React Query is the source of truth for HTTP data. `main.tsx` sets `staleTime: Infinity`, so refresh is event-driven rather than focus-driven.
-- `useWorldData()` always loads world metadata and the surface index. Chunk-index loading stays disabled until voxel mode is entered.
+- The world viewer initializes in voxel mode for missing, legacy terrain, voxel, or invalid `mode` URL parameters. The HUD does not expose a terrain/voxel selector.
+- `useWorldData()` always loads world metadata, the surface index, and the voxel chunk index during initial page load so voxel rendering prerequisites are available immediately.
 - `useWebSocket()` maintains the `/ws` connection, and `useWorldViewRefreshSubscriptions()` maps socket events to query invalidation.
 - `WorldControlsProvider` owns low-frequency UI state and persists graphics/layer settings through `src/client/lib/world-view-storage.ts`; older stored versions are discarded and the app falls back to defaults.
 - Chunk stats are published continuously from the scene runtime so loading UI can stay accurate even when debug overlays are off.

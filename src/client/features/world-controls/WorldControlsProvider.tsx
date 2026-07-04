@@ -48,7 +48,6 @@ type WorldControlsState = {
 type WorldControlsContextValue = {
   state: WorldControlsState;
   activeGraphicsPresetId: string | null;
-  switchView: (next: WorldViewMode) => void;
   applyGraphicsPreset: (preset: GraphicsPreset) => void;
   updateLayerVisibility: (next: LayerVisibility) => void;
   updateMapDebugSettings: (next: MapDebugSettings) => void;
@@ -76,7 +75,6 @@ type WorldControlsInit = {
 };
 
 type WorldControlsAction =
-  | { type: "switch-view"; next: WorldViewMode; nextBiomeLabels: boolean }
   | { type: "set-layer-visibility"; next: LayerVisibility }
   | { type: "set-map-debug-settings"; next: MapDebugSettings }
   | { type: "set-render-distance"; value: number }
@@ -125,7 +123,7 @@ function createInitialState({
 }: WorldControlsInit): WorldControlsState {
   return {
     view: initialMode,
-    chunkIndexEnabled: initialMode === "voxel",
+    chunkIndexEnabled: true,
     layerVisibility: createInitialLayerVisibility(
       initialMode,
       stored?.layerVisibility ?? null,
@@ -153,17 +151,6 @@ function worldControlsReducer(
   action: WorldControlsAction,
 ): WorldControlsState {
   switch (action.type) {
-    case "switch-view":
-      return {
-        ...state,
-        view: action.next,
-        chunkIndexEnabled: state.chunkIndexEnabled || action.next === "voxel",
-        flyToRequest: null,
-        layerVisibility: {
-          ...state.layerVisibility,
-          biomeLabels: action.nextBiomeLabels,
-        },
-      };
     case "set-layer-visibility": {
       return {
         ...state,
@@ -214,9 +201,6 @@ export function WorldControlsProvider({
     { initialMode, stored },
     createInitialState,
   );
-
-  const viewRef = useRef<WorldViewMode>(state.view);
-  viewRef.current = state.view;
 
   useEffect(() => {
     biomeLabelsByModeRef.current[state.view] =
@@ -278,17 +262,6 @@ export function WorldControlsProvider({
     return {
       state,
       activeGraphicsPresetId,
-      switchView(next) {
-        const currentView = viewRef.current;
-        biomeLabelsByModeRef.current[currentView] =
-          state.layerVisibility.biomeLabels;
-
-        dispatch({
-          type: "switch-view",
-          next,
-          nextBiomeLabels: biomeLabelsByModeRef.current[next],
-        });
-      },
       applyGraphicsPreset(preset) {
         dispatch({ type: "set-render-distance", value: preset.renderDistance });
         dispatch({
@@ -310,7 +283,7 @@ export function WorldControlsProvider({
         });
       },
       updateLayerVisibility(next) {
-        biomeLabelsByModeRef.current[viewRef.current] = next.biomeLabels;
+        biomeLabelsByModeRef.current[state.view] = next.biomeLabels;
         dispatch({ type: "set-layer-visibility", next });
       },
       updateMapDebugSettings(next) {
@@ -380,7 +353,6 @@ export function useWorldControlsActions() {
     setChunkStats,
     setLoadingBreakdown,
     setVoxelHeightLabels,
-    switchView,
     updateLayerVisibility,
     updateMapDebugSettings,
     updateMinRenderedVoxelLod,
@@ -395,7 +367,6 @@ export function useWorldControlsActions() {
     setChunkStats,
     setLoadingBreakdown,
     setVoxelHeightLabels,
-    switchView,
     updateLayerVisibility,
     updateMapDebugSettings,
     updateMinRenderedVoxelLod,

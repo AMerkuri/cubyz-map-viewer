@@ -5,8 +5,7 @@ import type {
 } from "../types/world-view.js";
 
 export function readInitialMode(): WorldViewMode {
-  const p = new URLSearchParams(window.location.search);
-  return p.get("mode") === "voxel" ? "voxel" : "terrain";
+  return "voxel";
 }
 
 export function readInitialCameraState(): InitialCameraState | null {
@@ -32,7 +31,7 @@ export function readInitialCameraState(): InitialCameraState | null {
 
 export function createShareLocationUrl(state: ShareLocationState): string {
   const p = new URLSearchParams();
-  p.set("mode", state.mode);
+  p.set("mode", "voxel");
   p.set("x", String(state.pos[0]));
   p.set("y", String(state.pos[1]));
   p.set("z", String(state.pos[2]));
