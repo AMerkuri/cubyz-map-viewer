@@ -2,6 +2,7 @@ import { promisify } from "node:util";
 import { brotliCompress, gzip, constants as zlibConstants } from "node:zlib";
 import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
+import type { BlockShapeTable } from "./block-shape-table.js";
 import { LRUCache } from "./cache.js";
 import { computeVoxelSourceSignature } from "./voxel-source-signature.js";
 import {
@@ -113,6 +114,7 @@ export class VoxelMeshService {
   private readonly cache: LRUCache<string, CachedVoxelMesh>;
   private readonly savePath: string;
   private readonly compressionConfig: VoxelCompressionConfig;
+  private readonly blockShapeSignature: string;
   private readonly inFlight = new Map<string, InFlightJob>();
   private globalEpoch = 0;
   private nextJobId = 1;
@@ -130,6 +132,7 @@ export class VoxelMeshService {
   constructor(
     savePath: string,
     blockColors: BlockColorTable,
+    blockShapes: BlockShapeTable,
     workerCount?: number,
     cacheSize = 1024,
     compressionConfig: VoxelCompressionConfig = {
@@ -139,7 +142,13 @@ export class VoxelMeshService {
     },
   ) {
     this.savePath = savePath;
-    this.pool = new VoxelWorkerPool(savePath, blockColors, workerCount);
+    this.blockShapeSignature = blockShapes.signature;
+    this.pool = new VoxelWorkerPool(
+      savePath,
+      blockColors,
+      blockShapes,
+      workerCount,
+    );
     this.cache = new LRUCache<string, CachedVoxelMesh>(cacheSize);
     this.compressionConfig = compressionConfig;
   }
@@ -203,6 +212,7 @@ export class VoxelMeshService {
 
     const sourceSignature = await computeVoxelSourceSignature({
       savePath: this.savePath,
+      blockShapeSignature: this.blockShapeSignature,
       lod,
       regionX,
       regionY,
@@ -310,6 +320,7 @@ export class VoxelMeshService {
 
     const sourceSignature = await computeVoxelSourceSignature({
       savePath: this.savePath,
+      blockShapeSignature: this.blockShapeSignature,
       lod,
       regionX,
       regionY,

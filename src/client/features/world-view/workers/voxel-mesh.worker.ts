@@ -6,6 +6,7 @@ import {
 import type { WorkerIn, WorkerOut } from "../lib/types.js";
 
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
+const VOXEL_POSITION_FIXED_SCALE = 4096;
 
 /**
  * Off-thread voxel mesh builder.
@@ -27,8 +28,8 @@ const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
  *     0 for faces without AO
  *   Per-quad winding section (quadCount bytes, padded to 4-byte alignment):
  *     u8 dir per quad: 1 = standard winding, 0 = flipped winding
- *   Per-vertex position section (quadCount × 4 × 4 bytes):
- *     u8 relX, u8 relY, u16 relZ per vertex
+ *   Per-vertex position section (quadCount × 4 × 12 bytes):
+ *     u32 relX, u32 relY, u32 relZ per vertex in 1/4096-cell fixed-point units
  *   The client always rebuilds triangle indices from the winding section.
  */
 
@@ -126,7 +127,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
   const aoPadded = (quadCount + 3) & ~3;
   const directionPadded = (quadCount + 3) & ~3;
   const expectedSize =
-    20 + colorPadded + aoPadded + directionPadded + vertexCount * 4;
+    20 + colorPadded + aoPadded + directionPadded + vertexCount * 12;
   if (buf.byteLength < expectedSize) throw new Error("buffer truncated");
 
   // The server appends a u32 LE chunk-coverage bitmask after the mesh data.
@@ -148,13 +149,17 @@ function buildMeshArrays(buf: ArrayBuffer): {
   let maxZ = Number.NEGATIVE_INFINITY;
   let off = positionOffset;
   for (let vi = 0; vi < vertexCount; vi++) {
-    const rx = view.getUint8(off++);
-    const ry = view.getUint8(off++);
-    const rz = view.getUint16(off, true);
-    off += 2;
-    positions[vi * 3] = worldX + rx * voxelSize;
-    positions[vi * 3 + 1] = worldY + ry * voxelSize;
-    positions[vi * 3 + 2] = worldZ + rz * voxelSize;
+    const rx = view.getUint32(off, true);
+    off += 4;
+    const ry = view.getUint32(off, true);
+    off += 4;
+    const rz = view.getUint32(off, true);
+    off += 4;
+    positions[vi * 3] = worldX + (rx * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
+    positions[vi * 3 + 1] =
+      worldY + (ry * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
+    positions[vi * 3 + 2] =
+      worldZ + (rz * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
     if (positions[vi * 3 + 2] < minZ) minZ = positions[vi * 3 + 2];
     if (positions[vi * 3 + 2] > maxZ) maxZ = positions[vi * 3 + 2];
   }

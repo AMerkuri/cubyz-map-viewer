@@ -25,6 +25,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
     const generated = await generateVoxelMesh(
       data.savePath,
       data.blockColors,
+      data.blockShapes,
       job.lod,
       job.regionX,
       job.regionY,

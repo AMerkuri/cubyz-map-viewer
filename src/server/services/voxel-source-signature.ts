@@ -96,11 +96,12 @@ async function buildSurfaceSignature(
 
 export async function computeVoxelSourceSignature(args: {
   savePath: string;
+  blockShapeSignature: string;
   lod: number;
   regionX: number;
   regionY: number;
 }): Promise<string | null> {
-  const { savePath, lod, regionX, regionY } = args;
+  const { savePath, blockShapeSignature, lod, regionX, regionY } = args;
   const colDir = join(
     savePath,
     "chunks",
@@ -125,5 +126,6 @@ export async function computeVoxelSourceSignature(args: {
     .update(
       `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}`,
     )
+    .update(`|${blockShapeSignature}`)
     .digest("hex");
 }

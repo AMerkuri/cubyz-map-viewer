@@ -21,10 +21,10 @@
  * Per-quad winding flags (quadCount bytes, padded to 4-byte alignment)
  *   u8 dir   — 1 for standard winding, 0 for flipped winding
  *
- * Per-vertex positions  (4 × quadCount × 4 bytes)
- *   u8  x   relative to worldX  (0–127)
- *   u8  y   relative to worldY  (0–127)
- *   u16 z   relative to worldZBase (0–65535, little-endian)
+ * Per-vertex positions  (4 × quadCount × 12 bytes)
+ *   u32 x   relative to worldX in 1/4096-cell fixed-point units
+ *   u32 y   relative to worldY in 1/4096-cell fixed-point units
+ *   u32 z   relative to worldZBase in 1/4096-cell fixed-point units
  *
  * Trailer (4 bytes)
  *   u32 chunkCoverage  — 16-bit bitmask, bit (cx*4+cy) set when the 32×32
@@ -34,6 +34,7 @@
  */
 
 import type { BlockColorTable } from "./block-color-table.js";
+import { VOXEL_POSITION_FIXED_SCALE } from "./block-shape-table.js";
 import { FALLBACK_BLOCK_COLOR } from "./color-map.js";
 import { logger } from "./logger.js";
 
@@ -75,9 +76,9 @@ export function encodeBinaryQuads(
   let quadColors = new Uint8Array(capacity * 3);
   let quadAo = new Uint8Array(capacity);
   let quadDirections = new Uint8Array(capacity);
-  let vertPosX = new Uint8Array(capacity * 4);
-  let vertPosY = new Uint8Array(capacity * 4);
-  let vertPosZ = new Uint16Array(capacity * 4);
+  let vertPosX = new Uint32Array(capacity * 4);
+  let vertPosY = new Uint32Array(capacity * 4);
+  let vertPosZ = new Uint32Array(capacity * 4);
 
   function ensureCapacity() {
     if (quadCount < capacity) return;
@@ -91,13 +92,13 @@ export function encodeBinaryQuads(
     const qd2 = new Uint8Array(capacity);
     qd2.set(quadDirections);
     quadDirections = qd2;
-    const vx2 = new Uint8Array(capacity * 4);
+    const vx2 = new Uint32Array(capacity * 4);
     vx2.set(vertPosX);
     vertPosX = vx2;
-    const vy2 = new Uint8Array(capacity * 4);
+    const vy2 = new Uint32Array(capacity * 4);
     vy2.set(vertPosY);
     vertPosY = vy2;
-    const vz2 = new Uint16Array(capacity * 4);
+    const vz2 = new Uint32Array(capacity * 4);
     vz2.set(vertPosZ);
     vertPosZ = vz2;
   }
@@ -113,18 +114,18 @@ export function encodeBinaryQuads(
     quadAo[qi] = quad.packedAo;
     quadDirections[qi] = quad.dir === 1 ? 1 : 0;
 
-    vertPosX[vi] = quad.v0x;
-    vertPosY[vi] = quad.v0y;
-    vertPosZ[vi] = quad.v0z;
-    vertPosX[vi + 1] = quad.v1x;
-    vertPosY[vi + 1] = quad.v1y;
-    vertPosZ[vi + 1] = quad.v1z;
-    vertPosX[vi + 2] = quad.v2x;
-    vertPosY[vi + 2] = quad.v2y;
-    vertPosZ[vi + 2] = quad.v2z;
-    vertPosX[vi + 3] = quad.v3x;
-    vertPosY[vi + 3] = quad.v3y;
-    vertPosZ[vi + 3] = quad.v3z;
+    vertPosX[vi] = toFixedPosition(quad.v0x);
+    vertPosY[vi] = toFixedPosition(quad.v0y);
+    vertPosZ[vi] = toFixedPosition(quad.v0z);
+    vertPosX[vi + 1] = toFixedPosition(quad.v1x);
+    vertPosY[vi + 1] = toFixedPosition(quad.v1y);
+    vertPosZ[vi + 1] = toFixedPosition(quad.v1z);
+    vertPosX[vi + 2] = toFixedPosition(quad.v2x);
+    vertPosY[vi + 2] = toFixedPosition(quad.v2y);
+    vertPosZ[vi + 2] = toFixedPosition(quad.v2z);
+    vertPosX[vi + 3] = toFixedPosition(quad.v3x);
+    vertPosY[vi + 3] = toFixedPosition(quad.v3y);
+    vertPosZ[vi + 3] = toFixedPosition(quad.v3z);
 
     quadCount++;
   }
@@ -136,7 +137,7 @@ export function encodeBinaryQuads(
   const aoPadded = (aoBytes + 3) & ~3;
   const directionBytes = quadCount;
   const directionPadded = (directionBytes + 3) & ~3;
-  const posBytes = vertexCount * 4;
+  const posBytes = vertexCount * 12;
   const totalBytes =
     20 + colorPadded + aoPadded + directionPadded + posBytes + 4;
   const buf = new ArrayBuffer(totalBytes);
@@ -167,14 +168,20 @@ export function encodeBinaryQuads(
   off = 20 + colorPadded + aoPadded + directionPadded;
 
   for (let vi = 0; vi < vertexCount; vi++) {
-    view.setUint8(off++, vertPosX[vi]);
-    view.setUint8(off++, vertPosY[vi]);
-    view.setUint16(off, vertPosZ[vi], true);
-    off += 2;
+    view.setUint32(off, vertPosX[vi] ?? 0, true);
+    off += 4;
+    view.setUint32(off, vertPosY[vi] ?? 0, true);
+    off += 4;
+    view.setUint32(off, vertPosZ[vi] ?? 0, true);
+    off += 4;
   }
 
   view.setUint32(off, chunkCoverage, true);
   return buf;
+}
+
+function toFixedPosition(value: number): number {
+  return Math.max(0, Math.round(value * VOXEL_POSITION_FIXED_SCALE));
 }
 
 function getBlockColor(

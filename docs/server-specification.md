@@ -8,7 +8,7 @@ This document covers server-owned architecture and runtime behavior. Shared cont
 
 - `src/server/index.ts` is the only real startup/composition file.
 - It resolves `SAVE_PATH` / `CUBYZ_PATH` from env or CLI args, auto-detects the newest save under `~/.cubyz/saves/` when `SAVE_PATH` is unset, and expects the parent of this repo to contain `assets/cubyz` when `CUBYZ_PATH` is unset.
-- It loads world metadata, palettes, layered asset namespaces, biome definitions, the color map, and the voxel mesh service before starting HTTP/WebSocket serving.
+- It loads world metadata, palettes, layered asset namespaces, biome definitions, the color map, block shape metadata, and the voxel mesh service before starting HTTP/WebSocket serving.
 - It serves the built client only when `dist/client/index.html` exists; otherwise the process runs API-only.
 - It starts `SaveWatcher`, wires WebSocket broadcasting, and can optionally warm the voxel cache on startup.
 
@@ -39,11 +39,18 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 - Global Express compression explicitly skips `/api/voxels`; that route negotiates and caches its own compressed variants.
 - Voxel compression settings are configured once at startup and applied when each encoded variant is first generated. The default tuning is Brotli `quality=6`, `lgwin=11`, and gzip `level=3`.
 - The voxel generator keeps the binary layout compact by reusing the existing per-quad AO byte for LOD `1/2` top faces and concave vertical wall corners instead of adding a separate wall-lighting payload.
+- The voxel generator encodes vertex X/Y/Z as `u32` fixed-point coordinates in `1/4096` voxel-cell units relative to the response origin, allowing model vertices inside a block while preserving exact full-cube boundaries.
+- Full-cube blocks still use exterior-air traversal plus greedy merged cube faces. Supported LOD `1` non-cube blocks emit explicit model quads with the existing palette color, no per-quad AO, and conservative non-occluding traversal so neighboring cube faces are not hidden by decorative geometry.
+- Supported rotation semantic shapes are handled server-side. `cubyz:stairs` decodes the low 8 block-data bits as removed 2x2x2 sub-block octants and keeps data `0` on the full-cube fast path; `cubyz:fence` emits center posts plus saved horizontal connection arms for fences, walls, and bars; `cubyz:branch` emits center and six-direction branch arms from saved connection bits; `cubyz:carpet`, `cubyz:sign`, `cubyz:hanging`, and selected `cubyz:direction` blocks select finite model variants from block data.
+- Higher LOD non-cube and semantic blocks use `lodReplacement` when it resolves to a palette entry; otherwise they fall back to the documented safe cube/air fallback shape instead of emitting tiny model geometry.
+- Persistent voxel mesh cache keys include `VOXEL_GENERATOR_CACHE_VERSION` and the block shape table signature. The shape table signature includes a semantic support version plus shape-affecting block definition/model inputs, so semantic implementation or asset changes invalidate stale meshes.
 
 ## Assets And Overrides
 
 - Asset lookup is layered: the server reads base assets from `CUBYZ_PATH/assets/*` and allows `SAVE_PATH/assets/*` to override matching namespace-relative files.
 - That layered lookup is used for biome/block assets and entity model descriptor/model/texture resolution.
+- `BlockShapeTable` scans `blocks/**/*.zig.zon`, applies inherited `_defaults.zig.zon` values by directory, resolves static `.model` references against `assets/*/models/*.obj`, and records palette-indexed cube, air, supported model, or supported semantic shapes.
+- Supported static/model block rotations are `cubyz:no_rotation`, `cubyz:planar`, and `cubyz:torch`. Supported generated/data-driven semantic rotations are `cubyz:stairs`, `cubyz:fence`, `cubyz:branch`, `cubyz:carpet`, `cubyz:sign`, `cubyz:hanging`, and selected `cubyz:direction` model blocks. Known cube-geometry rotations such as `cubyz:decayable`, `cubyz:log`, and `cubyz:ore` are recognized as cube shapes without warnings. Unsupported rotation metadata, missing model assets, malformed semantic model data, or unparseable OBJ models log a once-per-block warning and keep startup successful by using fallback shape behavior.
 - `EntityModelAssetService` scans `entityModels/**/*.zig.zon`, parses descriptors with the ZON parser, filters to loadable `.playerModel` descriptors, and selects `cubyz:snale` before falling back to the first stable entity model ID.
 - The player marker manifest contains `available`, `entityModelId`, `modelUrl`, `textureUrl`, `height`, and `coordinateSystem`.
 - Descriptors with missing `model` or `defaultTexture` references, invalid namespaced IDs, or unresolved `entityModels/models/*.glb` / `entityModels/textures/*.png` assets are skipped rather than returned as broken manifests.

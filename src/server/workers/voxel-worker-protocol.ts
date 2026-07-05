@@ -1,8 +1,10 @@
 import type { BlockColorTable } from "../services/block-color-table.js";
+import type { BlockShapeTable } from "../services/block-shape-table.js";
 
 export interface VoxelWorkerData {
   savePath: string;
   blockColors: BlockColorTable;
+  blockShapes: BlockShapeTable;
 }
 
 export interface VoxelJob {

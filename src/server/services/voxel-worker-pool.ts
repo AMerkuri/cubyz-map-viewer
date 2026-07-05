@@ -8,6 +8,7 @@ import type {
   VoxelWorkerMessage,
 } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
+import type { BlockShapeTable } from "./block-shape-table.js";
 
 interface PendingJob {
   job: VoxelJob;
@@ -38,8 +39,13 @@ export class VoxelWorkerPool {
   private readonly queue: PendingJob[] = [];
   private readonly runningJobs = new Map<number, PendingJob>();
 
-  constructor(savePath: string, blockColors: BlockColorTable, size?: number) {
-    this.workerData = { savePath, blockColors };
+  constructor(
+    savePath: string,
+    blockColors: BlockColorTable,
+    blockShapes: BlockShapeTable,
+    size?: number,
+  ) {
+    this.workerData = { savePath, blockColors, blockShapes };
     const parallelism = Math.max(1, availableParallelism());
     this.size = Math.max(1, size ?? Math.floor(parallelism / 2));
   }

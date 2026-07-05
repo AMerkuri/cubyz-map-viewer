@@ -32,6 +32,7 @@ import {
 } from "./parsers/player.js";
 import { parseWorldMeta } from "./parsers/world-meta.js";
 import { buildBlockColorTable } from "./services/block-color-table.js";
+import { buildBlockShapeTable } from "./services/block-shape-table.js";
 import { buildChunkIndex } from "./services/chunk-index.js";
 import { ColorMapService } from "./services/color-map.js";
 import { EntityModelAssetService } from "./services/entity-model-assets.js";
@@ -386,9 +387,22 @@ async function main() {
     biomePalette,
     biomeDefinitions,
   );
+  logger.info("Building block shape table from block models");
+  const blockShapeTable = await buildBlockShapeTable(
+    assetSources,
+    blockPalette,
+  );
+  logger.info("Built block shape table", {
+    signature: blockShapeTable.signature,
+    paletteEntries: blockShapeTable.shapes.length,
+    modelEntries: blockShapeTable.shapes.filter(
+      (shape) => shape?.kind === "model",
+    ).length,
+  });
   const voxelMeshService = new VoxelMeshService(
     savePath,
     buildBlockColorTable(colorMap),
+    blockShapeTable,
     process.env.VOXEL_WORKERS
       ? parseInt(process.env.VOXEL_WORKERS, 10)
       : undefined,

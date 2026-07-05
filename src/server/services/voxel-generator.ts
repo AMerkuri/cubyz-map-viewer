@@ -18,6 +18,14 @@ import {
 import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
 import {
+  type BlockModelShape,
+  type BlockModelVertex,
+  type BlockSemanticShape,
+  type BlockShapeTable,
+  resolveShapeForLod,
+  VOXEL_POSITION_FIXED_SCALE,
+} from "./block-shape-table.js";
+import {
   type BinaryQuad,
   encodeBinaryQuads,
   VOXEL_REGION_SIZE,
@@ -93,6 +101,7 @@ const FACE_STEPS: { face: Direction; dx: number; dy: number; dz: number }[] = [
 export async function generateVoxelMesh(
   savePath: string,
   blockColors: BlockColorTable,
+  blockShapes: BlockShapeTable,
   lod: number,
   regionX: number,
   regionY: number,
@@ -139,7 +148,7 @@ export async function generateVoxelMesh(
   const persistentCachePath = join(persistentCacheDir, `${regionY}.bin`);
   const cacheKey = createHash("sha1")
     .update(
-      `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}`,
+      `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}|${blockShapes.signature}`,
     )
     .digest("hex");
   const cached = await readPersistentMesh(persistentCachePath, cacheKey);
@@ -174,6 +183,8 @@ export async function generateVoxelMesh(
   const regionLoaders = new Map<number, Promise<RegionData | null>>();
   const occupancyCache = new Map<string, Promise<boolean>>();
   const faces = new Map<string, FaceEntry>();
+  const modelBlocks = new Set<string>();
+  const modelQuads: BinaryQuad[] = [];
   const visibleChunkColumns = new Set<number>();
   let regionsParsed = 0;
   let chunksMeshed = 0;
@@ -181,13 +192,43 @@ export async function generateVoxelMesh(
 
   function isAir(chunk: ChunkData | null, idx: number): boolean {
     if (!chunk) return true;
-    return isAirType(chunk.blocks[idx] & 0xffff);
+    return isAirType(getPaletteIndex(chunk.blocks[idx] ?? 0));
+  }
+
+  function isTraversable(chunk: ChunkData | null, idx: number): boolean {
+    if (!chunk) return true;
+    return isTraversableBlockValue(chunk.blocks[idx] ?? 0);
+  }
+
+  function isTraversableBlockValue(blockValue: number): boolean {
+    const paletteIndex = getPaletteIndex(blockValue);
+    if (isAirType(paletteIndex)) return true;
+    const shape = resolveShapeForLod(blockShapes, paletteIndex, lod);
+    if (shape.kind === "model") return true;
+    if (shape.kind !== "semantic") return false;
+    return isTraversableSemantic(shape, getBlockData(blockValue), lod);
+  }
+
+  function isBlockBoundarySolid(blockValue: number, face: Direction): boolean {
+    const paletteIndex = getPaletteIndex(blockValue);
+    if (isAirType(paletteIndex)) return false;
+    const shape = resolveShapeForLod(blockShapes, paletteIndex, lod);
+    if (shape.kind !== "semantic") return false;
+    return isSemanticBoundarySolid(shape, getBlockData(blockValue), face, lod);
   }
 
   function getType(chunk: ChunkData | null, idx: number): number {
     if (!chunk) return 0;
-    const typ = chunk.blocks[idx] & 0xffff;
+    const typ = getPaletteIndex(chunk.blocks[idx] ?? 0);
     return isAirType(typ) ? 0 : typ;
+  }
+
+  function getPaletteIndex(blockValue: number): number {
+    return blockValue & 0xffff;
+  }
+
+  function getBlockData(blockValue: number): number {
+    return blockValue >>> 16;
   }
 
   function isAirType(paletteIndex: number): boolean {
@@ -206,9 +247,9 @@ export async function generateVoxelMesh(
 
   await emitOuterRegionBoundaryFaces();
 
-  if (faces.size === 0) return { buffer: null };
+  if (faces.size === 0 && modelQuads.length === 0) return { buffer: null };
 
-  const quads = buildMergedQuads(faces);
+  const quads = [...buildMergedQuads(faces), ...modelQuads];
   let minFaceZ = Number.POSITIVE_INFINITY;
   for (const [key, typ] of faces) {
     const [xStr, yStr, _zStr, face] = key.split("/") as [
@@ -230,8 +271,8 @@ export async function generateVoxelMesh(
   }
 
   if (!Number.isFinite(minFaceZ)) return { buffer: null };
-  const baseWorldZ = minFaceZ * lod;
-  const baseCellZ = Math.floor(baseWorldZ / lod);
+  const baseCellZ = Math.floor(minFaceZ);
+  const baseWorldZ = baseCellZ * lod;
   for (const quad of quads) {
     quad.v0z -= baseCellZ;
     quad.v1z -= baseCellZ;
@@ -343,7 +384,7 @@ export async function generateVoxelMesh(
       const ly = gy % CHUNK_SIZE;
       const lz = gz % CHUNK_SIZE;
       const idx = localIndex(lx, ly, lz);
-      if (!isAir(chunk, idx)) continue;
+      if (!isTraversable(chunk, idx)) continue;
       seedChunkAir(chunkX, chunkY, chunkZ, lx, ly, lz);
       return;
     }
@@ -398,7 +439,7 @@ export async function generateVoxelMesh(
       const seed = state.pendingSeeds.pop();
       if (seed === undefined) continue;
       if (state.visitedAir[seed] !== 0) continue;
-      if (!isAir(chunk, seed)) continue;
+      if (!isTraversable(chunk, seed)) continue;
       state.visitedAir[seed] = 1;
       visitedAirCells++;
       queue.push(seed);
@@ -413,6 +454,8 @@ export async function generateVoxelMesh(
       const gx = state.chunkX * CHUNK_SIZE + lx;
       const gy = state.chunkY * CHUNK_SIZE + ly;
       const gz = state.chunkZ * CHUNK_SIZE + lz;
+      const currentBlockValue = chunk.blocks[idx] ?? 0;
+      emitModelBlock(currentBlockValue, gx, gy, gz);
 
       for (const step of FACE_STEPS) {
         const nlx = lx + step.dx;
@@ -428,7 +471,28 @@ export async function generateVoxelMesh(
           nlz < CHUNK_SIZE
         ) {
           const neighborIdx = localIndex(nlx, nly, nlz);
-          if (isAir(chunk, neighborIdx)) {
+          const neighborBlockValue = chunk.blocks[neighborIdx] ?? 0;
+          if (isTraversableBlockValue(neighborBlockValue)) {
+            const enterFace = OPPOSITE_FACE[step.face];
+            const blockedByCurrent = isBlockBoundarySolid(
+              currentBlockValue,
+              step.face,
+            );
+            const blockedByNeighbor = isBlockBoundarySolid(
+              neighborBlockValue,
+              enterFace,
+            );
+            if (blockedByCurrent || blockedByNeighbor) {
+              if (blockedByNeighbor) {
+                emitModelBlock(
+                  neighborBlockValue,
+                  state.chunkX * CHUNK_SIZE + nlx,
+                  state.chunkY * CHUNK_SIZE + nly,
+                  state.chunkZ * CHUNK_SIZE + nlz,
+                );
+              }
+              continue;
+            }
             if (state.visitedAir[neighborIdx] === 0) {
               const ngx = state.chunkX * CHUNK_SIZE + nlx;
               const ngy = state.chunkY * CHUNK_SIZE + nly;
@@ -501,7 +565,28 @@ export async function generateVoxelMesh(
           continue;
         }
         const wrappedIdx = localIndex(wrappedLx, wrappedLy, wrappedLz);
-        if (isAir(neighborChunk, wrappedIdx)) {
+        const neighborBlockValue = neighborChunk.blocks[wrappedIdx] ?? 0;
+        if (isTraversableBlockValue(neighborBlockValue)) {
+          const enterFace = OPPOSITE_FACE[step.face];
+          const blockedByCurrent = isBlockBoundarySolid(
+            currentBlockValue,
+            step.face,
+          );
+          const blockedByNeighbor = isBlockBoundarySolid(
+            neighborBlockValue,
+            enterFace,
+          );
+          if (blockedByCurrent || blockedByNeighbor) {
+            if (blockedByNeighbor) {
+              emitModelBlock(
+                neighborBlockValue,
+                gx + step.dx,
+                gy + step.dy,
+                gz + step.dz,
+              );
+            }
+            continue;
+          }
           seedChunkAir(
             neighborChunkX,
             neighborChunkY,
@@ -679,6 +764,15 @@ export async function generateVoxelMesh(
         const gx = chunkX * CHUNK_SIZE + lx;
         const gy = chunkY * CHUNK_SIZE + ly;
         const gz = chunkZ * CHUNK_SIZE + lz;
+        const blockValue = chunk.blocks[idx] ?? 0;
+        const shape = resolveShapeForLod(blockShapes, typ, lod);
+        if (
+          shape.kind === "model" ||
+          (shape.kind === "semantic" && isTraversableBlockValue(blockValue))
+        ) {
+          emitModelBlock(blockValue, gx, gy, gz);
+          continue;
+        }
         const airX = gx + (face === "x-" ? -1 : face === "x+" ? 1 : 0);
         const airY = gy + (face === "y-" ? -1 : face === "y+" ? 1 : 0);
         if (
@@ -700,7 +794,10 @@ export async function generateVoxelMesh(
         const neighborLocalY =
           face === "y-" ? CHUNK_SIZE - 1 : face === "y+" ? 0 : ly;
         const neighborIdx = localIndex(neighborLocalX, neighborLocalY, lz);
-        if (!isAir(neighborChunk, neighborIdx)) continue;
+        const neighborBlockValue = neighborChunk?.blocks[neighborIdx] ?? 0;
+        if (!isTraversableBlockValue(neighborBlockValue)) continue;
+        const enterFace = OPPOSITE_FACE[face];
+        if (isBlockBoundarySolid(neighborBlockValue, enterFace)) continue;
 
         addFace(faces, gx, gy, gz, face, {
           typ,
@@ -945,12 +1042,557 @@ export async function generateVoxelMesh(
           : await loadExternalChunk(chunkX, chunkY, chunkZ);
 
       if (!chunk) return false;
-      return !isAir(chunk, localIndex(localX, localY, localZ));
+      return !isTraversable(chunk, localIndex(localX, localY, localZ));
     })();
 
     occupancyCache.set(cacheKey, pending);
     return pending;
   }
+
+  function emitModelBlock(
+    blockValue: number,
+    x: number,
+    y: number,
+    z: number,
+  ): void {
+    if (lod !== 1) return;
+    const paletteIndex = getPaletteIndex(blockValue);
+    const shape = resolveShapeForLod(blockShapes, paletteIndex, lod);
+    if (shape.kind !== "model" && shape.kind !== "semantic") return;
+    const key = `${x}/${y}/${z}`;
+    if (modelBlocks.has(key)) return;
+    modelBlocks.add(key);
+    visibleChunkColumns.add(
+      Math.floor(x / CHUNK_SIZE) * 4 + Math.floor(y / CHUNK_SIZE),
+    );
+    const data = getBlockData(blockValue);
+    for (const { quad, turns, transform } of getModelQuadsForData(
+      shape,
+      data,
+    )) {
+      const transformed = quad.vertices.map((vertex) =>
+        transformModelVertex(vertex, turns, transform),
+      ) as [
+        BlockModelVertex,
+        BlockModelVertex,
+        BlockModelVertex,
+        BlockModelVertex,
+      ];
+      modelQuads.push({
+        v0x: x + transformed[0].x,
+        v0y: y + transformed[0].y,
+        v0z: z + transformed[0].z,
+        v1x: x + transformed[1].x,
+        v1y: y + transformed[1].y,
+        v1z: z + transformed[1].z,
+        v2x: x + transformed[2].x,
+        v2y: y + transformed[2].y,
+        v2z: z + transformed[2].z,
+        v3x: x + transformed[3].x,
+        v3y: y + transformed[3].y,
+        v3z: z + transformed[3].z,
+        typ: paletteIndex,
+        dir: 1,
+        packedAo: 0,
+      });
+    }
+  }
+}
+
+function transformModelVertex(
+  vertex: BlockModelVertex,
+  turns: number,
+  transform: SemanticTransform = "none",
+): BlockModelVertex {
+  if (transform !== "none")
+    return transformSemanticVertex(vertex, transform, turns);
+  let x = vertex.x;
+  let y = vertex.y;
+  for (let index = 0; index < turns; index++) {
+    const nextX = 1 - y;
+    y = x;
+    x = nextX;
+  }
+  return { x, y, z: vertex.z };
+}
+
+type SemanticTransform =
+  | "none"
+  | "ceiling"
+  | "face-x-"
+  | "face-x+"
+  | "face-y-"
+  | "face-y+";
+
+function transformSemanticVertex(
+  vertex: BlockModelVertex,
+  transform: SemanticTransform,
+  turns: number,
+): BlockModelVertex {
+  const planar = transformModelVertex(vertex, turns, "none");
+  switch (transform) {
+    case "none":
+      return planar;
+    case "ceiling":
+      return { x: planar.x, y: 1 - planar.y, z: 1 - planar.z };
+    case "face-x-":
+      return { x: planar.z, y: planar.y, z: 1 - planar.x };
+    case "face-x+":
+      return { x: 1 - planar.z, y: planar.y, z: planar.x };
+    case "face-y-":
+      return { x: planar.x, y: planar.z, z: 1 - planar.y };
+    case "face-y+":
+      return { x: planar.x, y: 1 - planar.z, z: planar.y };
+  }
+}
+
+function getModelQuadsForData(
+  shape: BlockModelShape | BlockSemanticShape,
+  data: number,
+): Array<{
+  quad: (typeof shape.quads)[number];
+  turns: number;
+  transform?: SemanticTransform;
+}> {
+  if (shape.kind === "semantic") return getSemanticQuadsForData(shape, data);
+  if (shape.rotation !== "cubyz:torch") {
+    const turns = getRotationTurns(shape.rotation, data);
+    return shape.quads.map((quad) => ({ quad, turns }));
+  }
+
+  const torchData = data === 0 ? 1 : data & 0x1f;
+  const parts: Array<{ quads: typeof shape.quads; turns: number }> = [];
+  if ((torchData & 0b00001) !== 0) parts.push({ quads: shape.quads, turns: 0 });
+  if ((torchData & 0b00010) !== 0)
+    parts.push({ quads: shape.sideQuads, turns: 0 });
+  if ((torchData & 0b00100) !== 0)
+    parts.push({ quads: shape.sideQuads, turns: 2 });
+  if ((torchData & 0b01000) !== 0)
+    parts.push({ quads: shape.sideQuads, turns: 1 });
+  if ((torchData & 0b10000) !== 0)
+    parts.push({ quads: shape.sideQuads, turns: 3 });
+
+  return parts.flatMap(({ quads, turns }) =>
+    quads.map((quad) => ({ quad, turns })),
+  );
+}
+
+function isTraversableSemantic(
+  shape: BlockSemanticShape,
+  data: number,
+  lod: number,
+): boolean {
+  if (lod !== 1) return false;
+  return shape.semantic !== "cubyz:stairs" || (data & 0xff) !== 0;
+}
+
+function isSemanticBoundarySolid(
+  shape: BlockSemanticShape,
+  data: number,
+  face: Direction,
+  lod: number,
+): boolean {
+  if (lod !== 1 || shape.semantic !== "cubyz:stairs") return false;
+  const removedMask = data & 0xff;
+  const occupied = (x: number, y: number, z: number) =>
+    (removedMask & (1 << ((x * 2 + y) * 2 + z))) === 0;
+  for (let sx = 0; sx < 2; sx++) {
+    for (let sy = 0; sy < 2; sy++) {
+      for (let sz = 0; sz < 2; sz++) {
+        if (!isSubBlockOnFace(sx, sy, sz, face)) continue;
+        if (!occupied(sx, sy, sz)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+function isSubBlockOnFace(
+  x: number,
+  y: number,
+  z: number,
+  face: Direction,
+): boolean {
+  switch (face) {
+    case "x-":
+      return x === 0;
+    case "x+":
+      return x === 1;
+    case "y-":
+      return y === 0;
+    case "y+":
+      return y === 1;
+    case "z-":
+      return z === 0;
+    case "z+":
+      return z === 1;
+  }
+}
+
+function getSemanticQuadsForData(
+  shape: BlockSemanticShape,
+  data: number,
+): Array<{
+  quad: BlockModelShape["quads"][number];
+  turns: number;
+  transform?: SemanticTransform;
+}> {
+  switch (shape.semantic) {
+    case "cubyz:stairs":
+      return createStairsQuads(data).map((quad) => ({ quad, turns: 0 }));
+    case "cubyz:fence":
+      return createFenceQuads(data, shape.blockId, shape.modelRefs.base).map(
+        (quad) => ({ quad, turns: 0 }),
+      );
+    case "cubyz:branch":
+      return createBranchQuads(data, shape.radius ?? 4).map((quad) => ({
+        quad,
+        turns: 0,
+      }));
+    case "cubyz:carpet":
+      return getCarpetQuads(shape, data);
+    case "cubyz:sign":
+      return getSignQuads(shape, data);
+    case "cubyz:hanging":
+      return (
+        data % 2 === 0
+          ? (shape.variantQuads.top ?? shape.quads)
+          : (shape.variantQuads.bottom ?? shape.quads)
+      ).map((quad) => ({ quad, turns: 0 }));
+    case "cubyz:direction":
+      return getDirectionQuads(shape, data);
+  }
+}
+
+function createStairsQuads(data: number): BlockModelShape["quads"] {
+  const removedMask = data & 0xff;
+  const occupied = (x: number, y: number, z: number) =>
+    (removedMask & (1 << ((x * 2 + y) * 2 + z))) === 0;
+  if (removedMask === 0) return [];
+  const quads: BlockModelShape["quads"] = [];
+  for (let sx = 0; sx < 2; sx++) {
+    for (let sy = 0; sy < 2; sy++) {
+      for (let sz = 0; sz < 2; sz++) {
+        if (!occupied(sx, sy, sz)) continue;
+        const min = { x: sx / 2, y: sy / 2, z: sz / 2 };
+        const max = { x: min.x + 0.5, y: min.y + 0.5, z: min.z + 0.5 };
+        for (const face of FACE_STEPS) {
+          const nx = sx + face.dx;
+          const ny = sy + face.dy;
+          const nz = sz + face.dz;
+          if (
+            nx >= 0 &&
+            nx < 2 &&
+            ny >= 0 &&
+            ny < 2 &&
+            nz >= 0 &&
+            nz < 2 &&
+            occupied(nx, ny, nz)
+          ) {
+            continue;
+          }
+          quads.push(createBoxFace(min, max, face.face));
+        }
+      }
+    }
+  }
+  return quads;
+}
+
+function createFenceQuads(
+  data: number,
+  blockId: string,
+  modelRef: string | undefined,
+): BlockModelShape["quads"] {
+  const isBars = blockId.includes("bars") || modelRef?.includes("bars");
+  const isWall = blockId.includes("/wall") || blockId.endsWith(":wall");
+  const halfWidth = isBars ? 0.0625 : isWall ? 0.25 : 0.125;
+  const minZ = 0;
+  const maxZ = 1;
+  const quads: BlockModelShape["quads"] = [];
+  addBox(
+    quads,
+    0.5 - halfWidth,
+    0.5 - halfWidth,
+    minZ,
+    0.5 + halfWidth,
+    0.5 + halfWidth,
+    maxZ,
+  );
+  if (isWall) {
+    if ((data & 0b0001) !== 0)
+      addBox(quads, 0, 0.5 - halfWidth, minZ, 0.5, 0.5 + halfWidth, maxZ);
+    if ((data & 0b0010) !== 0)
+      addBox(quads, 0.5, 0.5 - halfWidth, minZ, 1, 0.5 + halfWidth, maxZ);
+    if ((data & 0b0100) !== 0)
+      addBox(quads, 0.5 - halfWidth, 0, minZ, 0.5 + halfWidth, 0.5, maxZ);
+    if ((data & 0b1000) !== 0)
+      addBox(quads, 0.5 - halfWidth, 0.5, minZ, 0.5 + halfWidth, 1, maxZ);
+    return quads;
+  }
+
+  const railHalfWidth = isBars ? 0.03125 : 0.09375;
+  if ((data & 0b0001) !== 0) addFenceArm(quads, "x", 0, 0.5, railHalfWidth);
+  if ((data & 0b0010) !== 0) addFenceArm(quads, "x", 0.5, 1, railHalfWidth);
+  if ((data & 0b0100) !== 0) addFenceArm(quads, "y", 0, 0.5, railHalfWidth);
+  if ((data & 0b1000) !== 0) addFenceArm(quads, "y", 0.5, 1, railHalfWidth);
+  return quads;
+}
+
+function addFenceArm(
+  quads: BlockModelShape["quads"],
+  axis: "x" | "y",
+  min: number,
+  max: number,
+  halfWidth: number,
+): void {
+  for (const [minZ, maxZ] of [
+    [0.25, 0.375],
+    [0.625, 0.75],
+  ] as const) {
+    if (axis === "x") {
+      addBox(quads, min, 0.5 - halfWidth, minZ, max, 0.5 + halfWidth, maxZ);
+    } else {
+      addBox(quads, 0.5 - halfWidth, min, minZ, 0.5 + halfWidth, max, maxZ);
+    }
+  }
+}
+
+function createBranchQuads(
+  data: number,
+  radius: number,
+): BlockModelShape["quads"] {
+  const halfWidth = Math.max(1, Math.min(radius, 8)) / 16;
+  const quads: BlockModelShape["quads"] = [];
+  addBox(
+    quads,
+    0.5 - halfWidth,
+    0.5 - halfWidth,
+    0.5 - halfWidth,
+    0.5 + halfWidth,
+    0.5 + halfWidth,
+    0.5 + halfWidth,
+  );
+  const bits = data & 0x3f;
+  if ((bits & 0b001000) !== 0)
+    addBox(
+      quads,
+      0,
+      0.5 - halfWidth,
+      0.5 - halfWidth,
+      0.5,
+      0.5 + halfWidth,
+      0.5 + halfWidth,
+    );
+  if ((bits & 0b000100) !== 0)
+    addBox(
+      quads,
+      0.5,
+      0.5 - halfWidth,
+      0.5 - halfWidth,
+      1,
+      0.5 + halfWidth,
+      0.5 + halfWidth,
+    );
+  if ((bits & 0b100000) !== 0)
+    addBox(
+      quads,
+      0.5 - halfWidth,
+      0,
+      0.5 - halfWidth,
+      0.5 + halfWidth,
+      0.5,
+      0.5 + halfWidth,
+    );
+  if ((bits & 0b010000) !== 0)
+    addBox(
+      quads,
+      0.5 - halfWidth,
+      0.5,
+      0.5 - halfWidth,
+      0.5 + halfWidth,
+      1,
+      0.5 + halfWidth,
+    );
+  if ((bits & 0b000010) !== 0)
+    addBox(
+      quads,
+      0.5 - halfWidth,
+      0.5 - halfWidth,
+      0,
+      0.5 + halfWidth,
+      0.5 + halfWidth,
+      0.5,
+    );
+  if ((bits & 0b000001) !== 0)
+    addBox(
+      quads,
+      0.5 - halfWidth,
+      0.5 - halfWidth,
+      0.5,
+      0.5 + halfWidth,
+      0.5 + halfWidth,
+      1,
+    );
+  return quads;
+}
+
+function getCarpetQuads(
+  shape: BlockSemanticShape,
+  data: number,
+): ReturnType<typeof getSemanticQuadsForData> {
+  const source = shape.quads;
+  const entries: Array<{ bit: number; transform: SemanticTransform }> = [
+    { bit: 1, transform: "face-x-" },
+    { bit: 2, transform: "face-x+" },
+    { bit: 4, transform: "face-y-" },
+    { bit: 8, transform: "face-y+" },
+    { bit: 16, transform: "none" },
+    { bit: 32, transform: "ceiling" },
+  ];
+  return entries.flatMap(({ bit, transform }) =>
+    (data & bit) === 0
+      ? []
+      : source.map((quad) => ({ quad, turns: 0, transform })),
+  );
+}
+
+function getSignQuads(
+  shape: BlockSemanticShape,
+  data: number,
+): ReturnType<typeof getSemanticQuadsForData> {
+  if (data < 8) {
+    return (shape.variantQuads.floor ?? []).map((quad) => ({
+      quad,
+      turns: data & 7,
+    }));
+  }
+  if (data < 16) {
+    return (shape.variantQuads.ceiling ?? []).map((quad) => ({
+      quad,
+      turns: data & 7,
+      transform: "ceiling" as const,
+    }));
+  }
+  const side = data - 16;
+  const transforms: SemanticTransform[] = [
+    "face-x-",
+    "face-y-",
+    "face-x+",
+    "face-y+",
+  ];
+  return (shape.variantQuads.side ?? []).map((quad) => ({
+    quad,
+    turns: 0,
+    transform: transforms[side] ?? "face-x-",
+  }));
+}
+
+function getDirectionQuads(
+  shape: BlockSemanticShape,
+  data: number,
+): ReturnType<typeof getSemanticQuadsForData> {
+  const transforms: SemanticTransform[] = [
+    "face-x-",
+    "face-x+",
+    "face-y-",
+    "face-y+",
+    "none",
+    "ceiling",
+  ];
+  const transform = transforms[Math.min(data, 5)] ?? "none";
+  return shape.quads.map((quad) => ({ quad, turns: 0, transform }));
+}
+
+function addBox(
+  quads: BlockModelShape["quads"],
+  minX: number,
+  minY: number,
+  minZ: number,
+  maxX: number,
+  maxY: number,
+  maxZ: number,
+): void {
+  const min = { x: minX, y: minY, z: minZ };
+  const max = { x: maxX, y: maxY, z: maxZ };
+  for (const face of FACE_STEPS) quads.push(createBoxFace(min, max, face.face));
+}
+
+function createBoxFace(
+  min: BlockModelVertex,
+  max: BlockModelVertex,
+  face: Direction,
+): BlockModelShape["quads"][number] {
+  switch (face) {
+    case "x+":
+      return {
+        vertices: [
+          { x: max.x, y: min.y, z: min.z },
+          { x: max.x, y: max.y, z: min.z },
+          { x: max.x, y: max.y, z: max.z },
+          { x: max.x, y: min.y, z: max.z },
+        ],
+        normal: { x: 1, y: 0, z: 0 },
+      };
+    case "x-":
+      return {
+        vertices: [
+          { x: min.x, y: min.y, z: min.z },
+          { x: min.x, y: min.y, z: max.z },
+          { x: min.x, y: max.y, z: max.z },
+          { x: min.x, y: max.y, z: min.z },
+        ],
+        normal: { x: -1, y: 0, z: 0 },
+      };
+    case "y+":
+      return {
+        vertices: [
+          { x: min.x, y: max.y, z: min.z },
+          { x: min.x, y: max.y, z: max.z },
+          { x: max.x, y: max.y, z: max.z },
+          { x: max.x, y: max.y, z: min.z },
+        ],
+        normal: { x: 0, y: 1, z: 0 },
+      };
+    case "y-":
+      return {
+        vertices: [
+          { x: min.x, y: min.y, z: min.z },
+          { x: max.x, y: min.y, z: min.z },
+          { x: max.x, y: min.y, z: max.z },
+          { x: min.x, y: min.y, z: max.z },
+        ],
+        normal: { x: 0, y: -1, z: 0 },
+      };
+    case "z+":
+      return {
+        vertices: [
+          { x: min.x, y: min.y, z: max.z },
+          { x: max.x, y: min.y, z: max.z },
+          { x: max.x, y: max.y, z: max.z },
+          { x: min.x, y: max.y, z: max.z },
+        ],
+        normal: { x: 0, y: 0, z: 1 },
+      };
+    case "z-":
+      return {
+        vertices: [
+          { x: min.x, y: min.y, z: min.z },
+          { x: min.x, y: max.y, z: min.z },
+          { x: max.x, y: max.y, z: min.z },
+          { x: max.x, y: min.y, z: min.z },
+        ],
+        normal: { x: 0, y: 0, z: -1 },
+      };
+  }
+}
+
+function getRotationTurns(
+  rotation: BlockModelShape["rotation"],
+  data: number,
+): number {
+  if (rotation === "cubyz:no_rotation") return 0;
+  return data & 3;
 }
 
 async function buildColumnSignature(colDir: string): Promise<ColumnSignature> {
@@ -1651,14 +2293,15 @@ function extractMaxWorldZ(view: DataView, _byteLength: number): number {
   const voxelSize = view.getUint32(16, true) || 1;
   const vertexCount = quadCount * 4;
   const colorPadded = (quadCount * 3 + 3) & ~3;
+  const aoPadded = (quadCount + 3) & ~3;
   const directionPadded = (quadCount + 3) & ~3;
-  let off = 20 + colorPadded + directionPadded;
+  let off = 20 + colorPadded + aoPadded + directionPadded;
   let maxRelZ = 0;
   for (let i = 0; i < vertexCount; i++) {
-    off += 2;
-    const relZ = view.getUint16(off, true);
+    off += 8;
+    const relZ = view.getUint32(off, true);
     if (relZ > maxRelZ) maxRelZ = relZ;
-    off += 2;
+    off += 4;
   }
-  return worldZ + maxRelZ * voxelSize;
+  return worldZ + (maxRelZ * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
 }
