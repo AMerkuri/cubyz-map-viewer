@@ -7,7 +7,7 @@ import type {
   CSS2DObject,
   CSS2DRenderer,
 } from "three/addons/renderers/CSS2DRenderer.js";
-import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   createEmptyLoadingBreakdown,
   type LoadingBreakdown,
@@ -120,6 +120,89 @@ const PLAYER_MARKER_SCALE_REFERENCE_DISTANCE = 200;
 const PLAYER_MARKER_MIN_SCALE = 1;
 const PLAYER_MARKER_MAX_SCALE = 100;
 const TEMP_TO_MARKER = new THREE.Vector3();
+
+interface PlayerMarkerAssetManifest {
+  available: boolean;
+  entityModelId: string | null;
+  modelUrl: string | null;
+  textureUrl: string | null;
+  height: number | null;
+  coordinateSystem: string | null;
+}
+
+function isPlayerMarkerAssetManifest(
+  value: unknown,
+): value is PlayerMarkerAssetManifest {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const manifest = value as Partial<PlayerMarkerAssetManifest>;
+  return typeof manifest.available === "boolean";
+}
+
+async function fetchPlayerMarkerAssetManifest(): Promise<PlayerMarkerAssetManifest> {
+  const response = await fetch("/api/assets/player-marker");
+  if (!response.ok) {
+    throw new Error(`Player marker manifest failed: ${response.status}`);
+  }
+  const manifest: unknown = await response.json();
+  if (!isPlayerMarkerAssetManifest(manifest)) {
+    throw new Error("Invalid player marker manifest");
+  }
+  return manifest;
+}
+
+function createNormalizedPlayerMarkerTemplate(
+  template: THREE.Object3D,
+  manifest: PlayerMarkerAssetManifest,
+): THREE.Object3D {
+  const normalizedRoot = new THREE.Group();
+  normalizedRoot.add(template);
+
+  if (manifest.coordinateSystem?.includes("y_up")) {
+    template.rotation.x = Math.PI / 2;
+  }
+
+  normalizedRoot.updateMatrixWorld(true);
+
+  const initialBounds = new THREE.Box3().setFromObject(normalizedRoot);
+  const initialSize = initialBounds.getSize(new THREE.Vector3());
+  const targetHeight =
+    typeof manifest.height === "number" && Number.isFinite(manifest.height)
+      ? manifest.height
+      : null;
+  if (targetHeight && initialSize.z > 0) {
+    template.scale.multiplyScalar(targetHeight / initialSize.z);
+    normalizedRoot.updateMatrixWorld(true);
+  }
+
+  const bounds = new THREE.Box3().setFromObject(normalizedRoot);
+  template.position.x -= (bounds.min.x + bounds.max.x) / 2;
+  template.position.y -= (bounds.min.y + bounds.max.y) / 2;
+  template.position.z -= bounds.min.z;
+  normalizedRoot.userData.playerMarkerBaseScale = 1;
+  normalizedRoot.userData.playerMarkerGroundOffset = targetHeight
+    ? targetHeight * 0.5
+    : 0;
+  normalizedRoot.updateMatrixWorld(true);
+  return normalizedRoot;
+}
+
+function createPlayerMarkerGltfLoader(
+  manifest: PlayerMarkerAssetManifest,
+): GLTFLoader {
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => {
+    if (!manifest.textureUrl || url === manifest.modelUrl) {
+      return url;
+    }
+    if (url.startsWith("data:") || url.startsWith("blob:")) {
+      return url;
+    }
+    return url.match(/\.(png|jpe?g|webp)$/i) ? manifest.textureUrl : url;
+  });
+  return new GLTFLoader(manager);
+}
 
 export function World3DView({
   mode,
@@ -350,7 +433,6 @@ export function World3DView({
     const loadId = ++playerAssetsLoadIdRef.current;
     let cancelled = false;
     const textureLoader = new THREE.TextureLoader();
-    const objLoader = new OBJLoader();
 
     async function loadPlayerAssets() {
       if (playerAssetsLoadingRef.current || playerAssetsLoadedRef.current) {
@@ -359,9 +441,24 @@ export function World3DView({
 
       playerAssetsLoadingRef.current = true;
       try {
+        const manifest = await fetchPlayerMarkerAssetManifest();
+        if (!manifest.available) {
+          if (!cancelled && loadId === playerAssetsLoadIdRef.current) {
+            playerAssetsLoadedRef.current = true;
+            playerAssetsLoadingRef.current = false;
+            onUpdatePlayerMarkers();
+          }
+          return;
+        }
+
+        if (!manifest.modelUrl || !manifest.textureUrl) {
+          throw new Error("Player marker manifest is missing asset URLs");
+        }
+
+        const gltfLoader = createPlayerMarkerGltfLoader(manifest);
         const [textureResult, modelResult] = await Promise.allSettled([
-          textureLoader.loadAsync("/api/assets/entities/textures/snale.png"),
-          objLoader.loadAsync("/api/assets/entities/models/snale.obj"),
+          textureLoader.loadAsync(manifest.textureUrl),
+          gltfLoader.loadAsync(manifest.modelUrl),
         ]);
 
         if (cancelled || loadId !== playerAssetsLoadIdRef.current) {
@@ -369,7 +466,7 @@ export function World3DView({
             textureResult.value.dispose();
           }
           if (modelResult.status === "fulfilled") {
-            disposePlayerMarkerTemplate(modelResult.value);
+            disposePlayerMarkerTemplate(modelResult.value.scene);
           }
           return;
         }
@@ -378,6 +475,10 @@ export function World3DView({
           textureResult.status === "fulfilled" &&
           modelResult.status === "fulfilled"
         ) {
+          const markerTemplate = createNormalizedPlayerMarkerTemplate(
+            modelResult.value.scene,
+            manifest,
+          );
           textureResult.value.colorSpace = THREE.SRGBColorSpace;
           textureResult.value.magFilter = THREE.NearestFilter;
           textureResult.value.minFilter = THREE.NearestFilter;
@@ -387,7 +488,7 @@ export function World3DView({
           playerMarkerGrayscaleTextureRef.current = createGrayscaleTexture(
             textureResult.value,
           );
-          playerMarkerModelTemplateRef.current = modelResult.value;
+          playerMarkerModelTemplateRef.current = markerTemplate;
           playerAssetsLoadedRef.current = true;
           playerAssetsRetryAttemptRef.current = 0;
           playerAssetsLoadingRef.current = false;
@@ -403,7 +504,7 @@ export function World3DView({
           textureResult.value.dispose();
         }
         if (modelResult.status === "fulfilled") {
-          disposePlayerMarkerTemplate(modelResult.value);
+          disposePlayerMarkerTemplate(modelResult.value.scene);
         }
 
         playerAssetsLoadedRef.current = false;

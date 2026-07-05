@@ -13,18 +13,15 @@ import { fileURLToPath } from "node:url";
 import compression from "compression";
 import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
+import { createAssetsRouter } from "./api/assets.js";
 import { createBiomesRouter } from "./api/biomes.js";
 import { errorHandler } from "./api/error-handler.js";
 import { createPlayersRouter } from "./api/players.js";
 import { requestContextMiddleware } from "./api/request-context.js";
 import { createTerrainRouter } from "./api/terrain.js";
-import { parseSafeAssetName } from "./api/validation.js";
 import { createVoxelsRouter } from "./api/voxels.js";
 import { createWorldRouter } from "./api/world.js";
-import {
-  discoverAssetNamespaceSources,
-  resolveNamespaceFile,
-} from "./parsers/assets.js";
+import { discoverAssetNamespaceSources } from "./parsers/assets.js";
 import { loadAllBiomes } from "./parsers/biome.js";
 import { loadPalette } from "./parsers/palette.js";
 import {
@@ -37,6 +34,7 @@ import { parseWorldMeta } from "./parsers/world-meta.js";
 import { buildBlockColorTable } from "./services/block-color-table.js";
 import { buildChunkIndex } from "./services/chunk-index.js";
 import { ColorMapService } from "./services/color-map.js";
+import { EntityModelAssetService } from "./services/entity-model-assets.js";
 import { logger } from "./services/logger.js";
 import { VoxelMeshService } from "./services/voxel-mesh-service.js";
 import { SaveWatcher, type WatchEvent } from "./services/watcher.js";
@@ -333,7 +331,6 @@ async function main() {
   const cubyzPath = findCubyzPath();
   const coreAssetsRoot = join(cubyzPath, "assets");
   const saveAssetsRoot = join(savePath, "assets");
-  const coreCubyzAssetsPath = join(coreAssetsRoot, "cubyz");
   const clientDistDir = resolve(__dirname, "..", "client");
   const clientIndexPath = join(clientDistDir, "index.html");
   const hasBuiltClient = existsSync(clientIndexPath);
@@ -373,6 +370,7 @@ async function main() {
     coreAssetsRoot,
     saveAssetsRoot,
   ]);
+  const entityModelAssets = new EntityModelAssetService(assetSources);
 
   // Load biome definitions
   logger.info("Loading biome definitions");
@@ -472,6 +470,7 @@ async function main() {
   // API routes
   app.use("/api/world", createWorldRouter(savePath, worldMeta));
   app.use("/api/players", createPlayersRouter(savePath));
+  app.use("/api/assets", createAssetsRouter(entityModelAssets));
   app.use("/api/terrain", createTerrainRouter(savePath, colorMap));
   app.use("/api/biomes", createBiomesRouter(savePath, biomePalette));
   app.use(
@@ -481,32 +480,6 @@ async function main() {
 
   app.get("/api/blocks/colors", (_req, res) => {
     res.json(colorMap.getAllBlockColors());
-  });
-
-  app.get("/api/assets/entities/textures/:name", (req, res) => {
-    const textureName = parseSafeAssetName(req.params.name, "texture name");
-    res.sendFile(
-      resolveNamespaceFile(
-        assetSources,
-        "cubyz",
-        "entities",
-        "textures",
-        textureName,
-      ) ?? join(coreCubyzAssetsPath, "entities", "textures", textureName),
-    );
-  });
-
-  app.get("/api/assets/entities/models/:name", (req, res) => {
-    const modelName = parseSafeAssetName(req.params.name, "model name");
-    res.sendFile(
-      resolveNamespaceFile(
-        assetSources,
-        "cubyz",
-        "entities",
-        "models",
-        modelName,
-      ) ?? join(coreCubyzAssetsPath, "entities", "models", modelName),
-    );
   });
 
   // Health check

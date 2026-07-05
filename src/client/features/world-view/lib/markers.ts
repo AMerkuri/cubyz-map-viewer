@@ -49,6 +49,9 @@ function getModelLabelOffset(marker: THREE.Object3D): number {
 }
 
 function getModelGroundOffset(marker: THREE.Object3D): number {
+  if (typeof marker.userData.playerMarkerGroundOffset === "number") {
+    return Math.max(marker.userData.playerMarkerGroundOffset, 0);
+  }
   const bounds = new THREE.Box3().setFromObject(marker);
   return Math.max(
     bounds.max.z * PLAYER_GROUND_OFFSET_RATIO - PLAYER_GROUND_OFFSET_CLEARANCE,
@@ -156,8 +159,8 @@ function updatePlayerMarkerObject(
   player: PlayerData,
 ) {
   marker.position.set(0, 0, 0);
-  // Cubyz renders entity models with rotationZ(-yaw), so match that sign here.
-  marker.rotation.z = -(player.rotation[2] ?? 0);
+  // The GLB marker template faces opposite Cubyz entity yaw after z-up conversion.
+  marker.rotation.z = Math.PI - (player.rotation[2] ?? 0);
   marker.userData.player = player;
   marker.userData.playerMarker = true;
 }

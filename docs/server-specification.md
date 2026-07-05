@@ -28,7 +28,8 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 - `/api/terrain/:lod/:x/:y`: seam-safe terrain JSON built from the same-LOD 3x3 surface neighborhood; cached with ETag
 - `/api/biomes/:lod/:x/:y`: grouped biome-label regions from `.surface` data
 - `/api/voxels/:lod/:regionX/:regionY`: binary voxel mesh payloads with explicit `br`/`gzip` negotiation, ETags, and queue/timing headers
-- `/api/assets/entities/{models,textures}/:name`: layered asset lookup for entity assets
+- `/api/assets/player-marker`: player marker asset manifest derived from layered `entityModels` descriptors
+- `/api/assets/entity-models/files/:token`: opaque, manifest-addressable GLB/PNG entity model asset serving; tokens resolve only files registered by the player marker manifest
 - `/api/health`: simple liveness endpoint
 
 ## Voxel Pipeline
@@ -42,7 +43,12 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 ## Assets And Overrides
 
 - Asset lookup is layered: the server reads base assets from `CUBYZ_PATH/assets/*` and allows `SAVE_PATH/assets/*` to override matching namespace-relative files.
-- That layered lookup is used for biome/block assets and entity model/texture routes.
+- That layered lookup is used for biome/block assets and entity model descriptor/model/texture resolution.
+- `EntityModelAssetService` scans `entityModels/**/*.zig.zon`, parses descriptors with the ZON parser, filters to loadable `.playerModel` descriptors, and selects `cubyz:snale` before falling back to the first stable entity model ID.
+- The player marker manifest contains `available`, `entityModelId`, `modelUrl`, `textureUrl`, `height`, and `coordinateSystem`.
+- Descriptors with missing `model` or `defaultTexture` references, invalid namespaced IDs, or unresolved `entityModels/models/*.glb` / `entityModels/textures/*.png` assets are skipped rather than returned as broken manifests.
+- If no loadable player model descriptor exists, `/api/assets/player-marker` returns HTTP 200 with `available: false` so player data and fallback markers keep working.
+- Entity model file serving uses opaque tokens generated from manifest-resolved files. The route does not accept arbitrary relative paths or namespace filesystem paths from the client.
 
 ## Live Updates
 

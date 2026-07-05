@@ -69,6 +69,15 @@ At a high level:
 - `/api/players` includes `isActive` as the server-owned player activity flag for client styling, while stale player removal uses a longer retention window
 - if event names, payload shapes, or update semantics change, update the server, client, and docs together
 
+### Player Marker Asset Contract
+
+- player marker models are discovered server-side from layered Cubyz `entityModels/**/*.zig.zon` descriptors
+- layered asset precedence is core Cubyz assets first and save assets second, so matching save asset files override core files for descriptors, GLB models, and PNG textures
+- `/api/assets/player-marker` returns the selected player marker manifest with `available`, `entityModelId`, `modelUrl`, `textureUrl`, `height`, and `coordinateSystem`
+- the selected descriptor must be tagged `.playerModel` and have resolvable `model` and `defaultTexture` references; `cubyz:snale` is preferred when loadable, otherwise the first loadable `.playerModel` by stable ID is used
+- when no loadable player model exists, the manifest returns `available: false` and the client keeps rendering fallback dot markers
+- model and texture URLs from the manifest are opaque server-generated asset URLs; the browser must not construct filesystem paths directly
+
 ## Documentation Map
 
 - `docs/architecture-overview.md`: system overview and shared client/server contracts

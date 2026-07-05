@@ -246,24 +246,58 @@ export function createPlayerMarkerModel(
 
   model.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
-    child.material = new THREE.MeshLambertMaterial({
-      map: texture,
-      transparent: true,
-      alphaTest: 0.1,
-      side: THREE.DoubleSide,
-      depthTest: false,
-      depthWrite: false,
-      color: 0xffffff,
-      opacity: underground ? 0.6 : 1,
-    });
+    child.material = clonePlayerMarkerMaterial(
+      child.material,
+      texture,
+      underground,
+    );
     child.castShadow = false;
     child.receiveShadow = false;
     child.renderOrder = 20;
     child.userData.playerMarker = true;
   });
 
-  model.scale.setScalar(1.75);
+  model.scale.setScalar(
+    typeof template.userData.playerMarkerBaseScale === "number"
+      ? template.userData.playerMarkerBaseScale
+      : 1.75,
+  );
   return model;
+}
+
+function clonePlayerMarkerMaterial(
+  material: THREE.Material | THREE.Material[],
+  fallbackTexture: THREE.Texture,
+  underground: boolean,
+): THREE.Material | THREE.Material[] {
+  if (Array.isArray(material)) {
+    return material.map((mat) =>
+      cloneSinglePlayerMarkerMaterial(mat, fallbackTexture, underground),
+    );
+  }
+  return cloneSinglePlayerMarkerMaterial(
+    material,
+    fallbackTexture,
+    underground,
+  );
+}
+
+function cloneSinglePlayerMarkerMaterial(
+  material: THREE.Material,
+  fallbackTexture: THREE.Texture,
+  underground: boolean,
+): THREE.Material {
+  const cloned = material.clone();
+  if ("map" in cloned && cloned.map === null) {
+    cloned.map = fallbackTexture;
+  }
+  cloned.transparent = true;
+  cloned.alphaTest = Math.max(cloned.alphaTest, 0.1);
+  cloned.side = THREE.DoubleSide;
+  cloned.depthTest = false;
+  cloned.depthWrite = false;
+  cloned.opacity = underground ? 0.6 : 1;
+  return cloned;
 }
 
 export function disposePlayerMarkerTemplate(template: THREE.Object3D) {

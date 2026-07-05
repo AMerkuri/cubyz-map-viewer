@@ -73,18 +73,3 @@ export function assertAlignedRegion(
     throw new BadRequestError("Invalid lod/region coordinates");
   }
 }
-
-export function parseSafeAssetName(
-  value: string | undefined,
-  label: string,
-): string {
-  if (!value) {
-    throw new BadRequestError(`Missing ${label}`);
-  }
-
-  if (value.includes("..") || !/^[A-Za-z0-9._-]+$/.test(value)) {
-    throw new BadRequestError(`Invalid ${label}`);
-  }
-
-  return value;
-}
