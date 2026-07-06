@@ -23,7 +23,8 @@ This document covers client-owned architecture and runtime behavior. Shared cont
 
 - React Query is the source of truth for HTTP data. `main.tsx` sets `staleTime: Infinity`, so refresh is event-driven rather than focus-driven.
 - The world viewer initializes as a voxel scene for every page load. Legacy `mode` URL parameters are ignored, and the HUD does not expose a terrain/voxel selector.
-- Copied location URLs are camera-only: they include position, zoom, theta, and phi parameters, and they do not include world-view mode state.
+- Copied location URLs are camera-only: they include position, zoom, theta, phi, and `focus=exact` parameters, and they do not include world-view mode state. `focus=exact` restores the supplied target coordinates without surface correction.
+- URLs with `x`, `y`, `z`, `zoom`, `theta`, and `phi` but no `focus=exact` marker remain valid as map-compatible links. The startup camera treats their `z` value as a hint, focuses the best loaded visible surface at the supplied `x,y` with voxel geometry preferred over terrain, preserves `zoom`, `theta`, and `phi`, and retries after nearby terrain or voxel meshes load if no surface is available immediately.
 - `useWorldData()` always loads world metadata, the surface index, the save block palette, and the voxel chunk index during initial page load so voxel rendering prerequisites are available immediately.
 - `useWebSocket()` maintains the `/ws` connection, and `useWorldViewRefreshSubscriptions()` maps socket events to query invalidation.
 - `WorldControlsProvider` owns low-frequency UI state and persists graphics/layer settings through `src/client/lib/world-view-storage.ts`; older stored versions are discarded and the app falls back to defaults.

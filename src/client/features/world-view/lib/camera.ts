@@ -52,6 +52,39 @@ export function focusCameraOnVisibleSurfacePosition(
   controls.update();
 }
 
+export function retargetCameraStateToVisibleSurface(args: {
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  initialCameraState: InitialCameraState;
+  terrainGroup: THREE.Object3D | null;
+  voxelGroup: THREE.Object3D | null;
+}): boolean {
+  const { camera, controls, initialCameraState, terrainGroup, voxelGroup } =
+    args;
+  const { pos, zoom, theta, phi } = initialCameraState;
+  const [stx, sty, stz] = worldToScene(pos[0], pos[1], pos[2]);
+  const surfaceZ = findVisibleSurfaceZAtWorldPosition({
+    camera,
+    controls,
+    worldX: stx,
+    worldY: sty,
+    terrainGroup,
+    voxelGroup,
+  });
+  if (surfaceZ === null) return false;
+
+  applyCameraSphericalState({
+    camera,
+    controls,
+    target: [stx, sty, surfaceZ],
+    zoom,
+    theta,
+    phi,
+  });
+  if (Math.abs(surfaceZ - stz) < 0.001) return true;
+  return true;
+}
+
 export function panCameraToWorldPosition(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
@@ -104,14 +137,44 @@ function findVisibleSurfaceZAtWorldPosition(args: {
   );
   raycaster.ray.direction.set(0, 0, -1);
 
-  const intersections = raycaster.intersectObjects(
-    [terrainGroup, voxelGroup].filter(
-      (group): group is THREE.Object3D => group !== null,
-    ),
-    true,
-  );
+  const voxelIntersection = voxelGroup
+    ? raycaster
+        .intersectObject(voxelGroup, true)
+        .find((entry) => entry.object.visible)
+    : null;
+  if (voxelIntersection) return voxelIntersection.point.z;
 
-  return intersections[0]?.point.z ?? null;
+  const terrainIntersection = terrainGroup
+    ? raycaster
+        .intersectObject(terrainGroup, true)
+        .find((entry) => entry.object.visible)
+    : null;
+  return terrainIntersection?.point.z ?? null;
+}
+
+function applyCameraSphericalState(args: {
+  camera: THREE.PerspectiveCamera;
+  controls: OrbitControls;
+  target: [number, number, number];
+  zoom: number;
+  theta: number;
+  phi: number;
+}): void {
+  const { camera, controls, target, zoom, theta, phi } = args;
+  const [stx, sty, stz] = target;
+  const clampedZoom = THREE.MathUtils.clamp(
+    zoom,
+    controls.minDistance,
+    controls.maxDistance,
+  );
+  controls.target.set(stx, sty, stz);
+  const thetaRad = THREE.MathUtils.degToRad(theta);
+  const phiRad = THREE.MathUtils.degToRad(Math.min(phi, 88));
+  const dx = clampedZoom * Math.sin(phiRad) * Math.cos(thetaRad);
+  const dy = clampedZoom * Math.sin(phiRad) * Math.sin(thetaRad);
+  const dz = clampedZoom * Math.cos(phiRad);
+  camera.position.set(stx + dx, sty + dy, stz + dz);
+  controls.update();
 }
 
 export function applyInitialCameraState(args: {
@@ -134,19 +197,25 @@ export function applyInitialCameraState(args: {
   if (initialCameraState) {
     const { pos, zoom, theta, phi } = initialCameraState;
     const [stx, sty, stz] = worldToScene(pos[0], pos[1], pos[2]);
-    const clampedZoom = THREE.MathUtils.clamp(
+    const surfaceZ =
+      initialCameraState.focusMode === "map-compatible"
+        ? findVisibleSurfaceZAtWorldPosition({
+            camera,
+            controls,
+            worldX: stx,
+            worldY: sty,
+            terrainGroup,
+            voxelGroup,
+          })
+        : null;
+    applyCameraSphericalState({
+      camera,
+      controls,
+      target: [stx, sty, surfaceZ ?? stz],
       zoom,
-      controls.minDistance,
-      controls.maxDistance,
-    );
-    controls.target.set(stx, sty, stz);
-    const thetaRad = THREE.MathUtils.degToRad(theta);
-    const phiRad = THREE.MathUtils.degToRad(Math.min(phi, 88));
-    const dx = clampedZoom * Math.sin(phiRad) * Math.cos(thetaRad);
-    const dy = clampedZoom * Math.sin(phiRad) * Math.sin(thetaRad);
-    const dz = clampedZoom * Math.cos(phiRad);
-    camera.position.set(stx + dx, sty + dy, stz + dz);
-    controls.update();
+      theta,
+      phi,
+    });
     return;
   }
 

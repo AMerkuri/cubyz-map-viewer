@@ -79,6 +79,7 @@ export function initializeSceneRuntime(args: {
     preUploadScene: THREE.Scene,
     preUploadCamera: THREE.Camera,
   ) => boolean;
+  retargetInitialCameraToVisibleSurface: () => boolean;
   checkAndUpdateLOD: (
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
@@ -131,6 +132,7 @@ export function initializeSceneRuntime(args: {
     handleWorkerMessage,
     buildQueuedTerrainMeshes,
     buildQueuedVoxelMeshes,
+    retargetInitialCameraToVisibleSurface,
     checkAndUpdateLOD,
     updateTerrainVisibility,
     refreshDebugLabels,
@@ -480,6 +482,7 @@ export function initializeSceneRuntime(args: {
       preUploadCamera,
     );
     if (builtTerrainTile || builtVoxelTile) {
+      retargetInitialCameraToVisibleSurface();
       markActive(now);
       runLodUpdate(now, idleEligible);
     }

@@ -77,6 +77,7 @@ export function useWorld3DSceneRuntime(args: {
     preUploadScene: THREE.Scene,
     preUploadCamera: THREE.Camera,
   ) => boolean;
+  retargetInitialCameraToVisibleSurface: () => boolean;
   checkAndUpdateLOD: (
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
@@ -129,6 +130,7 @@ export function useWorld3DSceneRuntime(args: {
     handleWorkerMessage,
     buildQueuedTerrainMeshes,
     buildQueuedVoxelMeshes,
+    retargetInitialCameraToVisibleSurface,
     checkAndUpdateLOD,
     updateTerrainVisibility,
     refreshDebugLabels,
@@ -149,6 +151,9 @@ export function useWorld3DSceneRuntime(args: {
   const onHandleWorkerMessage = useEffectEvent(handleWorkerMessage);
   const onBuildQueuedTerrainMeshes = useEffectEvent(buildQueuedTerrainMeshes);
   const onBuildQueuedVoxelMeshes = useEffectEvent(buildQueuedVoxelMeshes);
+  const onRetargetInitialCameraToVisibleSurface = useEffectEvent(
+    retargetInitialCameraToVisibleSurface,
+  );
   const onCheckAndUpdateLOD = useEffectEvent(checkAndUpdateLOD);
   const onUpdateTerrainVisibility = useEffectEvent(updateTerrainVisibility);
   const onRefreshDebugLabels = useEffectEvent(refreshDebugLabels);
@@ -195,6 +200,8 @@ export function useWorld3DSceneRuntime(args: {
       handleWorkerMessage: onHandleWorkerMessage,
       buildQueuedTerrainMeshes: onBuildQueuedTerrainMeshes,
       buildQueuedVoxelMeshes: onBuildQueuedVoxelMeshes,
+      retargetInitialCameraToVisibleSurface:
+        onRetargetInitialCameraToVisibleSurface,
       checkAndUpdateLOD: onCheckAndUpdateLOD,
       updateTerrainVisibility: onUpdateTerrainVisibility,
       refreshDebugLabels: onRefreshDebugLabels,
@@ -256,6 +263,7 @@ export function useWorld3DInitialization(args: {
   chunkIndexRef: { current: ChunkIndexEntry[] };
   rebuildVoxelIndexState: (entries: ChunkIndexEntry[]) => void;
   initialCameraState: InitialCameraState | null;
+  pendingInitialSurfaceRetargetRef: { current: InitialCameraState | null };
   addSpawnMarker: () => void;
   updatePlayerMarkers: () => void;
   checkAndUpdateLOD: (
@@ -276,6 +284,7 @@ export function useWorld3DInitialization(args: {
     chunkIndexRef,
     rebuildVoxelIndexState,
     initialCameraState,
+    pendingInitialSurfaceRetargetRef,
     addSpawnMarker,
     updatePlayerMarkers,
     checkAndUpdateLOD,
@@ -305,6 +314,10 @@ export function useWorld3DInitialization(args: {
       terrainGroup: terrainGroupRef.current,
       voxelGroup: voxelGroupRef.current,
     });
+    pendingInitialSurfaceRetargetRef.current =
+      initialCameraState?.focusMode === "map-compatible"
+        ? initialCameraState
+        : null;
 
     onAddSpawnMarker();
     onUpdatePlayerMarkers();
@@ -315,6 +328,7 @@ export function useWorld3DInitialization(args: {
     chunkIndex,
     spawn,
     initialCameraState,
+    pendingInitialSurfaceRetargetRef,
     initializedRef,
     sceneRef,
     terrainGroupRef,

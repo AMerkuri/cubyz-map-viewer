@@ -32,6 +32,12 @@ At a high level:
 - voxel payloads preserve direct world coordinates, so the client does not mirror an axis
 - treat this coordinate convention as stable unless both sides and the docs are updated together
 
+### Camera URL Contract
+
+- camera URLs use world-coordinate `x`, `y`, `z` plus `zoom`, `theta`, and `phi` query parameters
+- viewer-generated copied-location URLs include `focus=exact`, which tells the client to restore the supplied camera target exactly
+- URLs without `focus=exact` are accepted as map-compatible links; the client may retarget their supplied altitude to the best available visible surface at the supplied `x,y` while preserving `zoom`, `theta`, and `phi`
+
 ### Source Data Layout
 
 - surface tiles come from `maps/{lod}/{worldX}/{worldY}.surface`

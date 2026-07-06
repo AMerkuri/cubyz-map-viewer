@@ -23,6 +23,7 @@ import {
   ensureAvatarAssets,
 } from "../lib/avatar-assets.js";
 import { refreshBiomeLabels as refreshBiomeLabelsManaged } from "../lib/biome-labels.js";
+import { retargetCameraStateToVisibleSurface } from "../lib/camera.js";
 import { MAX_VOXEL_RETRIES } from "../lib/constants.js";
 import {
   clearCssLabelMap,
@@ -70,6 +71,7 @@ import {
   updateTerrainVisibility as updateTerrainVisibilityManaged,
 } from "../lib/terrain-manager.js";
 import type {
+  InitialCameraState,
   LoadedTerrainTile,
   LoadedVoxelTile,
   PendingTerrainFetchRequest,
@@ -264,6 +266,9 @@ export function World3DView({
   const voxelLastMotionAtRef = useRef(0);
   const pendingVoxelMeshQueueRef = useRef<PendingVoxelMeshItem[]>([]);
   const workerRef = useRef<Worker | null>(null);
+  const pendingInitialSurfaceRetargetRef = useRef<InitialCameraState | null>(
+    null,
+  );
 
   const surfaceIndexRef = useRef<SurfaceIndexEntry[]>([]);
   const terrainIndexVersionRef = useRef(0);
@@ -1121,6 +1126,26 @@ export function World3DView({
     syncSignLayer();
   }
 
+  function retargetInitialCameraToVisibleSurface() {
+    const state = pendingInitialSurfaceRetargetRef.current;
+    if (!state || !sceneRef.current) return false;
+
+    const retargeted = retargetCameraStateToVisibleSurface({
+      camera: sceneRef.current.camera,
+      controls: sceneRef.current.controls,
+      initialCameraState: state,
+      terrainGroup: terrainGroupRef.current,
+      voxelGroup: voxelGroupRef.current,
+    });
+    if (!retargeted) return false;
+
+    pendingInitialSurfaceRetargetRef.current = null;
+    terrainVisibilityDirtyRef.current = true;
+    debugLabelsDirtyRef.current = true;
+    biomeLabelsDirtyRef.current = true;
+    return true;
+  }
+
   function handleWorkerMessage(data: WorkerOut) {
     handleVoxelWorkerMessage({
       data,
@@ -1300,6 +1325,7 @@ export function World3DView({
     handleWorkerMessage,
     buildQueuedTerrainMeshes: buildQueuedTerrainMeshesForFrame,
     buildQueuedVoxelMeshes: buildQueuedVoxelMeshesForFrame,
+    retargetInitialCameraToVisibleSurface,
     checkAndUpdateLOD,
     updateTerrainVisibility,
     refreshDebugLabels,
@@ -1329,6 +1355,7 @@ export function World3DView({
     chunkIndexRef,
     rebuildVoxelIndexState: rebuildVoxelIndexCache,
     initialCameraState,
+    pendingInitialSurfaceRetargetRef,
     addSpawnMarker,
     updatePlayerMarkers,
     checkAndUpdateLOD,

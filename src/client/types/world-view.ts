@@ -3,6 +3,7 @@ export interface InitialCameraState {
   zoom: number;
   theta: number;
   phi: number;
+  focusMode: "exact" | "map-compatible";
 }
 
 export type ShareLocationState = {

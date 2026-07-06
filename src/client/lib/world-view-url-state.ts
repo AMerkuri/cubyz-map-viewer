@@ -19,7 +19,13 @@ export function readInitialCameraState(): InitialCameraState | null {
     !Number.isNaN(theta) &&
     !Number.isNaN(phi)
   ) {
-    return { pos: [x, y, z], zoom, theta, phi };
+    return {
+      pos: [x, y, z],
+      zoom,
+      theta,
+      phi,
+      focusMode: p.get("focus") === "exact" ? "exact" : "map-compatible",
+    };
   }
   return null;
 }
@@ -32,6 +38,7 @@ export function createShareLocationUrl(state: ShareLocationState): string {
   p.set("zoom", String(state.zoom));
   p.set("theta", String(state.theta));
   p.set("phi", String(state.phi));
+  p.set("focus", "exact");
 
   return `${window.location.origin}${window.location.pathname}?${p.toString()}`;
 }
