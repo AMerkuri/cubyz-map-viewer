@@ -19,7 +19,6 @@ export type ChunkStats = {
   loaded: number;
   fps: number;
   focusLod: number;
-  mode: "terrain" | "voxel";
   loadingBreakdown: LoadingBreakdown;
   voxelHealth: {
     missing: number;
@@ -118,13 +117,12 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   voxelLodHysteresisRatio: 0.12,
 };
 
-export function createEmptyChunkStats(mode: "terrain" | "voxel"): ChunkStats {
+export function createEmptyChunkStats(): ChunkStats {
   return {
     loading: 0,
     loaded: 0,
     fps: 0,
     focusLod: 1,
-    mode,
     loadingBreakdown: createEmptyLoadingBreakdown(),
     voxelHealth: {
       missing: 0,

@@ -1,9 +1,6 @@
 import { lazy, Suspense } from "react";
 import type { MapDebugSettings } from "../../../lib/world-view-debug.js";
-import type {
-  LayerVisibility,
-  WorldViewMode,
-} from "../../../types/world-view.js";
+import type { LayerVisibility } from "../../../types/world-view.js";
 
 const MapDebugParameters = lazy(async () =>
   import("../../world-view/components/MapDebugParameters.js").then(
@@ -12,7 +9,6 @@ const MapDebugParameters = lazy(async () =>
 );
 
 interface DebugParametersContentProps {
-  view: WorldViewMode;
   mapDebugSettings: MapDebugSettings;
   setMapDebugSettings: (next: MapDebugSettings) => void;
   renderDistance: number;
@@ -27,7 +23,6 @@ interface DebugParametersContentProps {
 }
 
 export function DebugParametersContent({
-  view,
   mapDebugSettings,
   setMapDebugSettings,
   renderDistance,
@@ -43,7 +38,6 @@ export function DebugParametersContent({
   return (
     <Suspense fallback={<div>Loading parameters...</div>}>
       <MapDebugParameters
-        view={view}
         settings={mapDebugSettings}
         onChange={setMapDebugSettings}
         renderDistance={renderDistance}

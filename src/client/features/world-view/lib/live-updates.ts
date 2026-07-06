@@ -9,7 +9,6 @@ import type {
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
 } from "./types.js";
-import { shouldRenderTerrainForMode } from "./utils.js";
 import { voxelTileKey } from "./voxel-index.js";
 
 export function handleTerrainTileUpdate(args: {
@@ -17,9 +16,7 @@ export function handleTerrainTileUpdate(args: {
   tileX: number;
   tileY: number;
   queryClient: QueryClient;
-  mode: "terrain" | "voxel";
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
+  showTerrainUnderlay: boolean;
   loadedTerrain: Map<string, LoadedTerrainTile>;
   evictWarmCachedTerrainTile: (key: string) => void;
   queueTerrainTileLoad: (
@@ -37,9 +34,7 @@ export function handleTerrainTileUpdate(args: {
     tileX,
     tileY,
     queryClient,
-    mode,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     loadedTerrain,
     evictWarmCachedTerrainTile,
     queueTerrainTileLoad,
@@ -47,12 +42,6 @@ export function handleTerrainTileUpdate(args: {
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,
   } = args;
-
-  const shouldRenderTerrain = shouldRenderTerrainForMode(
-    mode,
-    showTerrain,
-    showVoxelTerrain,
-  );
 
   for (let offsetX = -1; offsetX <= 1; offsetX++) {
     for (let offsetY = -1; offsetY <= 1; offsetY++) {
@@ -70,7 +59,7 @@ export function handleTerrainTileUpdate(args: {
         loadedTerrain.delete(key);
       }
 
-      if (shouldRenderTerrain) {
+      if (showTerrainUnderlay) {
         queueTerrainTileLoad(
           lod,
           affectedTileX,
@@ -90,7 +79,6 @@ export function handleVoxelRegionUpdate(args: {
   lod: number;
   regionX: number;
   regionY: number;
-  mode: "terrain" | "voxel";
   scene: { camera: THREE.PerspectiveCamera; controls: OrbitControls } | null;
   loadedVoxels: Map<string, LoadedVoxelTile>;
   availableVoxelKeys: Set<string>;
@@ -120,7 +108,6 @@ export function handleVoxelRegionUpdate(args: {
     lod,
     regionX,
     regionY,
-    mode,
     scene,
     loadedVoxels,
     availableVoxelKeys,
@@ -152,7 +139,7 @@ export function handleVoxelRegionUpdate(args: {
     (item) => item.key !== key || item.version >= getVoxelRefreshVersion(key),
   );
   loadingVoxels.delete(key);
-  if (mode === "voxel" && scene) {
+  if (scene) {
     checkAndUpdateLOD(scene.camera, scene.controls);
   }
   if (loadedVoxels.has(key) || availableVoxelKeys.has(key)) {

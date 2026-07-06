@@ -200,7 +200,6 @@ export interface CursorHoverInfo {
 }
 
 export interface World3DViewProps {
-  mode: "terrain" | "voxel";
   worldData: ReturnType<typeof useWorldData>;
   players: PlayerData[];
   subscribe: (
@@ -210,8 +209,7 @@ export interface World3DViewProps {
   showPlayers: boolean;
   showSpawn: boolean;
   showChunkBorders: boolean;
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
+  showTerrainUnderlay: boolean;
   showBiomeLabels: boolean;
   showVoxelHeightLabels: boolean;
   renderDistance: number;
@@ -225,7 +223,6 @@ export interface World3DViewProps {
   onLoadingBreakdownChange: (loadingBreakdown: LoadingBreakdown) => void;
   initialCameraState: InitialCameraState | null;
   onShareStateChange: (state: {
-    mode: "terrain" | "voxel";
     pos: [number, number, number];
     zoom: number;
     theta: number;

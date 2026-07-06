@@ -1,13 +1,9 @@
 import { OverlayPanel } from "../../../components/OverlayPanel.js";
 import type { GraphicsPreset } from "../../../lib/world-view-graphics-presets.js";
-import type {
-  LayerVisibility,
-  WorldViewMode,
-} from "../../../types/world-view.js";
+import type { LayerVisibility } from "../../../types/world-view.js";
 import { MapControlsContent } from "./MapControlsContent.js";
 
 interface MapControlsPanelProps {
-  view: WorldViewMode;
   activeGraphicsPresetId: string | null;
   applyGraphicsPreset: (preset: GraphicsPreset) => void;
   layerVisibility: LayerVisibility;
@@ -15,7 +11,6 @@ interface MapControlsPanelProps {
 }
 
 export function MapControlsPanel({
-  view,
   activeGraphicsPresetId,
   applyGraphicsPreset,
   layerVisibility,
@@ -31,7 +26,6 @@ export function MapControlsPanel({
       contentStyle={{ fontSize: 12, lineHeight: 1.25 }}
     >
       <MapControlsContent
-        view={view}
         activeGraphicsPresetId={activeGraphicsPresetId}
         applyGraphicsPreset={applyGraphicsPreset}
         layerVisibility={layerVisibility}

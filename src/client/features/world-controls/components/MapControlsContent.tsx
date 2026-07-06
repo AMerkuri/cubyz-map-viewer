@@ -3,14 +3,10 @@ import {
   GRAPHICS_PRESETS,
   type GraphicsPreset,
 } from "../../../lib/world-view-graphics-presets.js";
-import type {
-  LayerVisibility,
-  WorldViewMode,
-} from "../../../types/world-view.js";
+import type { LayerVisibility } from "../../../types/world-view.js";
 import { LayerControls } from "./LayerControls.js";
 
 interface MapControlsContentProps {
-  view: WorldViewMode;
   activeGraphicsPresetId: string | null;
   applyGraphicsPreset: (preset: GraphicsPreset) => void;
   layerVisibility: LayerVisibility;
@@ -33,7 +29,6 @@ function InstructionTitle({ children }: { children: React.ReactNode }) {
 }
 
 export function MapControlsContent({
-  view,
   activeGraphicsPresetId,
   applyGraphicsPreset,
   layerVisibility,
@@ -53,10 +48,9 @@ export function MapControlsContent({
       <LayerControls
         visibility={layerVisibility}
         onChange={handleLayerVisibilityChange}
-        view={view}
         compact={compact}
       />
-      {view === "voxel" && layerVisibility.debug && (
+      {layerVisibility.debug && (
         <div style={{ display: "grid", gap: 6 }}>
           <div
             style={{

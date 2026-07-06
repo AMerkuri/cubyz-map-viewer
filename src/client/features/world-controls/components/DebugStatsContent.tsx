@@ -22,7 +22,6 @@ function StatsSectionTitle({ children }: { children: React.ReactNode }) {
 export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
   return (
     <div style={{ display: "grid", gap: 6 }}>
-      <div>Mode: {chunkStats.mode === "terrain" ? "Terrain" : "Voxel"}</div>
       <div>Focus LOD: {chunkStats.focusLod}</div>
       <div>FPS: {chunkStats.fps}</div>
       <div>Loading chunks: {chunkStats.loading}</div>

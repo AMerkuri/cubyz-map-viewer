@@ -4,7 +4,6 @@ import {
   useEffect,
   useMemo,
   useReducer,
-  useRef,
   useState,
 } from "react";
 import {
@@ -26,14 +25,9 @@ import {
   type StoredLayerVisibility,
   writeStoredGraphicsSettings,
 } from "../../lib/world-view-storage.js";
-import type {
-  FlyToRequest,
-  LayerVisibility,
-  WorldViewMode,
-} from "../../types/world-view.js";
+import type { FlyToRequest, LayerVisibility } from "../../types/world-view.js";
 
 type WorldControlsState = {
-  view: WorldViewMode;
   chunkIndexEnabled: boolean;
   layerVisibility: LayerVisibility;
   mapDebugSettings: MapDebugSettings;
@@ -65,12 +59,10 @@ type WorldControlsContextValue = {
 };
 
 type WorldControlsProviderProps = {
-  initialMode: WorldViewMode;
   children: React.ReactNode;
 };
 
 type WorldControlsInit = {
-  initialMode: WorldViewMode;
   stored: ReturnType<typeof readStoredGraphicsSettings>;
 };
 
@@ -89,43 +81,25 @@ const WorldControlsContext = createContext<WorldControlsContextValue | null>(
 );
 
 function createInitialLayerVisibility(
-  initialMode: WorldViewMode,
   storedLayerVisibility: StoredLayerVisibility | null,
   storedChunkBorders: boolean,
   storedVoxelHeightLabels: boolean,
 ): LayerVisibility {
   return {
-    biomeLabels:
-      storedLayerVisibility?.biomeLabelsByMode?.[initialMode] ??
-      initialMode === "terrain",
+    biomeLabels: storedLayerVisibility?.biomeLabels ?? false,
     players: storedLayerVisibility?.players ?? true,
     spawn: storedLayerVisibility?.spawn ?? true,
     debug: storedLayerVisibility?.debug ?? false,
     chunkBorders: storedChunkBorders,
-    showTerrain: storedLayerVisibility?.showTerrain ?? true,
-    showVoxelTerrain: storedLayerVisibility?.showVoxelTerrain ?? false,
+    showTerrainUnderlay: storedLayerVisibility?.showTerrainUnderlay ?? false,
     voxelHeightLabels: storedVoxelHeightLabels,
   };
 }
 
-function createInitialBiomeLabelsByMode(
-  storedLayerVisibility: StoredLayerVisibility | null,
-): { terrain: boolean; voxel: boolean } {
+function createInitialState({ stored }: WorldControlsInit): WorldControlsState {
   return {
-    terrain: storedLayerVisibility?.biomeLabelsByMode?.terrain ?? true,
-    voxel: storedLayerVisibility?.biomeLabelsByMode?.voxel ?? false,
-  };
-}
-
-function createInitialState({
-  initialMode,
-  stored,
-}: WorldControlsInit): WorldControlsState {
-  return {
-    view: initialMode,
     chunkIndexEnabled: true,
     layerVisibility: createInitialLayerVisibility(
-      initialMode,
       stored?.layerVisibility ?? null,
       stored?.parameterVisibility.chunkBorders ?? false,
       stored?.parameterVisibility.voxelHeightLabels ?? false,
@@ -135,7 +109,7 @@ function createInitialState({
     voxelLod1MaxDist: stored?.voxelLod1MaxDist ?? 600,
     minRenderedVoxelLod:
       stored?.minRenderedVoxelLod ?? DEFAULT_MIN_RENDERED_VOXEL_LOD,
-    chunkStats: createEmptyChunkStats(initialMode),
+    chunkStats: createEmptyChunkStats(),
     loadingBreakdown: {
       terrain: 0,
       voxels: 0,
@@ -157,7 +131,7 @@ function worldControlsReducer(
         layerVisibility: action.next,
         chunkStats: action.next.debug
           ? state.chunkStats
-          : createEmptyChunkStats(state.view),
+          : createEmptyChunkStats(),
       };
     }
     case "set-map-debug-settings":
@@ -187,24 +161,17 @@ function worldControlsReducer(
 }
 
 export function WorldControlsProvider({
-  initialMode,
   children,
 }: WorldControlsProviderProps) {
   const [stored] = useState(() => readStoredGraphicsSettings());
 
-  const biomeLabelsByModeRef = useRef<{ terrain: boolean; voxel: boolean }>({
-    ...createInitialBiomeLabelsByMode(stored?.layerVisibility ?? null),
-  });
-
   const [state, dispatch] = useReducer(
     worldControlsReducer,
-    { initialMode, stored },
+    { stored },
     createInitialState,
   );
 
   useEffect(() => {
-    biomeLabelsByModeRef.current[state.view] =
-      state.layerVisibility.biomeLabels;
     writeStoredGraphicsSettings({
       renderDistance: state.renderDistance,
       voxelLod1MaxDist: state.voxelLod1MaxDist,
@@ -218,9 +185,8 @@ export function WorldControlsProvider({
         players: state.layerVisibility.players,
         spawn: state.layerVisibility.spawn,
         debug: state.layerVisibility.debug,
-        showTerrain: state.layerVisibility.showTerrain,
-        showVoxelTerrain: state.layerVisibility.showVoxelTerrain,
-        biomeLabelsByMode: biomeLabelsByModeRef.current,
+        showTerrainUnderlay: state.layerVisibility.showTerrainUnderlay,
+        biomeLabels: state.layerVisibility.biomeLabels,
       },
     });
   }, [
@@ -231,10 +197,8 @@ export function WorldControlsProvider({
     state.layerVisibility.players,
     state.layerVisibility.spawn,
     state.layerVisibility.debug,
-    state.layerVisibility.showTerrain,
-    state.layerVisibility.showVoxelTerrain,
+    state.layerVisibility.showTerrainUnderlay,
     state.layerVisibility.biomeLabels,
-    state.view,
     state.layerVisibility.chunkBorders,
     state.layerVisibility.voxelHeightLabels,
   ]);
@@ -283,7 +247,6 @@ export function WorldControlsProvider({
         });
       },
       updateLayerVisibility(next) {
-        biomeLabelsByModeRef.current[state.view] = next.biomeLabels;
         dispatch({ type: "set-layer-visibility", next });
       },
       updateMapDebugSettings(next) {

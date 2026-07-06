@@ -8,7 +8,7 @@ Keep cross-cutting behavior here. Client-only rendering details belong in `docs/
 
 ## System Overview
 
-Cubyz Map Viewer is an interactive terrain and voxel viewer for Cubyz worlds.
+Cubyz Map Viewer is an interactive voxel viewer for Cubyz worlds, with an optional terrain underlay derived from surface data.
 
 The system has three main runtime pieces:
 
@@ -20,7 +20,7 @@ At a high level:
 
 1. The client fetches authoritative world data over HTTP.
 2. The server reads and transforms Cubyz save files into terrain, biome, player, and voxel payloads.
-3. The client renders terrain mode and voxel mode from those payloads.
+3. The client renders a voxel scene from those payloads and can show terrain as an optional underlay.
 4. The server watches the save directory and broadcasts change notifications over WebSocket.
 5. The client reacts to those notifications by invalidating and reloading affected data.
 

@@ -40,8 +40,7 @@ export function WorldViewScene({
       showPlayers={state.layerVisibility.players}
       showSpawn={state.layerVisibility.spawn}
       showChunkBorders={state.layerVisibility.chunkBorders}
-      showTerrain={state.layerVisibility.showTerrain}
-      showVoxelTerrain={state.layerVisibility.showVoxelTerrain}
+      showTerrainUnderlay={state.layerVisibility.showTerrainUnderlay}
       showVoxelHeightLabels={state.layerVisibility.voxelHeightLabels}
       showBiomeLabels={state.layerVisibility.biomeLabels}
       renderDistance={state.renderDistance}
@@ -49,7 +48,6 @@ export function WorldViewScene({
       minRenderedVoxelLod={state.minRenderedVoxelLod}
       debugEnabled={state.layerVisibility.debug}
       debugSettings={state.mapDebugSettings}
-      mode={state.view}
       onCursorMove={onCursorMove}
       onPlayerClick={onPlayerClick}
       onChunkStatsChange={setChunkStats}

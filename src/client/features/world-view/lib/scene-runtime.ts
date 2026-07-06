@@ -14,7 +14,6 @@ import {
   DAYLIGHT_MAIN_SUN_POSITION,
 } from "./daylight.js";
 import type { CursorHoverInfo, LoadedVoxelTile, WorkerOut } from "./types.js";
-import { shouldRenderTerrainForMode } from "./utils.js";
 
 const MIN_CAMERA_DISTANCE = 1;
 const ACTIVE_LOD_POLL_INTERVAL_MS = 125;
@@ -52,9 +51,7 @@ export function initializeSceneRuntime(args: {
   chunkBorderGroupRef: { current: THREE.Group | null };
   debugLabelGroupRef: { current: THREE.Group | null };
   biomeLabelGroupRef: { current: THREE.Group | null };
-  modeRef: { current: "terrain" | "voxel" };
-  showTerrainRef: { current: boolean };
-  showVoxelTerrainRef: { current: boolean };
+  showTerrainUnderlayRef: { current: boolean };
   showChunkBordersRef: { current: boolean };
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
@@ -115,9 +112,7 @@ export function initializeSceneRuntime(args: {
     chunkBorderGroupRef,
     debugLabelGroupRef,
     biomeLabelGroupRef,
-    modeRef,
-    showTerrainRef,
-    showVoxelTerrainRef,
+    showTerrainUnderlayRef,
     showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
@@ -258,9 +253,7 @@ export function initializeSceneRuntime(args: {
   const cursorHandlers = createCursorInteractionHandlers({
     renderer,
     camera,
-    modeRef,
-    showTerrainRef,
-    showVoxelTerrainRef,
+    showTerrainUnderlayRef,
     showChunkBordersRef,
     debugEnabledRef,
     terrainGroupRef,
@@ -346,17 +339,10 @@ export function initializeSceneRuntime(args: {
     }
 
     const worldTargets: THREE.Object3D[] = [];
-    if (modeRef.current === "voxel" && voxelGroupRef.current) {
+    if (voxelGroupRef.current) {
       worldTargets.push(voxelGroupRef.current);
     }
-    if (
-      shouldRenderTerrainForMode(
-        modeRef.current,
-        showTerrainRef.current,
-        showVoxelTerrainRef.current,
-      ) &&
-      terrainGroupRef.current
-    ) {
+    if (showTerrainUnderlayRef.current && terrainGroupRef.current) {
       worldTargets.push(terrainGroupRef.current);
     }
     if (worldTargets.length === 0) return null;
@@ -496,14 +482,7 @@ export function initializeSceneRuntime(args: {
       runLodUpdate(now, idleEligible);
     }
 
-    if (
-      terrainVisibilityDirtyRef.current &&
-      shouldRenderTerrainForMode(
-        modeRef.current,
-        showTerrainRef.current,
-        showVoxelTerrainRef.current,
-      )
-    ) {
+    if (terrainVisibilityDirtyRef.current && showTerrainUnderlayRef.current) {
       const camDist = camera.position.distanceTo(controls.target);
       updateTerrainVisibility(controls.target, camDist);
       terrainVisibilityDirtyRef.current = false;

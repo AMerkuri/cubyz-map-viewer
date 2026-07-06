@@ -9,10 +9,7 @@ import { useWebSocket } from "../../features/world-view/hooks/useWebSocket.js";
 import { useWorldData } from "../../features/world-view/hooks/useWorldData.js";
 import type { CursorHoverInfo } from "../../features/world-view/lib/types.js";
 import { useCompactViewport } from "../../hooks/useCompactViewport.js";
-import type {
-  InitialCameraState,
-  ShareLocationState,
-} from "../../types/world-view.js";
+import type { InitialCameraState } from "../../types/world-view.js";
 import { useWorldViewRefreshSubscriptions } from "../hooks/useWorldViewRefreshSubscriptions.js";
 import { useWorldViewShareLocation } from "../hooks/useWorldViewShareLocation.js";
 import { WorldViewHud } from "./WorldViewHud.js";
@@ -92,9 +89,7 @@ export function WorldViewPageContent({
         worldData={worldData}
         onCursorMove={handleCursorMove}
         onPlayerClick={handlePlayerClick}
-        onShareStateChange={
-          handleShareStateChange as (state: ShareLocationState) => void
-        }
+        onShareStateChange={handleShareStateChange}
       />
       <WorldViewHud
         compact={isCompactViewport}

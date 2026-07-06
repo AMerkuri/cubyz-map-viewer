@@ -82,7 +82,6 @@ async function fetchBiomes(
 export async function refreshBiomeLabels(args: {
   target: THREE.Vector3;
   camDist: number;
-  mode: "terrain" | "voxel";
   showBiomeLabels: boolean;
   group: THREE.Group | null;
   labelMap: Map<string, CSS2DObject>;
@@ -96,13 +95,11 @@ export async function refreshBiomeLabels(args: {
   const {
     target,
     camDist,
-    mode,
     showBiomeLabels,
     group,
     labelMap,
     queryClient,
     surfaceIndex,
-    loadedTerrain,
     loadedVoxels,
     token,
     getCurrentToken,
@@ -122,54 +119,30 @@ export async function refreshBiomeLabels(args: {
     z: number;
   }[] = [];
 
-  if (mode === "terrain") {
-    for (const tile of loadedTerrain) {
-      if (!tile.mesh.visible) continue;
-      visibleTiles.push({
-        key: tile.key,
-        lod: tile.lod,
-        tileX: tile.tileX,
-        tileY: tile.tileY,
-        z:
-          (tile.mesh.geometry.boundingBox?.max.z ?? 0) +
-          BIOME_LABEL_HEIGHT_OFFSET,
-      });
-    }
-    visibleTiles.sort((a, b) => {
-      const aWorldX = a.tileX * 256 * a.lod + (256 * a.lod) / 2;
-      const aWorldY = a.tileY * 256 * a.lod + (256 * a.lod) / 2;
-      const bWorldX = b.tileX * 256 * b.lod + (256 * b.lod) / 2;
-      const bWorldY = b.tileY * 256 * b.lod + (256 * b.lod) / 2;
-      const ad = Math.hypot(aWorldX - target.x, aWorldY - target.y);
-      const bd = Math.hypot(bWorldX - target.x, bWorldY - target.y);
-      return ad - bd;
-    });
-  } else {
-    const indexedTiles = surfaceIndex
-      .map((entry) => {
-        const tileWorldSize = 256 * entry.lod;
-        const centerX = entry.worldX + tileWorldSize / 2;
-        const centerY = entry.worldY + tileWorldSize / 2;
-        const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
-        const dist = Math.max(xyDist, camDist);
-        return {
-          entry,
-          dist,
-          desiredLod: getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS),
-        };
-      })
-      .filter((item) => item.entry.lod === item.desiredLod)
-      .sort((a, b) => a.dist - b.dist);
+  const indexedTiles = surfaceIndex
+    .map((entry) => {
+      const tileWorldSize = 256 * entry.lod;
+      const centerX = entry.worldX + tileWorldSize / 2;
+      const centerY = entry.worldY + tileWorldSize / 2;
+      const xyDist = Math.hypot(centerX - target.x, centerY - target.y);
+      const dist = Math.max(xyDist, camDist);
+      return {
+        entry,
+        dist,
+        desiredLod: getLodForDistance(dist, TERRAIN_LOD_DISTANCE_THRESHOLDS),
+      };
+    })
+    .filter((item) => item.entry.lod === item.desiredLod)
+    .sort((a, b) => a.dist - b.dist);
 
-    for (const item of indexedTiles) {
-      visibleTiles.push({
-        key: terrainTileKey(item.entry.lod, item.entry.tileX, item.entry.tileY),
-        lod: item.entry.lod,
-        tileX: item.entry.tileX,
-        tileY: item.entry.tileY,
-        z: target.z + 12,
-      });
-    }
+  for (const item of indexedTiles) {
+    visibleTiles.push({
+      key: terrainTileKey(item.entry.lod, item.entry.tileX, item.entry.tileY),
+      lod: item.entry.lod,
+      tileX: item.entry.tileX,
+      tileY: item.entry.tileY,
+      z: target.z + 12,
+    });
   }
 
   if (visibleTiles.length === 0) {
@@ -194,22 +167,19 @@ export async function refreshBiomeLabels(args: {
     z: number;
     score: number;
   }[] = [];
-  const voxelTiles = mode === "voxel" ? [...loadedVoxels] : [];
+  const voxelTiles = [...loadedVoxels];
 
   for (const item of fetched) {
     if (!item.data) continue;
     let perTile = 0;
     for (const region of item.data.regions) {
       if (region.count < 256) continue;
-      const labelZ =
-        mode === "voxel"
-          ? resolveVoxelBiomeLabelZ(
-              region.centerX,
-              region.centerY,
-              item.tile.z,
-              voxelTiles,
-            )
-          : item.tile.z;
+      const labelZ = resolveVoxelBiomeLabelZ(
+        region.centerX,
+        region.centerY,
+        item.tile.z,
+        voxelTiles,
+      );
       candidates.push({
         key: `${item.tile.key}#${region.centerX.toFixed(1)}#${region.centerY.toFixed(1)}`,
         text: formatBiomeName(region.biomeName),

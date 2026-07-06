@@ -21,7 +21,6 @@ export function refreshDebugLabels(args: {
   debugEnabled: boolean;
   showTiles: boolean;
   showHeights: boolean;
-  mode: "terrain" | "voxel";
   loadedTerrain: Iterable<LoadedTerrainTile>;
   loadedVoxels: Iterable<LoadedVoxelTile>;
 }): void {
@@ -31,8 +30,6 @@ export function refreshDebugLabels(args: {
     debugEnabled,
     showTiles,
     showHeights,
-    mode,
-    loadedTerrain,
     loadedVoxels,
   } = args;
   if (!group) return;
@@ -47,84 +44,50 @@ export function refreshDebugLabels(args: {
 
   const active = new Set<string>();
 
-  if (mode === "terrain") {
-    for (const tile of loadedTerrain) {
-      if (!showTiles) continue;
-      if (!tile.mesh.visible) continue;
-      if (!tile.borderLines || !tile.borderLabel) continue;
-      const key = tile.key;
-      active.add(key);
-      const text = `T L${tile.lod} ${tile.worldX}/${tile.worldY}`;
-      const x = tile.worldX + (256 * tile.lod) / 2;
-      const y = tile.worldY + (256 * tile.lod) / 2;
-      const z = (tile.mesh.geometry.boundingBox?.max.z ?? 0) + 6;
+  for (const tile of loadedVoxels) {
+    if (!tile.borderLines.visible && !showHeights) continue;
+    const key = tile.key;
+    active.add(key);
 
-      const lodColor = getLodBorderColor(tile.lod).label;
-      let label = labelMap.get(key);
-      if (label) {
-        const el = label.element as HTMLDivElement;
-        el.textContent = text;
+    const parts: string[] = [];
+    if (showTiles) {
+      parts.push(`V L${tile.lod} ${tile.regionX}/${tile.regionY}`);
+    }
+    if (showHeights) {
+      const tops = [...tile.chunkTopHeights].filter((v) => Number.isFinite(v));
+      const topMin = tops.length > 0 ? Math.min(...tops) : Number.NaN;
+      const topMax = tops.length > 0 ? Math.max(...tops) : Number.NaN;
+      const covered = countBits16(tile.chunkCoverage);
+      parts.push(
+        `topMin:${formatHeight(topMin)} topMax:${formatHeight(topMax)} cov:${covered}/16`,
+      );
+    }
+    if (parts.length === 0) continue;
+
+    const text = parts.join("  ");
+    const regSize = regionWorldSize(tile.lod);
+    const x = tile.regionX + regSize / 2;
+    const y = tile.regionY + regSize / 2;
+    const z = tile.maxZ + 6;
+
+    const lodColor = getLodBorderColor(tile.lod).label;
+    let label = labelMap.get(key);
+    if (label) {
+      const el = label.element as HTMLDivElement;
+      el.textContent = text;
+      if (showTiles) {
         el.style.color = lodColor;
         el.style.borderColor = lodColor;
-        label.position.set(x, y, z);
-      } else {
-        const div = document.createElement("div");
-        div.textContent = text;
-        div.style.cssText = `color: ${lodColor}; font-size: 11px; font-family: monospace; font-weight: bold; background: rgba(0, 0, 0, 0.7); padding: 2px 4px; border: 1px solid ${lodColor}; border-radius: 3px; white-space: nowrap; pointer-events: none;`;
-        label = new CSS2DObject(div);
-        label.position.set(x, y, z);
-        group.add(label);
-        labelMap.set(key, label);
       }
-    }
-  } else {
-    for (const tile of loadedVoxels) {
-      if (!tile.borderLines.visible && !showHeights) continue;
-      const key = tile.key;
-      active.add(key);
-
-      const parts: string[] = [];
-      if (showTiles) {
-        parts.push(`V L${tile.lod} ${tile.regionX}/${tile.regionY}`);
-      }
-      if (showHeights) {
-        const tops = [...tile.chunkTopHeights].filter((v) =>
-          Number.isFinite(v),
-        );
-        const topMin = tops.length > 0 ? Math.min(...tops) : Number.NaN;
-        const topMax = tops.length > 0 ? Math.max(...tops) : Number.NaN;
-        const covered = countBits16(tile.chunkCoverage);
-        parts.push(
-          `topMin:${formatHeight(topMin)} topMax:${formatHeight(topMax)} cov:${covered}/16`,
-        );
-      }
-      if (parts.length === 0) continue;
-
-      const text = parts.join("  ");
-      const regSize = regionWorldSize(tile.lod);
-      const x = tile.regionX + regSize / 2;
-      const y = tile.regionY + regSize / 2;
-      const z = tile.maxZ + 6;
-
-      const lodColor = getLodBorderColor(tile.lod).label;
-      let label = labelMap.get(key);
-      if (label) {
-        const el = label.element as HTMLDivElement;
-        el.textContent = text;
-        if (showTiles) {
-          el.style.color = lodColor;
-          el.style.borderColor = lodColor;
-        }
-        label.position.set(x, y, z);
-      } else {
-        const div = document.createElement("div");
-        div.textContent = text;
-        div.style.cssText = `color: ${showTiles ? lodColor : "#00ff88"}; font-size: 11px; font-family: monospace; font-weight: bold; background: rgba(0, 0, 0, 0.7); padding: 2px 4px; border: 1px solid ${showTiles ? lodColor : "#00ff88"}; border-radius: 3px; white-space: nowrap; pointer-events: none;`;
-        label = new CSS2DObject(div);
-        label.position.set(x, y, z);
-        group.add(label);
-        labelMap.set(key, label);
-      }
+      label.position.set(x, y, z);
+    } else {
+      const div = document.createElement("div");
+      div.textContent = text;
+      div.style.cssText = `color: ${showTiles ? lodColor : "#00ff88"}; font-size: 11px; font-family: monospace; font-weight: bold; background: rgba(0, 0, 0, 0.7); padding: 2px 4px; border: 1px solid ${showTiles ? lodColor : "#00ff88"}; border-radius: 3px; white-space: nowrap; pointer-events: none;`;
+      label = new CSS2DObject(div);
+      label.position.set(x, y, z);
+      group.add(label);
+      labelMap.set(key, label);
     }
   }
 

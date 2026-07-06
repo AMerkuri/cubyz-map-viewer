@@ -1,12 +1,7 @@
 import type {
   InitialCameraState,
   ShareLocationState,
-  WorldViewMode,
 } from "../types/world-view.js";
-
-export function readInitialMode(): WorldViewMode {
-  return "voxel";
-}
 
 export function readInitialCameraState(): InitialCameraState | null {
   const p = new URLSearchParams(window.location.search);
@@ -31,7 +26,6 @@ export function readInitialCameraState(): InitialCameraState | null {
 
 export function createShareLocationUrl(state: ShareLocationState): string {
   const p = new URLSearchParams();
-  p.set("mode", "voxel");
   p.set("x", String(state.pos[0]));
   p.set("y", String(state.pos[1]));
   p.set("z", String(state.pos[2]));

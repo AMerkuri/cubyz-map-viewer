@@ -509,7 +509,6 @@ export function buildQueuedVoxelMeshes(args: {
   isVoxelTileStale: (key: string) => boolean;
   voxelGroup: THREE.Group | null;
   chunkBorderGroup: THREE.Group | null;
-  mode: "terrain" | "voxel";
   renderer: THREE.WebGLRenderer;
   preUploadTarget: THREE.WebGLRenderTarget;
   preUploadScene: THREE.Scene;
@@ -533,7 +532,6 @@ export function buildQueuedVoxelMeshes(args: {
     isVoxelTileStale,
     voxelGroup,
     chunkBorderGroup,
-    mode,
     renderer,
     preUploadTarget,
     preUploadScene,
@@ -577,11 +575,7 @@ export function buildQueuedVoxelMeshes(args: {
       ? isVoxelTileStale(item.key)
       : false;
     loadingVoxels.delete(item.key);
-    if (
-      (!existingTile || canReplaceExisting) &&
-      voxelGroup &&
-      mode === "voxel"
-    ) {
+    if ((!existingTile || canReplaceExisting) && voxelGroup) {
       const built = buildVoxelQuadrantSubMeshes(item, voxelMaterial);
       if (built.subMeshes.length > 0) {
         for (const sm of built.subMeshes) {

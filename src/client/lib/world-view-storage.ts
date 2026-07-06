@@ -6,20 +6,14 @@ import {
 export const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 export const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
 const GRAPHICS_SETTINGS_STORAGE_KEY = "cubyz-map-viewer.graphics-settings";
-const GRAPHICS_SETTINGS_STORAGE_VERSION = 2;
-
-type StoredBiomeLabelsByMode = {
-  terrain: boolean;
-  voxel: boolean;
-};
+const GRAPHICS_SETTINGS_STORAGE_VERSION = 3;
 
 export type StoredLayerVisibility = {
   players: boolean;
   spawn: boolean;
   debug: boolean;
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
-  biomeLabelsByMode: StoredBiomeLabelsByMode;
+  showTerrainUnderlay: boolean;
+  biomeLabels: boolean;
 };
 
 type StoredGraphicsSettings = {
@@ -46,30 +40,19 @@ function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function sanitizeBiomeLabelsByMode(value: unknown): StoredBiomeLabelsByMode {
-  const source = value && typeof value === "object" ? value : {};
-  return {
-    terrain: readBoolean((source as Record<string, unknown>).terrain, true),
-    voxel: readBoolean((source as Record<string, unknown>).voxel, false),
-  };
-}
-
 function sanitizeLayerVisibility(value: unknown): StoredLayerVisibility {
   const source = value && typeof value === "object" ? value : {};
   return {
     players: readBoolean((source as Record<string, unknown>).players, true),
     spawn: readBoolean((source as Record<string, unknown>).spawn, true),
     debug: readBoolean((source as Record<string, unknown>).debug, false),
-    showTerrain: readBoolean(
-      (source as Record<string, unknown>).showTerrain,
-      true,
-    ),
-    showVoxelTerrain: readBoolean(
-      (source as Record<string, unknown>).showVoxelTerrain,
+    showTerrainUnderlay: readBoolean(
+      (source as Record<string, unknown>).showTerrainUnderlay,
       false,
     ),
-    biomeLabelsByMode: sanitizeBiomeLabelsByMode(
-      (source as Record<string, unknown>).biomeLabelsByMode,
+    biomeLabels: readBoolean(
+      (source as Record<string, unknown>).biomeLabels,
+      false,
     ),
   };
 }

@@ -15,21 +15,22 @@ This document covers client-owned architecture and runtime behavior. Shared cont
 ## Ownership By Area
 
 - `src/client/app/`: compose features together; keep cross-feature wiring here
-- `src/client/features/world-controls/`: voxel-default view state, layer visibility, graphics/debug settings, chunk stats/loading breakdown, loading overlay, and `localStorage` persistence
+- `src/client/features/world-controls/`: voxel scene layer visibility, graphics/debug settings, chunk stats/loading breakdown, loading overlay, and `localStorage` persistence
 - `src/client/features/world-view/`: data hooks, WebSocket hook, scene/runtime code, terrain and voxel loading, labels, markers, and the browser worker
 - `src/client/lib/`, `src/client/hooks/`, `src/client/types/`, `src/client/utils/`: shared client infrastructure used across features
 
 ## Runtime Model
 
 - React Query is the source of truth for HTTP data. `main.tsx` sets `staleTime: Infinity`, so refresh is event-driven rather than focus-driven.
-- The world viewer initializes in voxel mode for missing, legacy terrain, voxel, or invalid `mode` URL parameters. The HUD does not expose a terrain/voxel selector.
+- The world viewer initializes as a voxel scene for every page load. Legacy `mode` URL parameters are ignored, and the HUD does not expose a terrain/voxel selector.
+- Copied location URLs are camera-only: they include position, zoom, theta, and phi parameters, and they do not include world-view mode state.
 - `useWorldData()` always loads world metadata, the surface index, the save block palette, and the voxel chunk index during initial page load so voxel rendering prerequisites are available immediately.
 - `useWebSocket()` maintains the `/ws` connection, and `useWorldViewRefreshSubscriptions()` maps socket events to query invalidation.
 - `WorldControlsProvider` owns low-frequency UI state and persists graphics/layer settings through `src/client/lib/world-view-storage.ts`; older stored versions are discarded and the app falls back to defaults.
 - Chunk stats are published continuously from the scene runtime so loading UI can stay accurate even when debug overlays are off.
 - The loading overlay appears immediately when work starts, stays visible for a short linger after work completes, and uses a compact green cube on mobile.
 - `World3DView.tsx` keeps scene state in refs and delegates most runtime work to `features/world-view/lib/`; avoid moving per-frame state into React state.
-- Terrain and voxel loading both use bounded fetch/build queues plus warm caches to avoid rebuilding everything during camera movement.
+- Voxel loading uses bounded fetch/build queues plus warm caches to avoid rebuilding everything during camera movement. Terrain loading remains available for the optional terrain underlay and terrain-derived labels.
 - `src/client/features/world-view/workers/voxel-mesh.worker.ts` decodes voxel mesh payloads off the main thread before Three.js upload.
 - The voxel worker reads fixed-point `u32` X/Y/Z vertex positions in `1/4096` voxel-cell units and converts them to world coordinates with `origin + fixed * voxelSize / 4096`, so explicit non-cube model quads flow through the same quadrant mesh, normal, color, bounds, and chunk-top-height builders as greedy cube quads.
 - The voxel worker decodes per-quad block palette indices and preserves them as per-triangle metadata on each quadrant mesh. Cursor raycasts use `intersection.faceIndex` to resolve the selected voxel triangle to a palette index and then to a block ID from the loaded save block palette.

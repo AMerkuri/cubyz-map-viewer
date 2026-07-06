@@ -1,14 +1,10 @@
 import { OverlayPanel } from "../../../components/OverlayPanel.js";
 import { uiTheme } from "../../../lib/ui-theme.js";
 import type { MapDebugSettings } from "../../../lib/world-view-debug.js";
-import type {
-  LayerVisibility,
-  WorldViewMode,
-} from "../../../types/world-view.js";
+import type { LayerVisibility } from "../../../types/world-view.js";
 import { DebugParametersContent } from "./DebugParametersContent.js";
 
 interface DebugParametersPanelProps {
-  view: WorldViewMode;
   mapDebugSettings: MapDebugSettings;
   setMapDebugSettings: (next: MapDebugSettings) => void;
   renderDistance: number;

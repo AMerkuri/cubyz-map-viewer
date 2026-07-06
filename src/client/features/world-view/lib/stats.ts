@@ -28,7 +28,6 @@ export interface RollingVoxelBenchmarkStats {
 }
 
 export function publishChunkStats(args: {
-  mode: "terrain" | "voxel";
   fpsValue: number;
   activeFocusLod: number;
   loadingTerrain: Set<string>;
@@ -46,7 +45,6 @@ export function publishChunkStats(args: {
   onChunkStatsChange: (stats: ChunkStats) => void;
 }): void {
   const {
-    mode,
     fpsValue,
     activeFocusLod,
     loadingTerrain,
@@ -70,8 +68,7 @@ export function publishChunkStats(args: {
   const meshQueueCount = pendingVoxelMeshQueue.length;
   const loadingCount =
     loadingTerrainCount + loadingVoxelCount + fetchQueueCount + meshQueueCount;
-  const loadedCount =
-    mode === "terrain" ? loadedTerrain.size : loadedVoxels.size;
+  const loadedCount = loadedVoxels.size;
   const loadedByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
   const memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
   let terrainMemoryBytes = 0;
@@ -83,9 +80,6 @@ export function publishChunkStats(args: {
   for (const tile of loadedTerrain.values()) {
     const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
     const tileBytes = estimateLoadedTerrainTileBytes(tile);
-    if (mode === "terrain") {
-      loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
-    }
     terrainMemoryBytes += tileBytes;
     addMemoryToLod(memoryByLod, lod, tileBytes);
   }
@@ -99,9 +93,7 @@ export function publishChunkStats(args: {
   for (const tile of loadedVoxels.values()) {
     const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
     const tileBytes = estimateLoadedVoxelTileBytes(tile);
-    if (mode === "voxel") {
-      loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
-    }
+    loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
     voxelMemoryBytes += tileBytes;
     addMemoryToLod(memoryByLod, lod, tileBytes);
   }
@@ -139,7 +131,6 @@ export function publishChunkStats(args: {
     loaded: loadedCount,
     fps: fpsValue,
     focusLod: activeFocusLod,
-    mode,
     loadingBreakdown: {
       terrain: loadingTerrainCount,
       voxels: loadingVoxelCount,

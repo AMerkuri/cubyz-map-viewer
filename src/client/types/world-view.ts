@@ -1,5 +1,3 @@
-export type WorldViewMode = "terrain" | "voxel";
-
 export interface InitialCameraState {
   pos: [number, number, number];
   zoom: number;
@@ -8,7 +6,6 @@ export interface InitialCameraState {
 }
 
 export type ShareLocationState = {
-  mode: WorldViewMode;
   pos: [number, number, number];
   zoom: number;
   theta: number;
@@ -21,8 +18,7 @@ export type LayerVisibility = {
   spawn: boolean;
   debug: boolean;
   chunkBorders: boolean;
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
+  showTerrainUnderlay: boolean;
   voxelHeightLabels: boolean;
 };
 

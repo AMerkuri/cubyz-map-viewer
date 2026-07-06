@@ -8,14 +8,6 @@ export function worldToScene(
   return [worldX, worldY, worldZ];
 }
 
-export function shouldRenderTerrainForMode(
-  mode: "terrain" | "voxel",
-  showTerrain: boolean,
-  showVoxelTerrain: boolean,
-): boolean {
-  return mode === "terrain" ? showTerrain : showVoxelTerrain;
-}
-
 export function regionWorldSize(lod: number): number {
   return VOXEL_REGION_CELLS * lod;
 }

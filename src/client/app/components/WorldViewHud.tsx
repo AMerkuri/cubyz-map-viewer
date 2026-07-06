@@ -74,7 +74,6 @@ export function WorldViewHud({
         <>
           <DebugStatsPanel chunkStats={state.chunkStats} />
           <DebugParametersPanel
-            view={state.view}
             mapDebugSettings={state.mapDebugSettings}
             setMapDebugSettings={updateMapDebugSettings}
             renderDistance={state.renderDistance}
@@ -97,7 +96,6 @@ export function WorldViewHud({
           showDebugTab={state.layerVisibility.debug}
           controlsContent={
             <MapControlsContent
-              view={state.view}
               activeGraphicsPresetId={activeGraphicsPresetId}
               applyGraphicsPreset={applyGraphicsPreset}
               layerVisibility={state.layerVisibility}
@@ -120,7 +118,6 @@ export function WorldViewHud({
             <>
               <DebugStatsContent chunkStats={state.chunkStats} />
               <DebugParametersContent
-                view={state.view}
                 mapDebugSettings={state.mapDebugSettings}
                 setMapDebugSettings={updateMapDebugSettings}
                 renderDistance={state.renderDistance}
@@ -138,7 +135,6 @@ export function WorldViewHud({
         />
       ) : (
         <MapControlsPanel
-          view={state.view}
           activeGraphicsPresetId={activeGraphicsPresetId}
           applyGraphicsPreset={applyGraphicsPreset}
           layerVisibility={state.layerVisibility}

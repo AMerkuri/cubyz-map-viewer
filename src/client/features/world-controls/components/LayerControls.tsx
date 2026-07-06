@@ -1,13 +1,9 @@
 import { uiTheme } from "../../../lib/ui-theme.js";
-import type {
-  LayerVisibility,
-  WorldViewMode,
-} from "../../../types/world-view.js";
+import type { LayerVisibility } from "../../../types/world-view.js";
 
 interface LayerControlsProps {
   visibility: LayerVisibility;
   onChange: (next: LayerVisibility) => void;
-  view: WorldViewMode;
   compact?: boolean;
 }
 
@@ -68,7 +64,6 @@ function ToggleButton({
 export function LayerControls({
   visibility,
   onChange,
-  view,
   compact = false,
 }: LayerControlsProps) {
   function toggle(key: keyof LayerVisibility) {
@@ -95,14 +90,12 @@ export function LayerControls({
         onToggle={() => toggle("spawn")}
         compact={compact}
       />
-      {view === "voxel" && (
-        <ToggleButton
-          label="Terrain Underlay"
-          active={visibility.showVoxelTerrain}
-          onToggle={() => toggle("showVoxelTerrain")}
-          compact={compact}
-        />
-      )}
+      <ToggleButton
+        label="Terrain Underlay"
+        active={visibility.showTerrainUnderlay}
+        onToggle={() => toggle("showTerrainUnderlay")}
+        compact={compact}
+      />
       <ToggleButton
         label="Advanced"
         active={visibility.debug}

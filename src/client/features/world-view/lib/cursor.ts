@@ -23,9 +23,7 @@ interface CursorInteractionHandlers {
 export function createCursorInteractionHandlers(args: {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
-  modeRef: { current: "terrain" | "voxel" };
-  showTerrainRef: { current: boolean };
-  showVoxelTerrainRef: { current: boolean };
+  showTerrainUnderlayRef: { current: boolean };
   showChunkBordersRef: { current: boolean };
   debugEnabledRef: { current: boolean };
   terrainGroupRef: { current: THREE.Group | null };
@@ -38,9 +36,7 @@ export function createCursorInteractionHandlers(args: {
   const {
     renderer,
     camera,
-    modeRef,
-    showTerrainRef,
-    showVoxelTerrainRef,
+    showTerrainUnderlayRef,
     showChunkBordersRef,
     debugEnabledRef,
     terrainGroupRef,
@@ -255,13 +251,10 @@ export function createCursorInteractionHandlers(args: {
     if (keysHeldRef.current.size > 0) return;
 
     const terrainGroup = terrainGroupRef.current;
-    const terrainVisible =
-      modeRef.current === "terrain"
-        ? showTerrainRef.current
-        : showVoxelTerrainRef.current;
+    const terrainVisible = showTerrainUnderlayRef.current;
 
     const voxelTargets: THREE.Object3D[] = [];
-    if (modeRef.current === "voxel" && voxelGroupRef.current) {
+    if (voxelGroupRef.current) {
       voxelTargets.push(voxelGroupRef.current);
     }
 

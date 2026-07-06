@@ -27,7 +27,6 @@ import type {
   LoadedVoxelTile,
   World3DViewProps,
 } from "./types.js";
-import { shouldRenderTerrainForMode } from "./utils.js";
 
 interface SceneRuntimeState {
   renderer: THREE.WebGLRenderer;
@@ -50,9 +49,7 @@ export function useWorld3DSceneRuntime(args: {
   chunkBorderGroupRef: { current: THREE.Group | null };
   debugLabelGroupRef: { current: THREE.Group | null };
   biomeLabelGroupRef: { current: THREE.Group | null };
-  modeRef: { current: "terrain" | "voxel" };
-  showTerrainRef: { current: boolean };
-  showVoxelTerrainRef: { current: boolean };
+  showTerrainUnderlayRef: { current: boolean };
   showChunkBordersRef: { current: boolean };
   showBiomeLabelsRef: { current: boolean };
   debugEnabledRef: { current: boolean };
@@ -113,9 +110,7 @@ export function useWorld3DSceneRuntime(args: {
     chunkBorderGroupRef,
     debugLabelGroupRef,
     biomeLabelGroupRef,
-    modeRef,
-    showTerrainRef,
-    showVoxelTerrainRef,
+    showTerrainUnderlayRef,
     showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
@@ -180,9 +175,7 @@ export function useWorld3DSceneRuntime(args: {
       chunkBorderGroupRef,
       debugLabelGroupRef,
       biomeLabelGroupRef,
-      modeRef,
-      showTerrainRef,
-      showVoxelTerrainRef,
+      showTerrainUnderlayRef,
       showChunkBordersRef,
       showBiomeLabelsRef,
       debugEnabledRef,
@@ -227,9 +220,7 @@ export function useWorld3DSceneRuntime(args: {
     chunkBorderGroupRef,
     debugLabelGroupRef,
     biomeLabelGroupRef,
-    modeRef,
-    showTerrainRef,
-    showVoxelTerrainRef,
+    showTerrainUnderlayRef,
     showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
@@ -330,13 +321,12 @@ export function useWorld3DInitialization(args: {
 }
 
 export function useWorld3DChunkStatsReset(args: {
-  modeRef: { current: "terrain" | "voxel" };
   onChunkStatsChangeRef: { current: (stats: ChunkStats) => void };
 }): void {
-  const { modeRef, onChunkStatsChangeRef } = args;
+  const { onChunkStatsChangeRef } = args;
 
   const onResetChunkStats = useEffectEvent(() => {
-    onChunkStatsChangeRef.current(createEmptyChunkStats(modeRef.current));
+    onChunkStatsChangeRef.current(createEmptyChunkStats());
   });
 
   useEffect(() => {
@@ -349,9 +339,7 @@ export function useWorld3DChunkStatsReset(args: {
 export function useWorld3DSceneSyncEffects(args: {
   surfaceIndex: SurfaceIndexEntry[];
   chunkIndex: ChunkIndexEntry[];
-  mode: "terrain" | "voxel";
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
+  showTerrainUnderlay: boolean;
   sceneRef: { current: SceneRuntimeState | null };
   surfaceIndexRef: { current: SurfaceIndexEntry[] };
   chunkIndexRef: { current: ChunkIndexEntry[] };
@@ -368,9 +356,7 @@ export function useWorld3DSceneSyncEffects(args: {
   const {
     surfaceIndex,
     chunkIndex,
-    mode,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     sceneRef,
     surfaceIndexRef,
     chunkIndexRef,
@@ -394,17 +380,12 @@ export function useWorld3DSceneSyncEffects(args: {
       onClearTerrainTiles();
     }
     terrainIndexVersionRef.current += 1;
-    if (
-      shouldRenderTerrainForMode(mode, showTerrain, showVoxelTerrain) &&
-      sceneRef.current
-    ) {
+    if (showTerrainUnderlay && sceneRef.current) {
       onCheckAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
     }
   }, [
     surfaceIndex,
-    mode,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     sceneRef,
     surfaceIndexRef,
     terrainIndexVersionRef,
@@ -413,36 +394,25 @@ export function useWorld3DSceneSyncEffects(args: {
   useEffect(() => {
     chunkIndexRef.current = chunkIndex;
     onRebuildVoxelIndexState(chunkIndex);
-    if (mode === "voxel") {
-      missingVoxelsRef.current.clear();
-      failedVoxelsRef.current.clear();
-      if (sceneRef.current) {
-        onCheckAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
-      }
+    missingVoxelsRef.current.clear();
+    failedVoxelsRef.current.clear();
+    if (sceneRef.current) {
+      onCheckAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
     }
-  }, [
-    chunkIndex,
-    mode,
-    sceneRef,
-    chunkIndexRef,
-    missingVoxelsRef,
-    failedVoxelsRef,
-  ]);
+  }, [chunkIndex, sceneRef, chunkIndexRef, missingVoxelsRef, failedVoxelsRef]);
 
   useEffect(() => {
-    if (mode !== "voxel" || !sceneRef.current) return;
+    if (!sceneRef.current) return;
     onCheckAndUpdateLOD(sceneRef.current.camera, sceneRef.current.controls);
-  }, [mode, sceneRef]);
+  }, [sceneRef]);
 }
 
 export function useWorld3DDisplayEffects(args: {
-  mode: "terrain" | "voxel";
   players: PlayerData[];
   showPlayers: boolean;
   showSpawn: boolean;
   showChunkBorders: boolean;
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
+  showTerrainUnderlay: boolean;
   showBiomeLabels: boolean;
   showVoxelHeightLabels: boolean;
   debugEnabled: boolean;
@@ -464,7 +434,6 @@ export function useWorld3DDisplayEffects(args: {
     target: THREE.Vector3,
     camDist: number,
   ) => Promise<void> | void;
-  clearVoxelTiles: (preserveWarmCache?: boolean) => void;
   clearTerrainTiles: () => void;
   checkAndUpdateLOD: (
     camera: THREE.PerspectiveCamera,
@@ -472,13 +441,11 @@ export function useWorld3DDisplayEffects(args: {
   ) => void;
 }): void {
   const {
-    mode,
     players,
     showPlayers,
     showSpawn,
     showChunkBorders,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     showBiomeLabels,
     showVoxelHeightLabels,
     debugEnabled,
@@ -497,7 +464,6 @@ export function useWorld3DDisplayEffects(args: {
     refreshDebugLabels,
     clearBiomeLabels,
     refreshBiomeLabels,
-    clearVoxelTiles,
     clearTerrainTiles,
     checkAndUpdateLOD,
   } = args;
@@ -506,7 +472,6 @@ export function useWorld3DDisplayEffects(args: {
   const onRefreshDebugLabels = useEffectEvent(refreshDebugLabels);
   const onClearBiomeLabels = useEffectEvent(clearBiomeLabels);
   const onRefreshBiomeLabels = useEffectEvent(refreshBiomeLabels);
-  const onClearVoxelTiles = useEffectEvent(clearVoxelTiles);
   const onClearTerrainTiles = useEffectEvent(clearTerrainTiles);
   const onCheckAndUpdateLOD = useEffectEvent(checkAndUpdateLOD);
 
@@ -529,26 +494,18 @@ export function useWorld3DDisplayEffects(args: {
   }, [showChunkBorders, chunkBorderGroupRef]);
 
   useEffect(() => {
-    const renderTerrain = shouldRenderTerrainForMode(
-      mode,
-      showTerrain,
-      showVoxelTerrain,
-    );
     if (terrainGroupRef.current) {
-      terrainGroupRef.current.visible = renderTerrain;
-      terrainGroupRef.current.position.z =
-        mode === "voxel" ? TERRAIN_UNDERLAY_OFFSET_Z : 0;
+      terrainGroupRef.current.visible = showTerrainUnderlay;
+      terrainGroupRef.current.position.z = TERRAIN_UNDERLAY_OFFSET_Z;
     }
     if (voxelGroupRef.current) {
-      voxelGroupRef.current.visible = mode === "voxel";
+      voxelGroupRef.current.visible = true;
     }
     terrainVisibilityDirtyRef.current = true;
     debugLabelsDirtyRef.current = true;
     biomeLabelsDirtyRef.current = true;
   }, [
-    mode,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     terrainGroupRef,
     voxelGroupRef,
     terrainVisibilityDirtyRef,
@@ -560,8 +517,7 @@ export function useWorld3DDisplayEffects(args: {
     const group = debugLabelGroupRef.current;
     if (group) {
       group.visible =
-        debugEnabled &&
-        (showChunkBorders || (showVoxelHeightLabels && mode === "voxel"));
+        debugEnabled && (showChunkBorders || showVoxelHeightLabels);
     }
     debugLabelsDirtyRef.current = true;
     if (sceneRef.current) {
@@ -571,7 +527,6 @@ export function useWorld3DDisplayEffects(args: {
     debugEnabled,
     showChunkBorders,
     showVoxelHeightLabels,
-    mode,
     debugLabelGroupRef,
     debugLabelsDirtyRef,
     sceneRef,
@@ -596,24 +551,14 @@ export function useWorld3DDisplayEffects(args: {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    if (mode === "terrain") {
-      onClearVoxelTiles(true);
-      debugLabelsDirtyRef.current = true;
-      biomeLabelsDirtyRef.current = true;
-    } else if (!showVoxelTerrain) {
+    if (!showTerrainUnderlay) {
       onClearTerrainTiles();
       debugLabelsDirtyRef.current = true;
       biomeLabelsDirtyRef.current = true;
     }
 
     onCheckAndUpdateLOD(scene.camera, scene.controls);
-  }, [
-    mode,
-    showVoxelTerrain,
-    sceneRef,
-    debugLabelsDirtyRef,
-    biomeLabelsDirtyRef,
-  ]);
+  }, [showTerrainUnderlay, sceneRef, debugLabelsDirtyRef, biomeLabelsDirtyRef]);
 }
 
 export function useWorld3DUpdateSubscription(args: {

@@ -14,7 +14,7 @@ import type {
   PendingTerrainMeshItem,
   TerrainMeshData,
 } from "./types.js";
-import { regionWorldSize, shouldRenderTerrainForMode } from "./utils.js";
+import { regionWorldSize } from "./utils.js";
 
 export function terrainTileKey(
   lod: number,
@@ -458,9 +458,7 @@ export function buildQueuedTerrainMeshes(args: {
 export function updateTerrainVisibility(args: {
   target: THREE.Vector3;
   camDist: number;
-  mode: "terrain" | "voxel";
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
+  showTerrainUnderlay: boolean;
   loadedTerrain: Map<string, LoadedTerrainTile>;
   loadingTerrain: Set<string>;
   terrainLodHysteresisRatio: number;
@@ -478,9 +476,7 @@ export function updateTerrainVisibility(args: {
   const {
     target,
     camDist,
-    mode,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     loadedTerrain,
     loadingTerrain,
     terrainLodHysteresisRatio,
@@ -489,12 +485,6 @@ export function updateTerrainVisibility(args: {
     showChunkBorders,
     loadedVoxels,
   } = args;
-  const renderTerrain = shouldRenderTerrainForMode(
-    mode,
-    showTerrain,
-    showVoxelTerrain,
-  );
-
   for (const tile of loadedTerrain.values()) {
     const tileWorldSize = 256 * tile.lod;
     const centerX = tile.worldX + tileWorldSize / 2;
@@ -515,7 +505,7 @@ export function updateTerrainVisibility(args: {
       tile.lod < desiredLod &&
       getPendingTerrainParentKey(tile, desiredLod, loadingTerrain) !== null;
     const visible =
-      renderTerrain &&
+      showTerrainUnderlay &&
       (visibleByDistance || keepCoarseFallback || keepFineFallback);
     tile.mesh.visible = visible;
 
@@ -533,10 +523,9 @@ export function updateTerrainVisibility(args: {
       tile.borderLabel.visible = visible && showChunkBorders;
     }
 
-    const underlay = mode === "voxel" && showVoxelTerrain;
-    tile.mesh.position.z = underlay ? TERRAIN_UNDERLAY_OFFSET_Z : 0;
+    tile.mesh.position.z = showTerrainUnderlay ? TERRAIN_UNDERLAY_OFFSET_Z : 0;
 
-    if (underlay && visible) {
+    if (showTerrainUnderlay && visible) {
       let zCap = Number.NEGATIVE_INFINITY;
       for (const voxelTile of loadedVoxels) {
         const regionSize = regionWorldSize(voxelTile.lod);

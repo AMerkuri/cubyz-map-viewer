@@ -4,14 +4,11 @@ import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { LOD_LEVELS } from "./constants.js";
 import { getLodForDistanceWithHysteresis } from "./lod-utils.js";
 import type { PendingVoxelFetchRequest } from "./types.js";
-import { shouldRenderTerrainForMode } from "./utils.js";
 
 export function checkAndUpdateLod(args: {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
-  mode: "terrain" | "voxel";
-  showTerrain: boolean;
-  showVoxelTerrain: boolean;
+  showTerrainUnderlay: boolean;
   voxelLastCameraSampleRef: {
     current: { camera: THREE.Vector3; target: THREE.Vector3 } | null;
   };
@@ -48,7 +45,6 @@ export function checkAndUpdateLod(args: {
     camDist: number,
   ) => Promise<void> | void;
   onShareStateChange: (state: {
-    mode: "terrain" | "voxel";
     pos: [number, number, number];
     zoom: number;
     theta: number;
@@ -58,9 +54,7 @@ export function checkAndUpdateLod(args: {
   const {
     camera,
     controls,
-    mode,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     voxelLastCameraSampleRef,
     voxelLastMotionAtRef,
     pendingVoxelDetailRequestsRef,
@@ -103,51 +97,42 @@ export function checkAndUpdateLod(args: {
     }
   }
 
-  const shouldRenderTerrain = shouldRenderTerrainForMode(
-    mode,
-    showTerrain,
-    showVoxelTerrain,
-  );
+  void pendingVoxelDetailRequestsRef;
+  void committedVoxelDetailRequestsRef;
+  void syncVoxelRequests;
 
-  if (mode === "terrain") {
-    pendingVoxelDetailRequestsRef.current.clear();
-    committedVoxelDetailRequestsRef.current.clear();
-    syncVoxelRequests(new Map());
+  if (showTerrainUnderlay) {
     syncTerrainLod(target, camDist);
-  } else {
-    if (shouldRenderTerrain) {
-      syncTerrainLod(target, camDist);
-    } else if (terrainVisibilityDirtyRef.current) {
-      updateTerrainVisibility(target, camDist);
-      terrainVisibilityDirtyRef.current = false;
-    }
-
-    const cameraForward = target.clone().sub(camera.position);
-    cameraForward.z = 0;
-    const forwardLenSq = cameraForward.lengthSq();
-    if (forwardLenSq > 1e-6) {
-      cameraForward.multiplyScalar(1 / Math.sqrt(forwardLenSq));
-    } else {
-      cameraForward.set(0, 0, 0);
-    }
-
-    const focus = resolveVoxelLodFocus(camera, controls, cameraForward);
-    const unclampedFocusLod = getLodForDistanceWithHysteresis(
-      focus.zoomDist,
-      activeFocusLodRef.current,
-      voxelLodThresholds,
-      voxelLodHysteresisRatio,
-    );
-    const focusLod =
-      LOD_LEVELS[
-        Math.max(
-          LOD_LEVELS.indexOf(unclampedFocusLod),
-          LOD_LEVELS.indexOf(minRenderedVoxelLod),
-        )
-      ];
-    activeFocusLodRef.current = focusLod;
-    updateVoxelLod(focusLod, camera.position, cameraForward);
+  } else if (terrainVisibilityDirtyRef.current) {
+    updateTerrainVisibility(target, camDist);
+    terrainVisibilityDirtyRef.current = false;
   }
+
+  const cameraForward = target.clone().sub(camera.position);
+  cameraForward.z = 0;
+  const forwardLenSq = cameraForward.lengthSq();
+  if (forwardLenSq > 1e-6) {
+    cameraForward.multiplyScalar(1 / Math.sqrt(forwardLenSq));
+  } else {
+    cameraForward.set(0, 0, 0);
+  }
+
+  const focus = resolveVoxelLodFocus(camera, controls, cameraForward);
+  const unclampedFocusLod = getLodForDistanceWithHysteresis(
+    focus.zoomDist,
+    activeFocusLodRef.current,
+    voxelLodThresholds,
+    voxelLodHysteresisRatio,
+  );
+  const focusLod =
+    LOD_LEVELS[
+      Math.max(
+        LOD_LEVELS.indexOf(unclampedFocusLod),
+        LOD_LEVELS.indexOf(minRenderedVoxelLod),
+      )
+    ];
+  activeFocusLodRef.current = focusLod;
+  updateVoxelLod(focusLod, camera.position, cameraForward);
 
   if (debugLabelsDirtyRef.current) {
     debugLabelsDirtyRef.current = false;
@@ -162,7 +147,6 @@ export function checkAndUpdateLod(args: {
   const r = offset.length();
   if (r >= 0.001) {
     onShareStateChange({
-      mode,
       pos: [Math.round(target.x), Math.round(target.y), Math.round(target.z)],
       zoom: Math.round(r),
       theta: Math.round(

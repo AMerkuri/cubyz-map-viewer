@@ -126,15 +126,13 @@ const PLAYER_MARKER_MAX_SCALE = 100;
 const TEMP_TO_MARKER = new THREE.Vector3();
 
 export function World3DView({
-  mode,
   worldData,
   players,
   subscribe,
   showPlayers,
   showSpawn,
   showChunkBorders,
-  showTerrain,
-  showVoxelTerrain,
+  showTerrainUnderlay,
   showBiomeLabels,
   showVoxelHeightLabels,
   renderDistance,
@@ -194,9 +192,6 @@ export function World3DView({
   } | null>(null);
 
   const initializedRef = useRef(false);
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
-
   const terrainGroupRef = useRef<THREE.Group | null>(null);
   const voxelGroupRef = useRef<THREE.Group | null>(null);
   const markerGroupRef = useRef<THREE.Group | null>(null);
@@ -291,10 +286,8 @@ export function World3DView({
   showSpawnRef.current = showSpawn;
   const showChunkBordersRef = useRef(showChunkBorders);
   showChunkBordersRef.current = showChunkBorders;
-  const showTerrainRef = useRef(showTerrain);
-  showTerrainRef.current = showTerrain;
-  const showVoxelTerrainRef = useRef(showVoxelTerrain);
-  showVoxelTerrainRef.current = showVoxelTerrain;
+  const showTerrainUnderlayRef = useRef(showTerrainUnderlay);
+  showTerrainUnderlayRef.current = showTerrainUnderlay;
   const showBiomeLabelsRef = useRef(showBiomeLabels);
   showBiomeLabelsRef.current = showBiomeLabels;
   const showVoxelHeightLabelsRef = useRef(showVoxelHeightLabels);
@@ -661,9 +654,7 @@ export function World3DView({
     updateTerrainVisibilityManaged({
       target,
       camDist,
-      mode: modeRef.current,
-      showTerrain: showTerrainRef.current,
-      showVoxelTerrain: showVoxelTerrainRef.current,
+      showTerrainUnderlay: showTerrainUnderlayRef.current,
       loadedTerrain: loadedTerrainRef.current,
       loadingTerrain: loadingTerrainRef.current,
       terrainLodHysteresisRatio:
@@ -881,7 +872,6 @@ export function World3DView({
     await refreshBiomeLabelsManaged({
       target,
       camDist,
-      mode: modeRef.current,
       showBiomeLabels: showBiomeLabelsRef.current,
       group: biomeLabelGroupRef.current,
       labelMap: biomeLabelMapRef.current,
@@ -900,9 +890,7 @@ export function World3DView({
       labelMap: debugLabelMapRef.current,
       debugEnabled: debugEnabledRef.current,
       showTiles: showChunkBordersRef.current,
-      showHeights:
-        showVoxelHeightLabelsRef.current && modeRef.current === "voxel",
-      mode: modeRef.current,
+      showHeights: showVoxelHeightLabelsRef.current,
       loadedTerrain: loadedTerrainRef.current.values(),
       loadedVoxels: loadedVoxelsRef.current.values(),
     });
@@ -1004,9 +992,7 @@ export function World3DView({
       tileX,
       tileY,
       queryClient: queryClientRef.current,
-      mode: modeRef.current,
-      showTerrain: showTerrainRef.current,
-      showVoxelTerrain: showVoxelTerrainRef.current,
+      showTerrainUnderlay: showTerrainUnderlayRef.current,
       loadedTerrain: loadedTerrainRef.current,
       evictWarmCachedTerrainTile,
       queueTerrainTileLoad,
@@ -1021,7 +1007,6 @@ export function World3DView({
       lod,
       regionX,
       regionY,
-      mode: modeRef.current,
       scene: sceneRef.current,
       loadedVoxels: loadedVoxelsRef.current,
       availableVoxelKeys: availableVoxelKeysRef.current,
@@ -1048,9 +1033,7 @@ export function World3DView({
     checkAndUpdateLodManaged({
       camera,
       controls,
-      mode: modeRef.current,
-      showTerrain: showTerrainRef.current,
-      showVoxelTerrain: showVoxelTerrainRef.current,
+      showTerrainUnderlay: showTerrainUnderlayRef.current,
       voxelLastCameraSampleRef,
       voxelLastMotionAtRef,
       pendingVoxelDetailRequestsRef,
@@ -1162,7 +1145,6 @@ export function World3DView({
       isVoxelTileStale,
       voxelGroup: voxelGroupRef.current,
       chunkBorderGroup: chunkBorderGroupRef.current,
-      mode: modeRef.current,
       renderer,
       preUploadTarget,
       preUploadScene,
@@ -1185,7 +1167,6 @@ export function World3DView({
 
   function publishCurrentChunkStats(fpsValue: number) {
     publishChunkStats({
-      mode: modeRef.current,
       fpsValue,
       activeFocusLod: activeFocusLodRef.current,
       loadingTerrain: loadingTerrainRef.current,
@@ -1253,9 +1234,7 @@ export function World3DView({
     chunkBorderGroupRef,
     debugLabelGroupRef,
     biomeLabelGroupRef,
-    modeRef,
-    showTerrainRef,
-    showVoxelTerrainRef,
+    showTerrainUnderlayRef,
     showChunkBordersRef,
     showBiomeLabelsRef,
     debugEnabledRef,
@@ -1307,16 +1286,13 @@ export function World3DView({
   });
 
   useWorld3DChunkStatsReset({
-    modeRef,
     onChunkStatsChangeRef,
   });
 
   useWorld3DSceneSyncEffects({
     surfaceIndex: worldData.surfaceIndex,
     chunkIndex: worldData.chunkIndex,
-    mode,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     sceneRef,
     surfaceIndexRef,
     chunkIndexRef,
@@ -1329,13 +1305,11 @@ export function World3DView({
   });
 
   useWorld3DDisplayEffects({
-    mode,
     players,
     showPlayers,
     showSpawn,
     showChunkBorders,
-    showTerrain,
-    showVoxelTerrain,
+    showTerrainUnderlay,
     showBiomeLabels,
     showVoxelHeightLabels,
     debugEnabled,
@@ -1354,7 +1328,6 @@ export function World3DView({
     refreshDebugLabels,
     clearBiomeLabels,
     refreshBiomeLabels,
-    clearVoxelTiles,
     clearTerrainTiles,
     checkAndUpdateLOD,
   });

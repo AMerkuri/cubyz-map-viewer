@@ -9,7 +9,6 @@ import {
 import { LOD_LEVELS } from "../lib/constants.js";
 
 interface MapDebugParametersProps {
-  view: "terrain" | "voxel";
   settings: MapDebugSettings;
   onChange: (next: MapDebugSettings) => void;
   renderDistance: number;
@@ -51,7 +50,6 @@ function formatIdleFrameRateCapValue(value: number): string {
 }
 
 export function MapDebugParameters({
-  view,
   settings,
   onChange,
   renderDistance,
@@ -133,75 +131,73 @@ export function MapDebugParameters({
       },
     ];
 
-    if (view === "voxel") {
-      baseSections.push({
-        title: "Voxel Rendering",
-        content: (
-          <>
-            <SliderRow
-              label="Render Distance"
-              description="Maximum distance around the camera where voxel regions remain eligible for loading and rendering."
-              value={renderDistance}
-              displayValue={String(renderDistance)}
-              min={3200}
-              max={38400}
-              step={800}
-              defaultValue={19200}
-              onChange={onRenderDistanceChange}
-            />
-            <SliderRow
-              label="LOD1 Max Dist"
-              description={
-                minRenderedVoxelLod > 1
-                  ? "Distance threshold where the finest voxel LOD stops being preferred. Inactive while Min LOD is above 1."
-                  : "Distance threshold where the finest voxel LOD stops being preferred."
-              }
-              value={voxelLod1MaxDist}
-              displayValue={String(voxelLod1MaxDist)}
-              min={200}
-              max={1150}
-              step={50}
-              defaultValue={600}
-              onChange={onVoxelLod1MaxDistChange}
-              disabled={minRenderedVoxelLod > 1}
-            />
-            <DiscreteLodRow
-              label="Min LOD"
-              description="Finest voxel LOD allowed to render. Higher values prevent very fine voxel regions from being selected."
-              value={minRenderedVoxelLod}
-              defaultValue={LOD_LEVELS[0]}
-              onChange={onMinRenderedVoxelLodChange}
-            />
-            <SliderRow
-              label="Top AO Intensity"
-              description="Scales seam-aware top-face AO for L1 and L2."
-              value={settings.voxelTopAoIntensity}
-              displayValue={settings.voxelTopAoIntensity.toFixed(2)}
-              min={0}
-              max={1.5}
-              step={0.05}
-              defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelTopAoIntensity}
-              onChange={(value) =>
-                onChange({ ...settings, voxelTopAoIntensity: value })
-              }
-            />
-            <SliderRow
-              label="Wall AO Intensity"
-              description="Scales server-baked vertical-wall AO, including full-height concave wall corners, for L1 and L2."
-              value={settings.voxelWallAoIntensity}
-              displayValue={settings.voxelWallAoIntensity.toFixed(2)}
-              min={0}
-              max={1.5}
-              step={0.05}
-              defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelWallAoIntensity}
-              onChange={(value) =>
-                onChange({ ...settings, voxelWallAoIntensity: value })
-              }
-            />
-          </>
-        ),
-      });
-    }
+    baseSections.push({
+      title: "Voxel Rendering",
+      content: (
+        <>
+          <SliderRow
+            label="Render Distance"
+            description="Maximum distance around the camera where voxel regions remain eligible for loading and rendering."
+            value={renderDistance}
+            displayValue={String(renderDistance)}
+            min={3200}
+            max={38400}
+            step={800}
+            defaultValue={19200}
+            onChange={onRenderDistanceChange}
+          />
+          <SliderRow
+            label="LOD1 Max Dist"
+            description={
+              minRenderedVoxelLod > 1
+                ? "Distance threshold where the finest voxel LOD stops being preferred. Inactive while Min LOD is above 1."
+                : "Distance threshold where the finest voxel LOD stops being preferred."
+            }
+            value={voxelLod1MaxDist}
+            displayValue={String(voxelLod1MaxDist)}
+            min={200}
+            max={1150}
+            step={50}
+            defaultValue={600}
+            onChange={onVoxelLod1MaxDistChange}
+            disabled={minRenderedVoxelLod > 1}
+          />
+          <DiscreteLodRow
+            label="Min LOD"
+            description="Finest voxel LOD allowed to render. Higher values prevent very fine voxel regions from being selected."
+            value={minRenderedVoxelLod}
+            defaultValue={LOD_LEVELS[0]}
+            onChange={onMinRenderedVoxelLodChange}
+          />
+          <SliderRow
+            label="Top AO Intensity"
+            description="Scales seam-aware top-face AO for L1 and L2."
+            value={settings.voxelTopAoIntensity}
+            displayValue={settings.voxelTopAoIntensity.toFixed(2)}
+            min={0}
+            max={1.5}
+            step={0.05}
+            defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelTopAoIntensity}
+            onChange={(value) =>
+              onChange({ ...settings, voxelTopAoIntensity: value })
+            }
+          />
+          <SliderRow
+            label="Wall AO Intensity"
+            description="Scales server-baked vertical-wall AO, including full-height concave wall corners, for L1 and L2."
+            value={settings.voxelWallAoIntensity}
+            displayValue={settings.voxelWallAoIntensity.toFixed(2)}
+            min={0}
+            max={1.5}
+            step={0.05}
+            defaultValue={DEFAULT_MAP_DEBUG_SETTINGS.voxelWallAoIntensity}
+            onChange={(value) =>
+              onChange({ ...settings, voxelWallAoIntensity: value })
+            }
+          />
+        </>
+      ),
+    });
 
     for (const section of SECTION_ORDER) {
       const items = definitionsBySection.get(section) ?? [];
@@ -240,7 +236,6 @@ export function MapDebugParameters({
     onVoxelLod1MaxDistChange,
     renderDistance,
     settings,
-    view,
     voxelHeights,
     voxelLod1MaxDist,
   ]);
