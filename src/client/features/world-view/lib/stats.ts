@@ -105,7 +105,10 @@ export function publishChunkStats(args: {
   }
 
   for (const item of pendingVoxelMeshQueue) {
-    for (const quadrant of item.quadrantMeshes) {
+    for (const quadrant of [
+      ...item.quadrantMeshes,
+      ...item.transparentQuadrantMeshes,
+    ]) {
       queuedMemoryBytes += quadrant.positions.byteLength;
       queuedMemoryBytes += quadrant.normals.byteLength;
       queuedMemoryBytes += quadrant.baseColors.byteLength;

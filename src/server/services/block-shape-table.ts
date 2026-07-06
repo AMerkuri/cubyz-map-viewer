@@ -199,6 +199,12 @@ export async function buildBlockShapeTable(
       continue;
     }
 
+    if (modelRefs.base === "cubyz:cube" && modelRefs.side === null) {
+      hash.update("cube-model:cubyz:cube|");
+      shapes[paletteIndex] = { kind: "cube", fallback: "cube" };
+      continue;
+    }
+
     const rotation = normalizeRotation(definition.data.rotation);
     if (!rotation) {
       reportShapeDiagnostic("unsupported-rotation", blockId, {

@@ -96,6 +96,7 @@ export function useWorld3DSceneRuntime(args: {
   clearBiomeLabels: () => void;
   terrainMaterial: THREE.Material;
   voxelMaterial: THREE.Material;
+  transparentVoxelMaterial: THREE.Material;
 }): void {
   const {
     containerRef,
@@ -141,6 +142,7 @@ export function useWorld3DSceneRuntime(args: {
     clearBiomeLabels,
     terrainMaterial,
     voxelMaterial,
+    transparentVoxelMaterial,
   } = args;
 
   const onUpdateMarkerScales = useEffectEvent(updateMarkerScales);
@@ -206,6 +208,7 @@ export function useWorld3DSceneRuntime(args: {
       clearBiomeLabels: onClearBiomeLabels,
       terrainMaterial,
       voxelMaterial,
+      transparentVoxelMaterial,
     });
   }, [
     containerRef,
@@ -236,6 +239,7 @@ export function useWorld3DSceneRuntime(args: {
     biomeLabelsDirtyRef,
     terrainMaterial,
     voxelMaterial,
+    transparentVoxelMaterial,
   ]);
 }
 

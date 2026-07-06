@@ -22,7 +22,7 @@ export function estimateLoadedVoxelTileBytes(tile: LoadedVoxelTile): number {
   let total =
     tile.chunkTopHeights.byteLength +
     estimateGeometryBytes(tile.borderLines.geometry);
-  for (const sm of tile.subMeshes) {
+  for (const sm of [...tile.subMeshes, ...tile.transparentSubMeshes]) {
     total += estimateGeometryBytes(sm.mesh.geometry);
     total += sm.baseColors.byteLength + sm.faceAo.byteLength;
   }

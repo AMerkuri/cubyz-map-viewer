@@ -33,8 +33,17 @@ interface BlockTextureFailure extends FallbackBlockColorLogDetails {}
 export const FALLBACK_BLOCK_COLOR: RGB = { r: 255, g: 0, b: 220 };
 
 const AIR_LIKE_BLOCK_COLOR: RGB = { r: 0, g: 0, b: 0 };
-const AIR_LIKE_BLOCK_PREFIXES = ["cubyz:fog/", "cubyz:glass/"];
+const AIR_LIKE_BLOCK_PREFIXES = ["cubyz:fog/"];
 const BLOCK_DEFINITION_EXTENSIONS = [".zig.zon", ".zon"] as const;
+
+const BLOCK_RENDER_KIND_AIR = 0;
+const BLOCK_RENDER_KIND_OPAQUE = 1;
+const BLOCK_RENDER_KIND_TRANSPARENT = 2;
+
+type BlockRenderKind =
+  | typeof BLOCK_RENDER_KIND_AIR
+  | typeof BLOCK_RENDER_KIND_OPAQUE
+  | typeof BLOCK_RENDER_KIND_TRANSPARENT;
 
 const TEXTURE_FIELD_PRIORITY: Record<string, number> = {
   texture_top: 0,
@@ -63,6 +72,8 @@ export class ColorMapService {
   private blockAbsorptionColors = new Map<string, RGB>();
   /** blocks that should be treated like air */
   private airLikeBlocks = new Set<string>();
+  /** block string ID -> visible transparent render metadata */
+  private transparentBlocks = new Map<string, { hasBackFace: boolean }>();
   /** block string ID -> whether we already logged a fallback color */
   private reportedFallbackBlocks = new Set<string>();
   /** biome string ID -> RGB */
@@ -71,6 +82,12 @@ export class ColorMapService {
   private paletteColors: RGB[] = [];
   /** block palette index -> whether this entry should be treated like air */
   private paletteAirLike: boolean[] = [];
+  /** block palette index -> render kind */
+  private paletteRenderKinds: BlockRenderKind[] = [];
+  /** block palette index -> transparent backface flag */
+  private paletteTransparentBackfaces: boolean[] = [];
+  /** block palette index -> same-block transparent connection group */
+  private paletteTransparentGroups: number[] = [];
   /** biome palette index -> RGB */
   private biomePaletteColors: RGB[] = [];
   /** biome palette index -> ocean flag */
@@ -110,10 +127,14 @@ export class ColorMapService {
     this.blockTopTextures.clear();
     this.blockAbsorptionColors.clear();
     this.airLikeBlocks.clear();
+    this.transparentBlocks.clear();
     this.reportedFallbackBlocks.clear();
     this.biomeColors.clear();
     this.paletteColors = [];
     this.paletteAirLike = [];
+    this.paletteRenderKinds = [];
+    this.paletteTransparentBackfaces = [];
+    this.paletteTransparentGroups = [];
     this.biomePaletteColors = [];
     this.biomePaletteIsOcean = [];
   }
@@ -177,6 +198,7 @@ export class ColorMapService {
     baseDir: string,
     prefix: string,
     subPath: string,
+    inheritedDefaults: Record<string, ZonValue> = {},
   ): Promise<void> {
     const dirPath = subPath ? join(baseDir, subPath) : baseDir;
     let entries: string[];
@@ -186,14 +208,31 @@ export class ColorMapService {
       return;
     }
 
+    let defaults = inheritedDefaults;
+    for (const extension of BLOCK_DEFINITION_EXTENSIONS) {
+      const defaultsEntry = `_defaults${extension}`;
+      if (!entries.includes(defaultsEntry)) continue;
+      try {
+        const parsed = parseZon(
+          await readFile(join(dirPath, defaultsEntry), "utf-8"),
+        );
+        if (parsed && !Array.isArray(parsed) && typeof parsed === "object") {
+          defaults = { ...defaults, ...(parsed as Record<string, ZonValue>) };
+        }
+      } catch {
+        // Ignore malformed defaults; individual block parsing will still run.
+      }
+      break;
+    }
+
     for (const entry of entries) {
-      if (entry === "textures") continue; // Skip textures subdir
+      if (entry === "textures" || entry.startsWith("_defaults.")) continue; // Skip textures/defaults
       const fullPath = join(dirPath, entry);
       const st = await stat(fullPath);
 
       if (st.isDirectory()) {
         const nextSub = subPath ? `${subPath}/${entry}` : entry;
-        await this.scanBlockDir(baseDir, prefix, nextSub);
+        await this.scanBlockDir(baseDir, prefix, nextSub, defaults);
       } else {
         const name = this.stripBlockDefinitionExtension(entry);
         if (!name) {
@@ -204,7 +243,10 @@ export class ColorMapService {
         const blockId = `${prefix}:${blockPath}`;
         try {
           const text = await readFile(fullPath, "utf-8");
-          const parsed = parseZon(text) as Record<string, ZonValue>;
+          const parsed = {
+            ...defaults,
+            ...(parseZon(text) as Record<string, ZonValue>),
+          };
 
           const textures = this.extractTextureCandidates(parsed);
           const topTextures = this.extractTopTextureCandidates(parsed);
@@ -213,12 +255,18 @@ export class ColorMapService {
               ? this.absorptionToColor(parsed.absorbedLight)
               : null;
           const isAirLike = this.isInherentAirLikeBlock(blockId);
+          const isTransparent = parsed.transparent === true;
+          const hasBackFace = parsed.hasBackFace === true;
 
           this.clearBlockDefinition(blockId);
 
           if (isAirLike) {
             this.airLikeBlocks.add(blockId);
             continue;
+          }
+
+          if (isTransparent) {
+            this.transparentBlocks.set(blockId, { hasBackFace });
           }
 
           if (textures.length > 0) {
@@ -367,10 +415,24 @@ export class ColorMapService {
   private buildPaletteColors(palette: Palette): void {
     this.paletteColors = new Array(palette.entries.length);
     this.paletteAirLike = new Array(palette.entries.length);
+    this.paletteRenderKinds = new Array(palette.entries.length);
+    this.paletteTransparentBackfaces = new Array(palette.entries.length);
+    this.paletteTransparentGroups = new Array(palette.entries.length);
+    const transparentGroupIds = new Map<string, number>();
     for (let i = 0; i < palette.entries.length; i++) {
       const blockId = palette.entries[i];
       const isAirLike = this.isAirLikeBlock(blockId);
       this.paletteAirLike[i] = isAirLike;
+      const transparent = this.transparentBlocks.get(blockId);
+      this.paletteRenderKinds[i] = isAirLike
+        ? BLOCK_RENDER_KIND_AIR
+        : transparent
+          ? BLOCK_RENDER_KIND_TRANSPARENT
+          : BLOCK_RENDER_KIND_OPAQUE;
+      this.paletteTransparentBackfaces[i] = transparent?.hasBackFace === true;
+      this.paletteTransparentGroups[i] = transparent
+        ? getOrCreateTransparentGroup(transparentGroupIds, blockId)
+        : 0;
       if (isAirLike) {
         this.paletteColors[i] = AIR_LIKE_BLOCK_COLOR;
         continue;
@@ -423,6 +485,18 @@ export class ColorMapService {
   /** Check if a block palette index should be treated like air */
   isBlockPaletteIndexAirLike(paletteIndex: number): boolean {
     return this.paletteAirLike[paletteIndex] === true;
+  }
+
+  getBlockPaletteRenderKind(paletteIndex: number): BlockRenderKind {
+    return this.paletteRenderKinds[paletteIndex] ?? BLOCK_RENDER_KIND_OPAQUE;
+  }
+
+  blockPaletteIndexHasTransparentBackFace(paletteIndex: number): boolean {
+    return this.paletteTransparentBackfaces[paletteIndex] === true;
+  }
+
+  getBlockPaletteTransparentGroup(paletteIndex: number): number {
+    return this.paletteTransparentGroups[paletteIndex] ?? 0;
   }
 
   /** Get color for a biome palette index */
@@ -482,6 +556,7 @@ export class ColorMapService {
     this.blockTopTextures.delete(blockId);
     this.blockAbsorptionColors.delete(blockId);
     this.airLikeBlocks.delete(blockId);
+    this.transparentBlocks.delete(blockId);
   }
 
   private stripBlockDefinitionExtension(entry: string): string | null {
@@ -701,4 +776,15 @@ export class ColorMapService {
       b: Math.round((b / colors.length) ** (1 / 2.2) * 255),
     };
   }
+}
+
+function getOrCreateTransparentGroup(
+  groupIds: Map<string, number>,
+  blockId: string,
+): number {
+  const existing = groupIds.get(blockId);
+  if (existing !== undefined) return existing;
+  const next = groupIds.size + 1;
+  groupIds.set(blockId, next);
+  return next;
 }

@@ -98,6 +98,7 @@ export function initializeSceneRuntime(args: {
   clearBiomeLabels: () => void;
   terrainMaterial: THREE.Material;
   voxelMaterial: THREE.Material;
+  transparentVoxelMaterial: THREE.Material;
 }): () => void {
   const {
     container,
@@ -143,6 +144,7 @@ export function initializeSceneRuntime(args: {
     clearBiomeLabels,
     terrainMaterial,
     voxelMaterial,
+    transparentVoxelMaterial,
   } = args;
 
   const scene = new THREE.Scene();
@@ -731,6 +733,7 @@ export function initializeSceneRuntime(args: {
     workerRef.current = null;
     terrainMaterial.dispose();
     voxelMaterial.dispose();
+    transparentVoxelMaterial.dispose();
 
     sceneRef.current = null;
     terrainGroupRef.current = null;

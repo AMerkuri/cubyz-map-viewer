@@ -174,9 +174,22 @@ export function World3DView({
       side: THREE.FrontSide,
     });
   }
+  const transparentVoxelMaterialRef = useRef<THREE.MeshLambertMaterial | null>(
+    null,
+  );
+  if (!transparentVoxelMaterialRef.current) {
+    transparentVoxelMaterialRef.current = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.38,
+      depthWrite: false,
+    });
+  }
 
   const terrainMaterial = terrainMaterialRef.current;
   const voxelMaterial = voxelMaterialRef.current;
+  const transparentVoxelMaterial = transparentVoxelMaterialRef.current;
 
   const queryClient = useQueryClient();
   const queryClientRef = useRef<QueryClient>(queryClient);
@@ -1150,6 +1163,7 @@ export function World3DView({
       preUploadScene,
       preUploadCamera,
       voxelMaterial,
+      transparentVoxelMaterial,
       markVoxelTileFresh,
       failedVoxels: failedVoxelsRef.current,
       missingVoxels: missingVoxelsRef.current,
@@ -1265,6 +1279,7 @@ export function World3DView({
     clearBiomeLabels,
     terrainMaterial,
     voxelMaterial,
+    transparentVoxelMaterial,
   });
 
   useWorld3DInitialization({

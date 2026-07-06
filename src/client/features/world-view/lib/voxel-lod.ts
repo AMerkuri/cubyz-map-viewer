@@ -423,7 +423,7 @@ export function runVoxelLodSelection(args: {
       debugLabelsDirty = true;
     }
 
-    for (const sm of tile.subMeshes) {
+    for (const sm of [...tile.subMeshes, ...tile.transparentSubMeshes]) {
       const smVisible =
         (quadrantMask & voxelQuadrantBit(sm.quadrantIndex)) !== 0;
       if (smVisible) {

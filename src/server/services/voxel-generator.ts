@@ -78,6 +78,8 @@ interface SparsePlaneGroup {
 interface FaceEntry {
   typ: number;
   packedAo: number;
+  renderKind: number;
+  mergeKey: number;
 }
 
 const OPPOSITE_FACE: Record<Direction, Direction> = {
@@ -183,6 +185,7 @@ export async function generateVoxelMesh(
   const regionLoaders = new Map<number, Promise<RegionData | null>>();
   const occupancyCache = new Map<string, Promise<boolean>>();
   const faces = new Map<string, FaceEntry>();
+  const transparentFaceCells = new Set<string>();
   const modelBlocks = new Set<string>();
   const modelQuads: BinaryQuad[] = [];
   const visibleChunkColumns = new Set<number>();
@@ -203,6 +206,7 @@ export async function generateVoxelMesh(
   function isTraversableBlockValue(blockValue: number): boolean {
     const paletteIndex = getPaletteIndex(blockValue);
     if (isAirType(paletteIndex)) return true;
+    if (isTransparentType(paletteIndex)) return true;
     const shape = resolveShapeForLod(blockShapes, paletteIndex, lod);
     if (shape.kind === "model") return true;
     if (shape.kind !== "semantic") return false;
@@ -212,6 +216,7 @@ export async function generateVoxelMesh(
   function isBlockBoundarySolid(blockValue: number, face: Direction): boolean {
     const paletteIndex = getPaletteIndex(blockValue);
     if (isAirType(paletteIndex)) return false;
+    if (isTransparentType(paletteIndex)) return false;
     const shape = resolveShapeForLod(blockShapes, paletteIndex, lod);
     if (shape.kind !== "semantic") return false;
     return isSemanticBoundarySolid(shape, getBlockData(blockValue), face, lod);
@@ -233,6 +238,55 @@ export async function generateVoxelMesh(
 
   function isAirType(paletteIndex: number): boolean {
     return paletteIndex === 0 || blockColors.airLike[paletteIndex] === 1;
+  }
+
+  function isTransparentType(paletteIndex: number): boolean {
+    return blockColors.renderKind[paletteIndex] === 2;
+  }
+
+  function getRenderKind(paletteIndex: number): number {
+    return isTransparentType(paletteIndex) ? 2 : 1;
+  }
+
+  function shouldEmitTransparentBoundary(
+    currentPaletteIndex: number,
+    neighborBlockValue: number,
+  ): boolean {
+    const neighborPaletteIndex = getPaletteIndex(neighborBlockValue);
+    if (!isTransparentType(currentPaletteIndex)) return false;
+    if (!isTransparentType(neighborPaletteIndex)) return true;
+    return (
+      getTransparentGroup(currentPaletteIndex) !==
+      getTransparentGroup(neighborPaletteIndex)
+    );
+  }
+
+  function getTransparentGroup(paletteIndex: number): number {
+    return blockColors.transparentGroup[paletteIndex] || paletteIndex + 1;
+  }
+
+  function getFaceMergeKey(paletteIndex: number): number {
+    return isTransparentType(paletteIndex)
+      ? getTransparentGroup(paletteIndex)
+      : paletteIndex;
+  }
+
+  function addVisibleFace(
+    x: number,
+    y: number,
+    z: number,
+    face: Direction,
+    entry: FaceEntry,
+  ): void {
+    if (entry.renderKind === 2) {
+      const plane = getPlaneCoordinate(x, y, z, face);
+      const { u, v } = getPlaneAxes(x, y, z, face);
+      const axis = face[0];
+      const key = `${axis}:${plane}:${u}:${v}:${entry.mergeKey}`;
+      if (transparentFaceCells.has(key)) return;
+      transparentFaceCells.add(key);
+    }
+    addFace(faces, x, y, z, face, entry);
   }
 
   await seedTopBoundary();
@@ -455,6 +509,7 @@ export async function generateVoxelMesh(
       const gy = state.chunkY * CHUNK_SIZE + ly;
       const gz = state.chunkZ * CHUNK_SIZE + lz;
       const currentBlockValue = chunk.blocks[idx] ?? 0;
+      const currentPaletteIndex = getPaletteIndex(currentBlockValue);
       emitModelBlock(currentBlockValue, gx, gy, gz);
 
       for (const step of FACE_STEPS) {
@@ -473,6 +528,27 @@ export async function generateVoxelMesh(
           const neighborIdx = localIndex(nlx, nly, nlz);
           const neighborBlockValue = chunk.blocks[neighborIdx] ?? 0;
           if (isTraversableBlockValue(neighborBlockValue)) {
+            if (
+              shouldEmitTransparentBoundary(
+                currentPaletteIndex,
+                neighborBlockValue,
+              ) &&
+              shouldEmitFace(
+                step.face,
+                gx,
+                gy,
+                gz,
+                surfaceSignature.data.heights,
+                lod,
+              )
+            ) {
+              addVisibleFace(gx, gy, gz, step.face, {
+                typ: currentPaletteIndex,
+                packedAo: 0,
+                renderKind: 2,
+                mergeKey: getFaceMergeKey(currentPaletteIndex),
+              });
+            }
             const enterFace = OPPOSITE_FACE[step.face];
             const blockedByCurrent = isBlockBoundarySolid(
               currentBlockValue,
@@ -526,9 +602,16 @@ export async function generateVoxelMesh(
                 lod,
               )
             ) {
-              addFace(faces, solidX, solidY, solidZ, face, {
-                typ: getType(chunk, neighborIdx),
-                packedAo: await getPackedFaceAo(face, solidX, solidY, solidZ),
+              const typ = getType(chunk, neighborIdx);
+              const renderKind = getRenderKind(typ);
+              addVisibleFace(solidX, solidY, solidZ, face, {
+                typ,
+                packedAo:
+                  renderKind === 2
+                    ? 0
+                    : await getPackedFaceAo(face, solidX, solidY, solidZ),
+                renderKind,
+                mergeKey: getFaceMergeKey(typ),
               });
             }
           }
@@ -567,6 +650,27 @@ export async function generateVoxelMesh(
         const wrappedIdx = localIndex(wrappedLx, wrappedLy, wrappedLz);
         const neighborBlockValue = neighborChunk.blocks[wrappedIdx] ?? 0;
         if (isTraversableBlockValue(neighborBlockValue)) {
+          if (
+            shouldEmitTransparentBoundary(
+              currentPaletteIndex,
+              neighborBlockValue,
+            ) &&
+            shouldEmitFace(
+              step.face,
+              gx,
+              gy,
+              gz,
+              surfaceSignature.data.heights,
+              lod,
+            )
+          ) {
+            addVisibleFace(gx, gy, gz, step.face, {
+              typ: currentPaletteIndex,
+              packedAo: 0,
+              renderKind: 2,
+              mergeKey: getFaceMergeKey(currentPaletteIndex),
+            });
+          }
           const enterFace = OPPOSITE_FACE[step.face];
           const blockedByCurrent = isBlockBoundarySolid(
             currentBlockValue,
@@ -611,9 +715,16 @@ export async function generateVoxelMesh(
             lod,
           )
         ) {
-          addFace(faces, solidX, solidY, solidZ, face, {
-            typ: getType(neighborChunk, wrappedIdx),
-            packedAo: await getPackedFaceAo(face, solidX, solidY, solidZ),
+          const typ = getType(neighborChunk, wrappedIdx);
+          const renderKind = getRenderKind(typ);
+          addVisibleFace(solidX, solidY, solidZ, face, {
+            typ,
+            packedAo:
+              renderKind === 2
+                ? 0
+                : await getPackedFaceAo(face, solidX, solidY, solidZ),
+            renderKind,
+            mergeKey: getFaceMergeKey(typ),
           });
         }
       }
@@ -799,9 +910,14 @@ export async function generateVoxelMesh(
         const enterFace = OPPOSITE_FACE[face];
         if (isBlockBoundarySolid(neighborBlockValue, enterFace)) continue;
 
-        addFace(faces, gx, gy, gz, face, {
+        addVisibleFace(gx, gy, gz, face, {
           typ,
-          packedAo: await getPackedFaceAo(face, gx, gy, gz),
+          packedAo:
+            getRenderKind(typ) === 2
+              ? 0
+              : await getPackedFaceAo(face, gx, gy, gz),
+          renderKind: getRenderKind(typ),
+          mergeKey: getFaceMergeKey(typ),
         });
       }
     }
@@ -1094,6 +1210,7 @@ export async function generateVoxelMesh(
         typ: paletteIndex,
         dir: 1,
         packedAo: 0,
+        renderKind: getRenderKind(paletteIndex),
       });
     }
   }
@@ -1952,7 +2069,7 @@ function buildMergedQuads(faceMap: Map<string, FaceEntry>): BinaryQuad[] {
       for (const v of vValues) {
         const entry = row.get(v);
         if (!entry) continue;
-        if (isTopFace) {
+        if (isTopFace && entry.renderKind !== 2) {
           row.delete(v);
           quads.push(
             createMergedQuad(
@@ -1964,6 +2081,7 @@ function buildMergedQuads(faceMap: Map<string, FaceEntry>): BinaryQuad[] {
               1,
               entry.typ,
               entry.packedAo,
+              entry.renderKind,
             ),
           );
           continue;
@@ -1975,20 +2093,29 @@ function buildMergedQuads(faceMap: Map<string, FaceEntry>): BinaryQuad[] {
         let dv = 1;
         while (
           v + dv < maxV &&
-          row.get(v + dv)?.typ === entry.typ &&
-          row.get(v + dv)?.packedAo === entry.packedAo
+          row.get(v + dv)?.mergeKey === entry.mergeKey &&
+          (entry.renderKind === 2 ||
+            row.get(v + dv)?.packedAo === entry.packedAo) &&
+          row.get(v + dv)?.renderKind === entry.renderKind
         ) {
           dv++;
         }
 
         const maxU = Math.min(COLUMN_VOXELS, u + cellsUntilChunkBoundary(u));
         let du = 1;
-        if (!isSideFace) {
+        if (!isSideFace || entry.renderKind === 2) {
           outer: while (u + du < maxU) {
             const nextRow = group.rows.get(u + du);
             if (!nextRow) break;
             for (let vv = v; vv < v + dv; vv++) {
-              if (nextRow.get(vv)?.typ !== entry.typ) break outer;
+              const nextEntry = nextRow.get(vv);
+              if (
+                nextEntry?.mergeKey !== entry.mergeKey ||
+                (entry.renderKind !== 2 &&
+                  nextEntry.packedAo !== entry.packedAo) ||
+                nextEntry.renderKind !== entry.renderKind
+              )
+                break outer;
             }
             du++;
           }
@@ -2011,7 +2138,8 @@ function buildMergedQuads(faceMap: Map<string, FaceEntry>): BinaryQuad[] {
             du,
             dv,
             entry.typ,
-            isSideFace ? entry.packedAo : 0,
+            entry.renderKind === 2 ? 0 : isSideFace ? entry.packedAo : 0,
+            entry.renderKind,
           ),
         );
       }
@@ -2071,6 +2199,7 @@ function createMergedQuad(
   dv: number,
   typ: number,
   packedAo: number,
+  renderKind: number,
 ): BinaryQuad {
   switch (face) {
     case "x+":
@@ -2090,6 +2219,7 @@ function createMergedQuad(
         typ,
         dir: 1,
         packedAo,
+        renderKind,
       };
     case "x-":
       return {
@@ -2108,6 +2238,7 @@ function createMergedQuad(
         typ,
         dir: -1,
         packedAo,
+        renderKind,
       };
     case "y+":
       return {
@@ -2126,6 +2257,7 @@ function createMergedQuad(
         typ,
         dir: -1,
         packedAo,
+        renderKind,
       };
     case "y-":
       return {
@@ -2144,6 +2276,7 @@ function createMergedQuad(
         typ,
         dir: 1,
         packedAo,
+        renderKind,
       };
     case "z+":
       return {
@@ -2162,6 +2295,7 @@ function createMergedQuad(
         typ,
         dir: 1,
         packedAo,
+        renderKind,
       };
     case "z-":
       return {
@@ -2180,6 +2314,7 @@ function createMergedQuad(
         typ,
         dir: -1,
         packedAo,
+        renderKind,
       };
   }
 }
@@ -2193,7 +2328,7 @@ function _createQuadVertices(
   y: number,
   z: number,
   face: Direction,
-): Omit<BinaryQuad, "typ" | "dir" | "packedAo"> {
+): Omit<BinaryQuad, "typ" | "dir" | "packedAo" | "renderKind"> {
   switch (face) {
     case "x+":
       return {

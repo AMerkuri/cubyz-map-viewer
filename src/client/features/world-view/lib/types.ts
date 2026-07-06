@@ -75,6 +75,7 @@ export interface PendingVoxelMeshItem {
   regionY: number;
   version: number;
   quadrantMeshes: WorkerQuadrantMesh[];
+  transparentQuadrantMeshes: WorkerQuadrantMesh[];
   chunkCoverage: number;
   chunkTopHeights: Float32Array;
   voxelSize: number;
@@ -115,6 +116,7 @@ export interface WorkerOut {
   regionY: number;
   version?: number;
   quadrantMeshes?: WorkerQuadrantMesh[];
+  transparentQuadrantMeshes?: WorkerQuadrantMesh[];
   chunkCoverage?: number;
   chunkTopHeights?: Float32Array;
   voxelSize?: number;
@@ -157,6 +159,14 @@ export interface LoadedVoxelTile {
   regionY: number;
   voxelSize: number;
   subMeshes: {
+    quadrantIndex: number;
+    mesh: THREE.Mesh;
+    baseColors: Float32Array;
+    faceAo: Uint8Array;
+    trianglePaletteIndices: Uint32Array;
+    aoBoundarySignature: string;
+  }[];
+  transparentSubMeshes: {
     quadrantIndex: number;
     mesh: THREE.Mesh;
     baseColors: Float32Array;

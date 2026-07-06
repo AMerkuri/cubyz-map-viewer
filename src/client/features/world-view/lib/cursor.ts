@@ -99,7 +99,7 @@ export function createCursorInteractionHandlers(args: {
     tile: LoadedVoxelTile | undefined,
   ): string | undefined {
     if (!tile || intersection.faceIndex == null) return undefined;
-    const subMesh = tile.subMeshes.find(
+    const subMesh = [...tile.subMeshes, ...tile.transparentSubMeshes].find(
       (candidate) => candidate.mesh === intersection.object,
     );
     if (!subMesh) return undefined;

@@ -31,6 +31,8 @@ const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
  *     u8 dir per quad: 1 = standard winding, 0 = flipped winding
  *   Per-quad palette index section (quadCount × 2 bytes, padded to 4-byte alignment):
  *     u16 save block palette index per quad, 0xFFFF when omitted
+ *   Per-quad render-kind section (quadCount bytes, padded to 4-byte alignment):
+ *     u8 renderKind per quad: 1 = opaque, 2 = transparent
  *   Per-vertex position section (quadCount × 4 × 12 bytes):
  *     u32 relX, u32 relY, u32 relZ per vertex in 1/4096-cell fixed-point units
  *   The client always rebuilds triangle indices from the winding section.
@@ -47,6 +49,16 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
     const result = buildMeshArrays(buffer);
     const transferables: Transferable[] = [result.chunkTopHeights.buffer];
     for (const quadrant of result.quadrantMeshes) {
+      transferables.push(
+        quadrant.positions.buffer,
+        quadrant.normals.buffer,
+        quadrant.baseColors.buffer,
+        quadrant.faceAo.buffer,
+        quadrant.trianglePaletteIndices.buffer,
+        quadrant.indices.buffer,
+      );
+    }
+    for (const quadrant of result.transparentQuadrantMeshes) {
       transferables.push(
         quadrant.positions.buffer,
         quadrant.normals.buffer,
@@ -110,6 +122,15 @@ function buildMeshArrays(buf: ArrayBuffer): {
     trianglePaletteIndices: Uint32Array;
     indices: Uint32Array;
   }[];
+  transparentQuadrantMeshes: {
+    quadrantIndex: number;
+    positions: Float32Array;
+    normals: Float32Array;
+    baseColors: Float32Array;
+    faceAo: Uint8Array;
+    trianglePaletteIndices: Uint32Array;
+    indices: Uint32Array;
+  }[];
   chunkCoverage: number;
   chunkTopHeights: Float32Array;
   voxelSize: number;
@@ -132,12 +153,14 @@ function buildMeshArrays(buf: ArrayBuffer): {
   const aoPadded = (quadCount + 3) & ~3;
   const directionPadded = (quadCount + 3) & ~3;
   const palettePadded = (quadCount * 2 + 3) & ~3;
+  const renderKindPadded = (quadCount + 3) & ~3;
   const expectedSize =
     20 +
     colorPadded +
     aoPadded +
     directionPadded +
     palettePadded +
+    renderKindPadded +
     vertexCount * 12;
   if (buf.byteLength < expectedSize) throw new Error("buffer truncated");
 
@@ -153,7 +176,8 @@ function buildMeshArrays(buf: ArrayBuffer): {
   const aoOffset = 20 + colorPadded;
   let directionOff = 20 + colorPadded + aoPadded;
   const paletteOffset = 20 + colorPadded + aoPadded + directionPadded;
-  const positionOffset = paletteOffset + palettePadded;
+  const renderKindOffset = paletteOffset + palettePadded;
+  const positionOffset = renderKindOffset + renderKindPadded;
 
   // --- Positions ---
   const positions = new Float32Array(vertexCount * 3);
@@ -202,6 +226,12 @@ function buildMeshArrays(buf: ArrayBuffer): {
       paletteIndex === MISSING_BLOCK_PALETTE_INDEX
         ? Number.MAX_SAFE_INTEGER
         : paletteIndex;
+  }
+
+  const quadRenderKinds = new Uint8Array(quadCount);
+  let renderKindOff = renderKindOffset;
+  for (let qi = 0; qi < quadCount; qi++) {
+    quadRenderKinds[qi] = view.getUint8(renderKindOff++) === 2 ? 2 : 1;
   }
 
   // --- Indices ---
@@ -322,6 +352,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
 
     // Keep only upward faces (voxel top surfaces).
     if (normals[ia * 3 + 2] <= 0.5) continue;
+    if (quadRenderKinds[Math.floor(i / 6)] === 2) continue;
 
     const ax = positions[ia * 3],
       ay = positions[ia * 3 + 1],
@@ -365,7 +396,15 @@ function buildMeshArrays(buf: ArrayBuffer): {
   }
 
   const quadrantTris: number[][] = Array.from({ length: 4 }, () => []);
+  const transparentQuadrantTris: number[][] = Array.from(
+    { length: 4 },
+    () => [],
+  );
   const quadrantPaletteIndices: number[][] = Array.from(
+    { length: 4 },
+    () => [],
+  );
+  const transparentQuadrantPaletteIndices: number[][] = Array.from(
     { length: 4 },
     () => [],
   );
@@ -388,68 +427,84 @@ function buildMeshArrays(buf: ArrayBuffer): {
     const quadrantIndex =
       (localX >= regionWorldSize / 2 ? 1 : 0) +
       (localY >= regionWorldSize / 2 ? 2 : 0);
-    quadrantTris[quadrantIndex].push(ia, ib, ic);
-    quadrantPaletteIndices[quadrantIndex].push(
+    const targetTris =
+      quadRenderKinds[Math.floor(i / 6)] === 2
+        ? transparentQuadrantTris
+        : quadrantTris;
+    const targetPaletteIndices =
+      quadRenderKinds[Math.floor(i / 6)] === 2
+        ? transparentQuadrantPaletteIndices
+        : quadrantPaletteIndices;
+    targetTris[quadrantIndex].push(ia, ib, ic);
+    targetPaletteIndices[quadrantIndex].push(
       quadPaletteIndices[Math.floor(i / 6)] ?? Number.MAX_SAFE_INTEGER,
     );
   }
 
-  const quadrantMeshes = quadrantTris.map((tri, quadrantIndex) => {
-    const triPaletteIndices = quadrantPaletteIndices[quadrantIndex] ?? [];
-    const indexMap = new Map<number, number>();
-    const localPos: number[] = [];
-    const localNorm: number[] = [];
-    const localBaseCol: number[] = [];
-    const localFaceAo: number[] = [];
-    const localIdx: number[] = [];
-    const localTrianglePaletteIndices = new Uint32Array(
-      Math.floor(tri.length / 3),
-    );
+  const buildQuadrants = (tris: number[][], paletteIndices: number[][]) =>
+    tris.map((tri, quadrantIndex) => {
+      const triPaletteIndices = paletteIndices[quadrantIndex] ?? [];
+      const indexMap = new Map<number, number>();
+      const localPos: number[] = [];
+      const localNorm: number[] = [];
+      const localBaseCol: number[] = [];
+      const localFaceAo: number[] = [];
+      const localIdx: number[] = [];
+      const localTrianglePaletteIndices = new Uint32Array(
+        Math.floor(tri.length / 3),
+      );
 
-    for (let i = 0; i < tri.length; i += 3) {
-      localTrianglePaletteIndices[i / 3] =
-        triPaletteIndices[i / 3] ?? Number.MAX_SAFE_INTEGER;
-      for (let corner = 0; corner < 3; corner++) {
-        const src = tri[i + corner];
-        if (src === undefined) continue;
-        let dst = indexMap.get(src);
-        if (dst === undefined) {
-          dst = indexMap.size;
-          indexMap.set(src, dst);
-          localPos.push(
-            positions[src * 3],
-            positions[src * 3 + 1],
-            positions[src * 3 + 2],
-          );
-          localNorm.push(
-            normals[src * 3],
-            normals[src * 3 + 1],
-            normals[src * 3 + 2],
-          );
-          localBaseCol.push(
-            baseColors[src * 3],
-            baseColors[src * 3 + 1],
-            baseColors[src * 3 + 2],
-          );
-          localFaceAo.push(faceAo[src]);
+      for (let i = 0; i < tri.length; i += 3) {
+        localTrianglePaletteIndices[i / 3] =
+          triPaletteIndices[i / 3] ?? Number.MAX_SAFE_INTEGER;
+        for (let corner = 0; corner < 3; corner++) {
+          const src = tri[i + corner];
+          if (src === undefined) continue;
+          let dst = indexMap.get(src);
+          if (dst === undefined) {
+            dst = indexMap.size;
+            indexMap.set(src, dst);
+            localPos.push(
+              positions[src * 3],
+              positions[src * 3 + 1],
+              positions[src * 3 + 2],
+            );
+            localNorm.push(
+              normals[src * 3],
+              normals[src * 3 + 1],
+              normals[src * 3 + 2],
+            );
+            localBaseCol.push(
+              baseColors[src * 3],
+              baseColors[src * 3 + 1],
+              baseColors[src * 3 + 2],
+            );
+            localFaceAo.push(faceAo[src]);
+          }
+          localIdx.push(dst);
         }
-        localIdx.push(dst);
       }
-    }
 
-    return {
-      quadrantIndex,
-      positions: new Float32Array(localPos),
-      normals: new Float32Array(localNorm),
-      baseColors: new Float32Array(localBaseCol),
-      faceAo: new Uint8Array(localFaceAo),
-      trianglePaletteIndices: localTrianglePaletteIndices,
-      indices: new Uint32Array(localIdx),
-    };
-  });
+      return {
+        quadrantIndex,
+        positions: new Float32Array(localPos),
+        normals: new Float32Array(localNorm),
+        baseColors: new Float32Array(localBaseCol),
+        faceAo: new Uint8Array(localFaceAo),
+        trianglePaletteIndices: localTrianglePaletteIndices,
+        indices: new Uint32Array(localIdx),
+      };
+    });
+
+  const quadrantMeshes = buildQuadrants(quadrantTris, quadrantPaletteIndices);
+  const transparentQuadrantMeshes = buildQuadrants(
+    transparentQuadrantTris,
+    transparentQuadrantPaletteIndices,
+  );
 
   return {
     quadrantMeshes,
+    transparentQuadrantMeshes,
     chunkCoverage,
     chunkTopHeights,
     voxelSize,

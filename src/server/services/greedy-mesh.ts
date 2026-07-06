@@ -24,6 +24,9 @@
  * Per-quad block palette indices (2 × quadCount bytes, padded to 4-byte alignment)
  *   u16 typ — save block palette index for the rendered quad, 0xFFFF if out of range
  *
+ * Per-quad render kinds (quadCount bytes, padded to 4-byte alignment)
+ *   u8 renderKind — 1 opaque, 2 transparent
+ *
  * Per-vertex positions  (4 × quadCount × 12 bytes)
  *   u32 x   relative to worldX in 1/4096-cell fixed-point units
  *   u32 y   relative to worldY in 1/4096-cell fixed-point units
@@ -62,6 +65,7 @@ export interface BinaryQuad {
   typ: number;
   dir: number;
   packedAo: number;
+  renderKind: number;
 }
 
 /** Width/depth of one voxel region column in world blocks (4 chunks × 32 = 128) */
@@ -82,6 +86,7 @@ export function encodeBinaryQuads(
   let quadAo = new Uint8Array(capacity);
   let quadDirections = new Uint8Array(capacity);
   let quadPaletteIndices = new Uint16Array(capacity);
+  let quadRenderKinds = new Uint8Array(capacity);
   let vertPosX = new Uint32Array(capacity * 4);
   let vertPosY = new Uint32Array(capacity * 4);
   let vertPosZ = new Uint32Array(capacity * 4);
@@ -101,6 +106,9 @@ export function encodeBinaryQuads(
     const qp2 = new Uint16Array(capacity);
     qp2.set(quadPaletteIndices);
     quadPaletteIndices = qp2;
+    const qr2 = new Uint8Array(capacity);
+    qr2.set(quadRenderKinds);
+    quadRenderKinds = qr2;
     const vx2 = new Uint32Array(capacity * 4);
     vx2.set(vertPosX);
     vertPosX = vx2;
@@ -123,6 +131,7 @@ export function encodeBinaryQuads(
     quadAo[qi] = quad.packedAo;
     quadDirections[qi] = quad.dir === 1 ? 1 : 0;
     quadPaletteIndices[qi] = toWirePaletteIndex(quad.typ);
+    quadRenderKinds[qi] = quad.renderKind === 2 ? 2 : 1;
 
     vertPosX[vi] = toFixedPosition(quad.v0x);
     vertPosY[vi] = toFixedPosition(quad.v0y);
@@ -149,6 +158,8 @@ export function encodeBinaryQuads(
   const directionPadded = (directionBytes + 3) & ~3;
   const paletteBytes = quadCount * 2;
   const palettePadded = (paletteBytes + 3) & ~3;
+  const renderKindBytes = quadCount;
+  const renderKindPadded = (renderKindBytes + 3) & ~3;
   const posBytes = vertexCount * 12;
   const totalBytes =
     20 +
@@ -156,6 +167,7 @@ export function encodeBinaryQuads(
     aoPadded +
     directionPadded +
     palettePadded +
+    renderKindPadded +
     posBytes +
     4;
   const buf = new ArrayBuffer(totalBytes);
@@ -194,6 +206,17 @@ export function encodeBinaryQuads(
     off += 2;
   }
   off = 20 + colorPadded + aoPadded + directionPadded + palettePadded;
+
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadRenderKinds[qi] ?? 1);
+  }
+  off =
+    20 +
+    colorPadded +
+    aoPadded +
+    directionPadded +
+    palettePadded +
+    renderKindPadded;
 
   for (let vi = 0; vi < vertexCount; vi++) {
     view.setUint32(off, vertPosX[vi] ?? 0, true);

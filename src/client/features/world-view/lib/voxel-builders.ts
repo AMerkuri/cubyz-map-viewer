@@ -52,8 +52,17 @@ export function buildVoxelBorderLines(
 export function buildVoxelQuadrantSubMeshes(
   item: PendingVoxelMeshItem,
   voxelMaterial: THREE.Material,
+  transparentVoxelMaterial: THREE.Material,
 ): {
   subMeshes: {
+    quadrantIndex: number;
+    mesh: THREE.Mesh;
+    baseColors: Float32Array;
+    faceAo: Uint8Array;
+    trianglePaletteIndices: Uint32Array;
+    aoBoundarySignature: string;
+  }[];
+  transparentSubMeshes: {
     quadrantIndex: number;
     mesh: THREE.Mesh;
     baseColors: Float32Array;
@@ -64,41 +73,69 @@ export function buildVoxelQuadrantSubMeshes(
   minZ: number;
   maxZ: number;
 } {
-  const subMeshes: {
+  const buildSubMeshes = (
+    quadrantMeshes: typeof item.quadrantMeshes,
+    material: THREE.Material,
+    renderOrder: number,
+  ): {
     quadrantIndex: number;
     mesh: THREE.Mesh;
     baseColors: Float32Array;
     faceAo: Uint8Array;
     trianglePaletteIndices: Uint32Array;
     aoBoundarySignature: string;
-  }[] = [];
+  }[] => {
+    const subMeshes: {
+      quadrantIndex: number;
+      mesh: THREE.Mesh;
+      baseColors: Float32Array;
+      faceAo: Uint8Array;
+      trianglePaletteIndices: Uint32Array;
+      aoBoundarySignature: string;
+    }[] = [];
 
-  for (const quadrant of item.quadrantMeshes) {
-    if (quadrant.indices.length === 0) continue;
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute(
-      "position",
-      new THREE.BufferAttribute(quadrant.positions, 3),
-    );
-    geom.setAttribute("normal", new THREE.BufferAttribute(quadrant.normals, 3));
-    geom.setAttribute(
-      "color",
-      new THREE.BufferAttribute(quadrant.baseColors.slice(), 3),
-    );
-    geom.setIndex(new THREE.BufferAttribute(quadrant.indices, 1));
-    geom.computeBoundingBox();
-    geom.computeBoundingSphere();
+    for (const quadrant of quadrantMeshes) {
+      if (quadrant.indices.length === 0) continue;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute(
+        "position",
+        new THREE.BufferAttribute(quadrant.positions, 3),
+      );
+      geom.setAttribute(
+        "normal",
+        new THREE.BufferAttribute(quadrant.normals, 3),
+      );
+      geom.setAttribute(
+        "color",
+        new THREE.BufferAttribute(quadrant.baseColors.slice(), 3),
+      );
+      geom.setIndex(new THREE.BufferAttribute(quadrant.indices, 1));
+      geom.computeBoundingBox();
+      geom.computeBoundingSphere();
 
-    const mesh = new THREE.Mesh(geom, voxelMaterial);
-    subMeshes.push({
-      quadrantIndex: quadrant.quadrantIndex,
-      mesh,
-      baseColors: quadrant.baseColors,
-      faceAo: quadrant.faceAo,
-      trianglePaletteIndices: quadrant.trianglePaletteIndices,
-      aoBoundarySignature: "",
-    });
-  }
+      const mesh = new THREE.Mesh(geom, material);
+      mesh.renderOrder = renderOrder;
+      subMeshes.push({
+        quadrantIndex: quadrant.quadrantIndex,
+        mesh,
+        baseColors: quadrant.baseColors,
+        faceAo: quadrant.faceAo,
+        trianglePaletteIndices: quadrant.trianglePaletteIndices,
+        aoBoundarySignature: "",
+      });
+    }
 
-  return { subMeshes, minZ: item.minZ, maxZ: item.maxZ };
+    return subMeshes;
+  };
+
+  return {
+    subMeshes: buildSubMeshes(item.quadrantMeshes, voxelMaterial, 0),
+    transparentSubMeshes: buildSubMeshes(
+      item.transparentQuadrantMeshes,
+      transparentVoxelMaterial,
+      1,
+    ),
+    minZ: item.minZ,
+    maxZ: item.maxZ,
+  };
 }

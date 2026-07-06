@@ -423,6 +423,7 @@ export function handleVoxelWorkerMessage(args: {
     regionY,
     version,
     quadrantMeshes,
+    transparentQuadrantMeshes,
     chunkCoverage,
     chunkTopHeights,
     voxelSize,
@@ -489,6 +490,7 @@ export function handleVoxelWorkerMessage(args: {
     regionX,
     regionY,
     quadrantMeshes,
+    transparentQuadrantMeshes: transparentQuadrantMeshes ?? [],
     chunkCoverage: chunkCoverage ?? 0,
     chunkTopHeights: topHeights,
     voxelSize: voxelSize ?? resolvedLod,
@@ -514,6 +516,7 @@ export function buildQueuedVoxelMeshes(args: {
   preUploadScene: THREE.Scene;
   preUploadCamera: THREE.Camera;
   voxelMaterial: THREE.Material;
+  transparentVoxelMaterial: THREE.Material;
   markVoxelTileFresh: (key: string, version: number) => void;
   failedVoxels: Map<string, number>;
   missingVoxels: Set<string>;
@@ -537,6 +540,7 @@ export function buildQueuedVoxelMeshes(args: {
     preUploadScene,
     preUploadCamera,
     voxelMaterial,
+    transparentVoxelMaterial,
     markVoxelTileFresh,
     failedVoxels,
     missingVoxels,
@@ -576,15 +580,19 @@ export function buildQueuedVoxelMeshes(args: {
       : false;
     loadingVoxels.delete(item.key);
     if ((!existingTile || canReplaceExisting) && voxelGroup) {
-      const built = buildVoxelQuadrantSubMeshes(item, voxelMaterial);
-      if (built.subMeshes.length > 0) {
-        for (const sm of built.subMeshes) {
+      const built = buildVoxelQuadrantSubMeshes(
+        item,
+        voxelMaterial,
+        transparentVoxelMaterial,
+      );
+      if (built.subMeshes.length > 0 || built.transparentSubMeshes.length > 0) {
+        for (const sm of [...built.subMeshes, ...built.transparentSubMeshes]) {
           preUploadScene.add(sm.mesh);
         }
         renderer.setRenderTarget(preUploadTarget);
         renderer.render(preUploadScene, preUploadCamera);
         renderer.setRenderTarget(null);
-        for (const sm of built.subMeshes) {
+        for (const sm of [...built.subMeshes, ...built.transparentSubMeshes]) {
           preUploadScene.remove(sm.mesh);
         }
 
@@ -597,7 +605,7 @@ export function buildQueuedVoxelMeshes(args: {
         );
         borderLines.visible = false;
 
-        for (const sm of built.subMeshes) {
+        for (const sm of [...built.subMeshes, ...built.transparentSubMeshes]) {
           sm.mesh.visible = false;
           sm.mesh.userData.voxelKey = item.key;
           voxelGroup.add(sm.mesh);
@@ -610,6 +618,7 @@ export function buildQueuedVoxelMeshes(args: {
           regionY: item.regionY,
           voxelSize: item.voxelSize,
           subMeshes: built.subMeshes,
+          transparentSubMeshes: built.transparentSubMeshes,
           minZ: built.minZ,
           maxZ: built.maxZ,
           chunkCoverage: item.chunkCoverage,

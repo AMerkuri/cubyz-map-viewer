@@ -8,7 +8,7 @@ function detachVoxelTileFromScene(
   voxelGroup: THREE.Group | null,
   chunkBorderGroup: THREE.Group | null,
 ): void {
-  for (const sm of tile.subMeshes) {
+  for (const sm of [...tile.subMeshes, ...tile.transparentSubMeshes]) {
     voxelGroup?.remove(sm.mesh);
     sm.mesh.visible = false;
   }
@@ -21,7 +21,7 @@ function attachVoxelTileToScene(
   voxelGroup: THREE.Group | null,
   chunkBorderGroup: THREE.Group | null,
 ): void {
-  for (const sm of tile.subMeshes) {
+  for (const sm of [...tile.subMeshes, ...tile.transparentSubMeshes]) {
     sm.mesh.visible = false;
     voxelGroup?.add(sm.mesh);
   }
@@ -35,7 +35,7 @@ export function disposeVoxelTileResources(
   chunkBorderGroup: THREE.Group | null,
 ): void {
   detachVoxelTileFromScene(tile, voxelGroup, chunkBorderGroup);
-  for (const sm of tile.subMeshes) {
+  for (const sm of [...tile.subMeshes, ...tile.transparentSubMeshes]) {
     sm.mesh.geometry.dispose();
   }
   tile.borderLines.geometry.dispose();
