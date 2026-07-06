@@ -68,6 +68,16 @@ At a high level:
 - the client uses loaded voxel mesh bounds to keep nearby visible geometry detailed, while unloaded regions still rely on cheap region-aligned distance heuristics from the chunk index
 - the client may apply final visibility-dependent shading after LOD coverage is resolved, so the payload structure and face-data semantics must stay aligned across both sides
 
+### Sign Text Contract
+
+- sign text is served separately from the binary voxel mesh; the mesh payload stays geometry-only
+- `/api/signs/{lod}/{regionX}/{regionY}` returns a JSON array of per-region sign records, keyed by LOD and region coordinates consistent with the voxel/region addressing scheme, and routed through `VoxelMeshService`
+- each sign record has `position` (world block minimum corner, `X`/`Y` horizontal and `Z` vertical), `data` (orientation `0-19`), `text` (raw UTF-8 with `\n` preserved), and `corners` (four world-space corners of the sign's text plane)
+- the server recovers sign text by decoding the block-entity stream that trails entity-carrying `.region` chunk blobs and joins it with the block palette and sign shape classification; empty-text signs and non-sign block entities produce no record
+- the server sends the text-plane corners so the client does not re-derive orientation; the corners are computed from the same sign geometry that positions the board
+- signs with no records return an empty JSON array; regions with no signs and coarser LODs (`> 1`) return an empty array
+- the client renders sign text only at LOD `1`, as a single texture-mapped quad placed on the four corners, occluded by terrain, and invalidates cached sign records on `world-updated` and `terrain-updates-batch` events for affected regions
+
 ### Live Update Contract
 
 - save watching batches filesystem churn into grouped update events

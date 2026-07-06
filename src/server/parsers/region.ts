@@ -23,11 +23,24 @@ enum ChunkCompressionAlgo {
   DeflateWith8BitPalette = 5,
 }
 
+/**
+ * A raw block-entity record recovered from a chunk's block-entity stream.
+ * `positionIndex` is the chunk-local `u15` packed as `(x << 10) | (y << 5) | z`
+ * within the 32x32x32 chunk. `payload` is the raw entity bytes (for signs this
+ * is the UTF-8 text); interpretation is left to higher layers.
+ */
+export interface ChunkEntityRecord {
+  positionIndex: number;
+  payload: Buffer;
+}
+
 export interface ChunkData {
   /** Block values as u32 array (32768 entries).
    *  block = (typ & 0xFFFF) | (data << 16)
    *  typ = block palette index, data = orientation/variant */
   blocks: Uint32Array;
+  /** Raw block-entity records recovered from the block-entity stream. */
+  entities: ChunkEntityRecord[];
   /** Position within region (0-3 for each axis) */
   rx: number;
   ry: number;
@@ -87,8 +100,8 @@ function parseRegionBuffer(
     const rz = i % REGION_SIZE;
 
     try {
-      const blocks = decompressChunk(reader, chunkLengths[i]);
-      chunks[i] = { blocks, rx, ry, rz };
+      const { blocks, entities } = decompressChunk(reader, chunkLengths[i]);
+      chunks[i] = { blocks, entities, rx, ry, rz };
     } catch (e) {
       // Skip malformed chunks
       console.warn(
@@ -101,8 +114,17 @@ function parseRegionBuffer(
   return { chunks, worldX, worldY, worldZ, voxelSize };
 }
 
-function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
+interface DecompressedChunk {
+  blocks: Uint32Array;
+  entities: ChunkEntityRecord[];
+}
+
+function decompressChunk(
+  reader: BinaryReader,
+  length: number,
+): DecompressedChunk {
   const startPos = reader.position;
+  const chunkEnd = startPos + length;
   const algo = reader.readU32() as ChunkCompressionAlgo;
 
   switch (algo) {
@@ -110,13 +132,14 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
       const blockValue = reader.readU32();
       const blocks = new Uint32Array(CHUNK_VOLUME);
       blocks.fill(blockValue);
-      // Seek to end of chunk data
-      reader.seek(startPos + length);
-      return blocks;
+      // Uniform chunks carry a trailing block-entity stream after the header.
+      const entities = decodeBlockEntityStream(reader, chunkEnd);
+      reader.seek(chunkEnd);
+      return { blocks, entities };
     }
 
     case ChunkCompressionAlgo.DeflateWith8BitPalette: {
-      // algo 5: varInt compressedSize + deflate + optional block entity data
+      // algo 5: varInt compressedSize + deflate + block entity data
       const paletteLen = reader.readU8();
       const palette = new Uint32Array(paletteLen);
       for (let i = 0; i < paletteLen; i++) {
@@ -131,9 +154,10 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
         const paletteIdx = decompressed[i];
         blocks[i] = paletteIdx < paletteLen ? palette[paletteIdx] : 0;
       }
-      // Seek to end of chunk data (skip any block entity data)
-      reader.seek(startPos + length);
-      return blocks;
+      // The block-entity stream is whatever remains after the deflate blob.
+      const entities = decodeBlockEntityStream(reader, chunkEnd);
+      reader.seek(chunkEnd);
+      return { blocks, entities };
     }
 
     case ChunkCompressionAlgo.DeflateWith8BitPaletteNoBlockEntities: {
@@ -152,12 +176,12 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
         const paletteIdx = decompressed[i];
         blocks[i] = paletteIdx < paletteLen ? palette[paletteIdx] : 0;
       }
-      reader.seek(startPos + length);
-      return blocks;
+      reader.seek(chunkEnd);
+      return { blocks, entities: [] };
     }
 
     case ChunkCompressionAlgo.Deflate: {
-      // algo 4: varInt compressedSize + deflate + optional block entity data
+      // algo 4: varInt compressedSize + deflate + block entity data
       const compressedSize = reader.readVarInt();
       const compressed = reader.readBytes(compressedSize);
       const decompressed = inflateRawSync(compressed);
@@ -167,8 +191,10 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
       for (let i = 0; i < CHUNK_VOLUME; i++) {
         blocks[i] = dataReader.readU32();
       }
-      reader.seek(startPos + length);
-      return blocks;
+      // The block-entity stream is whatever remains after the deflate blob.
+      const entities = decodeBlockEntityStream(reader, chunkEnd);
+      reader.seek(chunkEnd);
+      return { blocks, entities };
     }
 
     case ChunkCompressionAlgo.DeflateNoBlockEntities: {
@@ -182,8 +208,8 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
       for (let i = 0; i < CHUNK_VOLUME; i++) {
         blocks[i] = dataReader.readU32();
       }
-      reader.seek(startPos + length);
-      return blocks;
+      reader.seek(chunkEnd);
+      return { blocks, entities: [] };
     }
 
     case ChunkCompressionAlgo.DeflateWithPositionNoBlockEntities: {
@@ -198,13 +224,72 @@ function decompressChunk(reader: BinaryReader, length: number): Uint32Array {
       for (let i = 0; i < CHUNK_VOLUME; i++) {
         blocks[i] = dataReader.readU32();
       }
-      reader.seek(startPos + length);
-      return blocks;
+      reader.seek(chunkEnd);
+      return { blocks, entities: [] };
     }
 
     default:
       console.warn(`Unknown compression algo: ${algo}`);
-      reader.seek(startPos + length);
-      return new Uint32Array(CHUNK_VOLUME);
+      reader.seek(chunkEnd);
+      return { blocks: new Uint32Array(CHUNK_VOLUME), entities: [] };
   }
+}
+
+const BLOCK_ENTITY_ALGO_RAW = 0;
+
+/**
+ * Decode the block-entity stream that trails an entity-carrying chunk blob.
+ *
+ * Layout (from `reader.position` up to `chunkEnd`):
+ *   - optional leading `u8` compression algorithm byte (`0` = raw), present
+ *     only when the stream is non-empty
+ *   - zero or more records: `u16` big-endian position index, LEB128 varint
+ *     payload length, then that many raw payload bytes
+ *
+ * Parsing is fully defensive: every read is bounds-checked against `chunkEnd`,
+ * and on truncation or an unknown algorithm the records parsed so far are
+ * returned instead of throwing.
+ */
+function decodeBlockEntityStream(
+  reader: BinaryReader,
+  chunkEnd: number,
+): ChunkEntityRecord[] {
+  const records: ChunkEntityRecord[] = [];
+  // Empty stream: nothing to decode, no leading algo byte.
+  if (reader.position >= chunkEnd) return records;
+
+  const algo = reader.readU8();
+  // Only the raw (uncompressed) block-entity encoding is supported. Any other
+  // value means a format we cannot decode; bail out with no records.
+  if (algo !== BLOCK_ENTITY_ALGO_RAW) return records;
+
+  while (reader.position + 2 <= chunkEnd) {
+    const positionIndex = reader.readU16();
+    const payloadLength = readVarIntBounded(reader, chunkEnd);
+    if (payloadLength === null) break;
+    if (payloadLength < 0 || reader.position + payloadLength > chunkEnd) break;
+    const payload = Buffer.from(reader.readBytes(payloadLength));
+    records.push({ positionIndex, payload });
+  }
+
+  return records;
+}
+
+/**
+ * Read a LEB128 varint but never read past `chunkEnd`. Returns `null` when the
+ * varint is truncated so the caller can stop parsing safely.
+ */
+function readVarIntBounded(
+  reader: BinaryReader,
+  chunkEnd: number,
+): number | null {
+  let result = 0;
+  let shift = 0;
+  while (reader.position < chunkEnd) {
+    const byte = reader.readU8();
+    result |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) return result;
+    shift += 7;
+  }
+  return null;
 }

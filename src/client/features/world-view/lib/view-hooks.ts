@@ -569,11 +569,14 @@ export function useWorld3DUpdateSubscription(args: {
   subscribe: World3DViewProps["subscribe"];
   handleTileUpdate: (lod: number, tileX: number, tileY: number) => void;
   handleRegionUpdate: (lod: number, regionX: number, regionY: number) => void;
+  handleWorldUpdate: () => void;
 }): void {
-  const { subscribe, handleTileUpdate, handleRegionUpdate } = args;
+  const { subscribe, handleTileUpdate, handleRegionUpdate, handleWorldUpdate } =
+    args;
 
   const onHandleTileUpdate = useEffectEvent(handleTileUpdate);
   const onHandleRegionUpdate = useEffectEvent(handleRegionUpdate);
+  const onHandleWorldUpdate = useEffectEvent(handleWorldUpdate);
 
   useEffect(() => {
     const unsubBatch = subscribe("terrain-updates-batch", (event) => {
@@ -591,8 +594,13 @@ export function useWorld3DUpdateSubscription(args: {
       }
     });
 
+    const unsubWorld = subscribe("world-updated", () => {
+      onHandleWorldUpdate();
+    });
+
     return () => {
       unsubBatch();
+      unsubWorld();
     };
   }, [subscribe]);
 }

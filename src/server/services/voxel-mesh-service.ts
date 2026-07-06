@@ -4,6 +4,7 @@ import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
 import type { BlockShapeTable } from "./block-shape-table.js";
 import { LRUCache } from "./cache.js";
+import { generateSignRecords, type SignRecord } from "./sign-records.js";
 import { computeVoxelSourceSignature } from "./voxel-source-signature.js";
 import {
   type InstrumentedPoolResult,
@@ -114,6 +115,7 @@ export class VoxelMeshService {
   private readonly cache: LRUCache<string, CachedVoxelMesh>;
   private readonly savePath: string;
   private readonly compressionConfig: VoxelCompressionConfig;
+  private readonly blockShapes: BlockShapeTable;
   private readonly blockShapeSignature: string;
   private readonly inFlight = new Map<string, InFlightJob>();
   private globalEpoch = 0;
@@ -142,6 +144,7 @@ export class VoxelMeshService {
     },
   ) {
     this.savePath = savePath;
+    this.blockShapes = blockShapes;
     this.blockShapeSignature = blockShapes.signature;
     this.pool = new VoxelWorkerPool(
       savePath,
@@ -357,6 +360,26 @@ export class VoxelMeshService {
         byteLength: variant.buf.byteLength,
       },
     };
+  }
+
+  /**
+   * Return sign records for a region column at the given LOD. Sign text is
+   * gated to the sign LOD (1); other LODs return an empty array. Records are
+   * derived from the region parser's block-entity stream joined against the
+   * block shape table, keeping the binary voxel mesh payload geometry-only.
+   */
+  async getSignRecords(
+    lod: number,
+    regionX: number,
+    regionY: number,
+  ): Promise<SignRecord[]> {
+    return generateSignRecords(
+      this.savePath,
+      this.blockShapes,
+      lod,
+      regionX,
+      regionY,
+    );
   }
 
   async benchmarkVoxelMesh(

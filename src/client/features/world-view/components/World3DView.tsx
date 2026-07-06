@@ -47,6 +47,7 @@ import {
   disposePlayerMarkerModel,
   disposeTextSprite,
 } from "../lib/primitives.js";
+import { SignLayerManager } from "../lib/sign-layer.js";
 import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
 import { publishChunkStats } from "../lib/stats.js";
 import {
@@ -333,6 +334,14 @@ export function World3DView({
   const avatarAssetCacheRef = useRef<AvatarAssetCache>(new Map());
   const avatarAssetsLoadGenerationRef = useRef(0);
   const activeFocusLodRef = useRef<number>(1);
+  const signLayerRef = useRef<SignLayerManager | null>(null);
+  if (!signLayerRef.current) {
+    signLayerRef.current = new SignLayerManager({
+      queryClient,
+      getActiveLod: () => activeFocusLodRef.current,
+      requestRender: () => {},
+    });
+  }
   const activeTerrainLodRef = useRef<number>(1);
   const voxelFocusStateRef = useRef<VoxelFocusState>({
     point: new THREE.Vector3(),
@@ -379,6 +388,13 @@ export function World3DView({
     return () => {
       avatarAssetsLoadGenerationRef.current += 1;
       disposeAvatarAssetCache(cache);
+    };
+  }, []);
+
+  useEffect(() => {
+    const manager = signLayerRef.current;
+    return () => {
+      manager?.dispose(sceneRef.current?.scene ?? null);
     };
   }, []);
 
@@ -897,6 +913,16 @@ export function World3DView({
     });
   }
 
+  function syncSignLayer() {
+    const manager = signLayerRef.current;
+    const scene = sceneRef.current;
+    if (!manager || !scene) return;
+    if (!manager.isAttached()) {
+      manager.attachTo(scene.scene);
+    }
+    manager.sync(loadedVoxelsRef.current.keys());
+  }
+
   function refreshDebugLabels() {
     refreshDebugLabelsManaged({
       group: debugLabelGroupRef.current,
@@ -1015,7 +1041,14 @@ export function World3DView({
     });
   }
 
+  function handleWorldUpdate() {
+    queryClientRef.current.removeQueries({ queryKey: ["signs"] });
+    signLayerRef.current?.clear();
+    syncSignLayer();
+  }
+
   function handleRegionUpdate(lod: number, regionX: number, regionY: number) {
+    signLayerRef.current?.invalidateRegion(regionX, regionY);
     handleVoxelRegionUpdate({
       lod,
       regionX,
@@ -1085,6 +1118,7 @@ export function World3DView({
         onShareStateChangeRef.current(state);
       },
     });
+    syncSignLayer();
   }
 
   function handleWorkerMessage(data: WorkerOut) {
@@ -1351,6 +1385,7 @@ export function World3DView({
     subscribe,
     handleTileUpdate,
     handleRegionUpdate,
+    handleWorldUpdate,
   });
 
   useWorld3DFlyToEffect({

@@ -18,6 +18,7 @@ import { createBiomesRouter } from "./api/biomes.js";
 import { errorHandler } from "./api/error-handler.js";
 import { createPlayersRouter } from "./api/players.js";
 import { requestContextMiddleware } from "./api/request-context.js";
+import { createSignsRouter } from "./api/signs.js";
 import { createTerrainRouter } from "./api/terrain.js";
 import { createVoxelsRouter } from "./api/voxels.js";
 import { createWorldRouter } from "./api/world.js";
@@ -493,6 +494,7 @@ async function main() {
     "/api/voxels",
     createVoxelsRouter(voxelMeshService, VOXEL_PREFERRED_ENCODING),
   );
+  app.use("/api/signs", createSignsRouter(voxelMeshService));
 
   app.get("/api/blocks/colors", (_req, res) => {
     res.json(colorMap.getAllBlockColors());
@@ -719,6 +721,7 @@ async function main() {
         "GET /api/terrain/:lod/:x/:y",
         "GET /api/biomes/:lod/:x/:y",
         "GET /api/voxels/:lod/:rx/:ry",
+        "GET /api/signs/:lod/:rx/:ry",
         "GET /api/blocks/colors",
         "WS /ws",
       ],
