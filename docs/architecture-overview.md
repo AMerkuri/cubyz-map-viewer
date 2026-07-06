@@ -69,15 +69,22 @@ At a high level:
 - the main event names are `players-updated`, `world-updated`, `surface-index-changed`, and `terrain-updates-batch`
 - `players-updated` is a server-side invalidation hint only: the server waits for a short quiet window, reloads `/api/players`, compares a semantic player snapshot, and only broadcasts when the player view state actually changed
 - `/api/players` includes `isActive` as the server-owned player activity flag for client styling, while stale player removal uses a longer retention window
+- `/api/players` also includes `entityModelId`, the resolved supported avatar model ID for each player; it is part of the semantic snapshot, so avatar-only save changes trigger `players-updated`
 - if event names, payload shapes, or update semantics change, update the server, client, and docs together
+
+### Player Avatar Contract
+
+- each player's avatar is decoded server-side from the saved `cubyz:model` entity component in `players/*.zon` (`entity.components`, URL-safe base64) and resolved through `entity_component_palette.zig.zon` and `entity_model_palette.zig.zon`
+- resolution is conservative: missing, malformed, out-of-range, or unsupported component data falls back to the default avatar `cubyz:snale`
+- the viewer renders the supported avatars `cubyz:snale`, `cubyz:snail`, `cubyz:moffalo`, and `cubyz:cubert`
 
 ### Player Marker Asset Contract
 
 - player marker models are discovered server-side from layered Cubyz `entityModels/**/*.zig.zon` descriptors
 - layered asset precedence is core Cubyz assets first and save assets second, so matching save asset files override core files for descriptors, GLB models, and PNG textures
-- `/api/assets/player-marker` returns the selected player marker manifest with `available`, `entityModelId`, `modelUrl`, `textureUrl`, `height`, and `coordinateSystem`
-- the selected descriptor must be tagged `.playerModel` and have resolvable `model` and `defaultTexture` references; `cubyz:snale` is preferred when loadable, otherwise the first loadable `.playerModel` by stable ID is used
-- when no loadable player model exists, the manifest returns `available: false` and the client keeps rendering fallback dot markers
+- `/api/assets/player-marker/:entityModelId` returns the manifest for a specific supported avatar with `available`, `entityModelId`, `modelUrl`, `textureUrl`, `height`, and `coordinateSystem`; `/api/assets/player-marker` remains as the default `cubyz:snale` manifest
+- a resolvable descriptor must be tagged `.playerModel` or be one of the supported avatar IDs, and must have resolvable `model` and `defaultTexture` references
+- when a requested avatar has no loadable descriptor, the manifest returns `available: false` and the client keeps rendering the default avatar or fallback dot markers
 - model and texture URLs from the manifest are opaque server-generated asset URLs; the browser must not construct filesystem paths directly
 
 ## Documentation Map

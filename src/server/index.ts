@@ -109,6 +109,7 @@ type PlayerSemanticSnapshot = Array<{
   energy: number;
   spawnPos: [number, number, number];
   isActive: boolean;
+  entityModelId: string;
 }>;
 
 function createPlayerSemanticSignature(players: PlayerData[]): string {
@@ -120,6 +121,7 @@ function createPlayerSemanticSignature(players: PlayerData[]): string {
     energy: player.energy,
     spawnPos: player.spawnPos,
     isActive: player.isActive,
+    entityModelId: player.entityModelId,
   }));
   return JSON.stringify(snapshot);
 }

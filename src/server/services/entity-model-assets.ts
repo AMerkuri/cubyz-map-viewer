@@ -38,29 +38,68 @@ const ENTITY_MODEL_TAG = "playerModel";
 const DEFAULT_PLAYER_MODEL_ID = "cubyz:snale";
 const FALLBACK_HEIGHT = 2;
 
+/**
+ * Avatars the viewer explicitly renders as player markers. These are allowed
+ * even when their descriptor lacks the `.playerModel` tag, because Cubyz's
+ * `/avatar` command can assign any entity model to a player.
+ */
+const SUPPORTED_PLAYER_MODEL_IDS = new Set<string>([
+  "cubyz:snale",
+  "cubyz:snail",
+  "cubyz:moffalo",
+  "cubyz:cubert",
+]);
+
+const UNAVAILABLE_MANIFEST: PlayerMarkerAssetManifest = {
+  available: false,
+  entityModelId: null,
+  modelUrl: null,
+  textureUrl: null,
+  height: null,
+  coordinateSystem: null,
+};
+
 export class EntityModelAssetService {
   private readonly assetFiles = new Map<string, string>();
-  private manifest: PlayerMarkerAssetManifest | null = null;
+  private readonly manifestsByModelId = new Map<
+    string,
+    PlayerMarkerAssetManifest
+  >();
+  private descriptorsPromise: Promise<
+    Map<string, EntityModelDescriptor>
+  > | null = null;
 
   constructor(private readonly assetSources: readonly AssetNamespaceSource[]) {}
 
-  async getPlayerMarkerManifest(): Promise<PlayerMarkerAssetManifest> {
-    if (this.manifest) {
-      return this.manifest;
+  /**
+   * Resolve the player marker manifest for a specific supported avatar model
+   * ID. Missing or unloadable avatars resolve to an unavailable manifest rather
+   * than throwing, so player data loading never fails.
+   */
+  async getPlayerMarkerManifestById(
+    entityModelId: string,
+  ): Promise<PlayerMarkerAssetManifest> {
+    const cached = this.manifestsByModelId.get(entityModelId);
+    if (cached) {
+      return cached;
     }
 
-    const descriptors = await this.loadPlayerModelDescriptors();
-    const selected = this.selectPlayerModelDescriptor(descriptors);
+    let descriptors: Map<string, EntityModelDescriptor>;
+    try {
+      descriptors = await this.getPlayerModelDescriptors();
+    } catch (error) {
+      logger.warn("Failed to load entity model descriptors", {
+        entityModelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.manifestsByModelId.set(entityModelId, UNAVAILABLE_MANIFEST);
+      return UNAVAILABLE_MANIFEST;
+    }
+
+    const selected = descriptors.get(entityModelId);
     if (!selected) {
-      this.manifest = {
-        available: false,
-        entityModelId: null,
-        modelUrl: null,
-        textureUrl: null,
-        height: null,
-        coordinateSystem: null,
-      };
-      return this.manifest;
+      this.manifestsByModelId.set(entityModelId, UNAVAILABLE_MANIFEST);
+      return UNAVAILABLE_MANIFEST;
     }
 
     const modelToken = this.registerAssetFile("model", selected.modelPath);
@@ -68,7 +107,7 @@ export class EntityModelAssetService {
       "texture",
       selected.texturePath,
     );
-    this.manifest = {
+    const manifest: PlayerMarkerAssetManifest = {
       available: true,
       entityModelId: selected.id,
       modelUrl: `/api/assets/entity-models/files/${modelToken}`,
@@ -76,15 +115,34 @@ export class EntityModelAssetService {
       height: selected.height,
       coordinateSystem: selected.coordinateSystem,
     };
-    return this.manifest;
+    this.manifestsByModelId.set(entityModelId, manifest);
+    return manifest;
+  }
+
+  /**
+   * Legacy default player marker manifest. Resolves the `cubyz:snale` avatar
+   * using the same descriptor and asset resolution rules.
+   */
+  async getPlayerMarkerManifest(): Promise<PlayerMarkerAssetManifest> {
+    return this.getPlayerMarkerManifestById(DEFAULT_PLAYER_MODEL_ID);
   }
 
   async getEntityModelAssetFile(token: string): Promise<string | null> {
-    await this.getPlayerMarkerManifest();
     return this.assetFiles.get(token) ?? null;
   }
 
-  private async loadPlayerModelDescriptors(): Promise<EntityModelDescriptor[]> {
+  private getPlayerModelDescriptors(): Promise<
+    Map<string, EntityModelDescriptor>
+  > {
+    if (!this.descriptorsPromise) {
+      this.descriptorsPromise = this.loadPlayerModelDescriptors();
+    }
+    return this.descriptorsPromise;
+  }
+
+  private async loadPlayerModelDescriptors(): Promise<
+    Map<string, EntityModelDescriptor>
+  > {
     const descriptors = new Map<string, EntityModelDescriptor>();
 
     for (const source of this.assetSources) {
@@ -96,9 +154,16 @@ export class EntityModelAssetService {
       );
     }
 
-    return [...descriptors.values()].filter((descriptor) =>
-      descriptor.tags.has(ENTITY_MODEL_TAG),
-    );
+    const playerModels = new Map<string, EntityModelDescriptor>();
+    for (const descriptor of descriptors.values()) {
+      if (
+        descriptor.tags.has(ENTITY_MODEL_TAG) ||
+        SUPPORTED_PLAYER_MODEL_IDS.has(descriptor.id)
+      ) {
+        playerModels.set(descriptor.id, descriptor);
+      }
+    }
+    return playerModels;
   }
 
   private async scanDescriptorDir(
@@ -192,20 +257,6 @@ export class EntityModelAssetService {
       });
       return null;
     }
-  }
-
-  private selectPlayerModelDescriptor(
-    descriptors: EntityModelDescriptor[],
-  ): EntityModelDescriptor | null {
-    return (
-      descriptors.find(
-        (descriptor) => descriptor.id === DEFAULT_PLAYER_MODEL_ID,
-      ) ??
-      [...descriptors].sort((left, right) =>
-        left.id.localeCompare(right.id),
-      )[0] ??
-      null
-    );
   }
 
   private async resolveEntityModelAsset(

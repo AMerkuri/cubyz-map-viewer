@@ -233,6 +233,9 @@ export function createGrayscaleTexture(texture: THREE.Texture): THREE.Texture {
   grayscaleTexture.wrapS = texture.wrapS;
   grayscaleTexture.wrapT = texture.wrapT;
   grayscaleTexture.generateMipmaps = texture.generateMipmaps;
+  // Match the source texture's vertical orientation. The grayscale canvas is
+  // drawn from an already-oriented source, so re-flipping would double-flip.
+  grayscaleTexture.flipY = false;
   grayscaleTexture.needsUpdate = true;
   return grayscaleTexture;
 }
@@ -267,37 +270,38 @@ export function createPlayerMarkerModel(
 
 function clonePlayerMarkerMaterial(
   material: THREE.Material | THREE.Material[],
-  fallbackTexture: THREE.Texture,
+  markerTexture: THREE.Texture,
   underground: boolean,
 ): THREE.Material | THREE.Material[] {
   if (Array.isArray(material)) {
-    return material.map((mat) =>
-      cloneSinglePlayerMarkerMaterial(mat, fallbackTexture, underground),
+    return material.map(() =>
+      createSinglePlayerMarkerMaterial(markerTexture, underground),
     );
   }
-  return cloneSinglePlayerMarkerMaterial(
-    material,
-    fallbackTexture,
-    underground,
-  );
+  return createSinglePlayerMarkerMaterial(markerTexture, underground);
 }
 
-function cloneSinglePlayerMarkerMaterial(
-  material: THREE.Material,
-  fallbackTexture: THREE.Texture,
+/**
+ * Cubyz renders entity models unlit with the entity's own default texture bound
+ * to every mesh regardless of the GLB material. Some avatar GLBs (cubert,
+ * snail, moffalo) ship no materials at all, so relying on the imported material
+ * leaves them untextured and lighting-dependent. Build an unlit basic material
+ * that always samples the manifest texture to match Cubyz.
+ */
+function createSinglePlayerMarkerMaterial(
+  markerTexture: THREE.Texture,
   underground: boolean,
 ): THREE.Material {
-  const cloned = material.clone();
-  if ("map" in cloned && cloned.map === null) {
-    cloned.map = fallbackTexture;
-  }
-  cloned.transparent = true;
-  cloned.alphaTest = Math.max(cloned.alphaTest, 0.1);
-  cloned.side = THREE.DoubleSide;
-  cloned.depthTest = false;
-  cloned.depthWrite = false;
-  cloned.opacity = underground ? 0.6 : 1;
-  return cloned;
+  const material = new THREE.MeshBasicMaterial({
+    map: markerTexture,
+    transparent: true,
+    alphaTest: 0.5,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: true,
+    opacity: underground ? 0.6 : 1,
+  });
+  return material;
 }
 
 export function disposePlayerMarkerTemplate(template: THREE.Object3D) {

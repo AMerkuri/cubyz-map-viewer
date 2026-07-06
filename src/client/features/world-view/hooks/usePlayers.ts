@@ -16,6 +16,8 @@ export interface PlayerData {
   spawnPos: [number, number, number];
   lastSeen: number;
   isActive: boolean;
+  /** Resolved supported avatar model ID, defaulting to `cubyz:snale`. */
+  entityModelId: string;
 }
 
 async function fetchPlayers(): Promise<PlayerData[]> {

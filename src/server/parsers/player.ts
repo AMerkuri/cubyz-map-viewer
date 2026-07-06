@@ -3,7 +3,12 @@
  */
 
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import {
+  type EntityPalettes,
+  loadEntityPalettes,
+  resolveAvatarModelId,
+} from "./player-avatar.js";
 import { parseZon, type ZonValue } from "./zon.js";
 
 export const DEFAULT_PLAYER_ACTIVE_WINDOW_MS = 60 * 1000;
@@ -26,10 +31,13 @@ export interface PlayerData {
   lastSeen: number;
   /** True when the file was modified within the configured active window. */
   isActive: boolean;
+  /** Resolved supported avatar model ID, defaulting to `cubyz:snale`. */
+  entityModelId: string;
 }
 
 async function parsePlayerFile(
   filePath: string,
+  palettes: EntityPalettes,
   options: PlayerLoadOptions = {},
 ): Promise<PlayerData> {
   const [text, fileStat] = await Promise.all([
@@ -42,6 +50,8 @@ async function parsePlayerFile(
   const pos = (entity.position ?? [0, 0, 0]) as number[];
   const rot = (entity.rotation ?? [0, 0, 0]) as number[];
   const spawnPos = (parsed.playerSpawnPos ?? [0, 0, 0]) as number[];
+  const components =
+    typeof entity.components === "string" ? entity.components : null;
 
   const lastSeen = fileStat.mtimeMs;
   const now = options.now ?? Date.now();
@@ -58,6 +68,7 @@ async function parsePlayerFile(
     spawnPos: [spawnPos[0] ?? 0, spawnPos[1] ?? 0, spawnPos[2] ?? 0],
     lastSeen,
     isActive,
+    entityModelId: resolveAvatarModelId(components, palettes),
   };
 }
 
@@ -68,6 +79,13 @@ export async function loadAllPlayers(
   try {
     const now = options.now ?? Date.now();
     const retentionMs = options.retentionMs ?? DEFAULT_PLAYER_RETENTION_MS;
+    const palettes = await loadEntityPalettes(dirname(playersDir)).catch(
+      () =>
+        ({
+          modelComponentIndex: null,
+          modelPaletteEntries: [],
+        }) satisfies EntityPalettes,
+    );
     const files = await readdir(playersDir);
     const zonFiles = files
       .filter((f) => f.endsWith(".zon"))
@@ -80,7 +98,7 @@ export async function loadAllPlayers(
     const players: PlayerData[] = [];
     for (const file of zonFiles) {
       try {
-        const player = await parsePlayerFile(join(playersDir, file), {
+        const player = await parsePlayerFile(join(playersDir, file), palettes, {
           ...options,
           now,
         });

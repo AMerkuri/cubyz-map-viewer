@@ -1,10 +1,4 @@
-# Entity Model Assets
-
-## Purpose
-
-Define how Cubyz entity model assets are resolved and exposed for map viewer player marker rendering.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Player avatar model resolution
 The server SHALL resolve each player's saved avatar model ID from Cubyz player save data and expose the resolved ID in the `/api/players` payload.
@@ -20,6 +14,8 @@ The server SHALL resolve each player's saved avatar model ID from Cubyz player s
 #### Scenario: Avatar changes in player save
 - **WHEN** the resolved player avatar model ID changes in `players/*.zon`
 - **THEN** the server treats the player semantic state as changed and emits the existing `players-updated` invalidation event after the configured debounce flow
+
+## MODIFIED Requirements
 
 ### Requirement: Player marker manifest
 The server SHALL expose player marker asset manifests derived from layered Cubyz `entityModels` descriptors for supported player avatar model IDs.

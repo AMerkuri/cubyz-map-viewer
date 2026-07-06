@@ -24,12 +24,13 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 ## Route Surface
 
 - `/api/world`, `/api/world/surface-index`, `/api/world/chunk-index`: bootstrap world and index data
-- `/api/players`: parsed player data with server-owned `isActive`
+- `/api/players`: parsed player data with server-owned `isActive` and resolved `entityModelId`
 - `/api/terrain/:lod/:x/:y`: seam-safe terrain JSON built from the same-LOD 3x3 surface neighborhood; cached with ETag
 - `/api/biomes/:lod/:x/:y`: grouped biome-label regions from `.surface` data
 - `/api/voxels/:lod/:regionX/:regionY`: binary voxel mesh payloads with explicit `br`/`gzip` negotiation, ETags, and queue/timing headers
-- `/api/assets/player-marker`: player marker asset manifest derived from layered `entityModels` descriptors
-- `/api/assets/entity-models/files/:token`: opaque, manifest-addressable GLB/PNG entity model asset serving; tokens resolve only files registered by the player marker manifest
+- `/api/assets/player-marker`: default `cubyz:snale` player marker asset manifest derived from layered `entityModels` descriptors
+- `/api/assets/player-marker/:entityModelId`: player marker asset manifest for a specific supported avatar model ID
+- `/api/assets/entity-models/files/:token`: opaque, manifest-addressable GLB/PNG entity model asset serving; tokens resolve only files registered by a player marker manifest
 - `/api/health`: simple liveness endpoint
 
 ## Voxel Pipeline
@@ -51,11 +52,19 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 - That layered lookup is used for biome/block assets and entity model descriptor/model/texture resolution.
 - `BlockShapeTable` scans `blocks/**/*.zig.zon`, applies inherited `_defaults.zig.zon` values by directory, resolves static `.model` references against `assets/*/models/*.obj`, and records palette-indexed cube, air, supported model, or supported semantic shapes.
 - Supported static/model block rotations are `cubyz:no_rotation`, `cubyz:planar`, and `cubyz:torch`. Supported generated/data-driven semantic rotations are `cubyz:stairs`, `cubyz:fence`, `cubyz:branch`, `cubyz:carpet`, `cubyz:sign`, `cubyz:hanging`, and selected `cubyz:direction` model blocks. Known cube-geometry rotations such as `cubyz:decayable`, `cubyz:log`, and `cubyz:ore` are recognized as cube shapes without warnings. Unsupported rotation metadata, missing model assets, malformed semantic model data, or unparseable OBJ models log a once-per-block warning and keep startup successful by using fallback shape behavior.
-- `EntityModelAssetService` scans `entityModels/**/*.zig.zon`, parses descriptors with the ZON parser, filters to loadable `.playerModel` descriptors, and selects `cubyz:snale` before falling back to the first stable entity model ID.
+- `EntityModelAssetService` scans `entityModels/**/*.zig.zon`, parses descriptors with the ZON parser, and keeps descriptors that are tagged `.playerModel` or are one of the supported avatar IDs (`cubyz:snale`, `cubyz:snail`, `cubyz:moffalo`, `cubyz:cubert`). Supported avatar IDs are allowed even without the tag because Cubyz's `/avatar` command can assign any entity model to a player.
+- Manifests are resolved per entity model ID and cached; `/api/assets/player-marker/:entityModelId` returns the manifest for a requested avatar, and `/api/assets/player-marker` returns the default `cubyz:snale` manifest through the same resolver.
 - The player marker manifest contains `available`, `entityModelId`, `modelUrl`, `textureUrl`, `height`, and `coordinateSystem`.
 - Descriptors with missing `model` or `defaultTexture` references, invalid namespaced IDs, or unresolved `entityModels/models/*.glb` / `entityModels/textures/*.png` assets are skipped rather than returned as broken manifests.
-- If no loadable player model descriptor exists, `/api/assets/player-marker` returns HTTP 200 with `available: false` so player data and fallback markers keep working.
-- Entity model file serving uses opaque tokens generated from manifest-resolved files. The route does not accept arbitrary relative paths or namespace filesystem paths from the client.
+- If a requested avatar has no loadable descriptor, the manifest route returns HTTP 200 with `available: false` so player data and fallback markers keep working.
+- Entity model file serving uses opaque tokens generated from manifest-resolved files, registered only when a manifest referencing them is generated. The route does not accept arbitrary relative paths or namespace filesystem paths from the client.
+
+### Player Avatar Resolution
+
+- `loadEntityPalettes` reads `entity_component_palette.zig.zon` and `entity_model_palette.zig.zon` for the active save, caching per player-list load; missing palette files degrade to the default avatar.
+- Player parsing decodes each player's `entity.components` URL-safe base64 stream using Cubyz varint and sized-slice encoding: repeated `(componentId varint, version varint, size-prefixed data)` triples. The `cubyz:model` component's payload is a single varint entity-model palette index resolved through `entity_model_palette.zig.zon`.
+- `resolveAvatarModelId` returns `cubyz:snale` when component data is missing, malformed, the palettes are unavailable, the model component is absent, the palette index is out of range, or the resolved ID is not a supported avatar. The resolved ID is exposed as `entityModelId` on `/api/players`.
+- `entityModelId` is part of the semantic player snapshot, so avatar-only save changes trigger the `players-updated` broadcast flow.
 
 ## Live Updates
 

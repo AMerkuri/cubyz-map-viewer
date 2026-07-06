@@ -30,6 +30,27 @@ interface PlayerMarkerState {
   underground: boolean;
   depthCue: string | null;
   usesModel: boolean;
+  avatarModelId: string | null;
+}
+
+/**
+ * Resolves the avatar marker object for a player. Returns `null` when no
+ * loadable avatar model is available so the caller falls back to a dot marker.
+ * `avatarModelId` identifies which avatar model backed the returned object (or
+ * `null` for a fallback) so markers can be recreated when the avatar changes.
+ */
+interface PlayerMarkerResolution {
+  object: THREE.Object3D | CSS2DObject | null;
+  avatarModelId: string | null;
+}
+
+/**
+ * Lightweight identity of the marker a player would get, used to decide whether
+ * an existing marker needs to be recreated without cloning any geometry.
+ */
+interface PlayerMarkerIdentity {
+  usesModel: boolean;
+  avatarModelId: string | null;
 }
 
 function isPlayerUnderground(player: PlayerData): boolean {
@@ -111,9 +132,7 @@ function disposeMarkerObject(args: {
 
 function createPlayerMarkerVisuals(args: {
   player: PlayerData;
-  createPlayerMarkerModel: (
-    player: PlayerData,
-  ) => THREE.Object3D | CSS2DObject | null;
+  resolvePlayerMarker: (player: PlayerData) => PlayerMarkerResolution;
   createFormattedPlayerLabel: (
     text: string,
     grayscale?: boolean,
@@ -121,12 +140,13 @@ function createPlayerMarkerVisuals(args: {
     pixelOffset?: number,
   ) => CSS2DObject;
 }) {
-  const { player, createPlayerMarkerModel, createFormattedPlayerLabel } = args;
+  const { player, resolvePlayerMarker, createFormattedPlayerLabel } = args;
   const grayscale = !player.isActive;
   const underground = isPlayerUnderground(player);
-  const marker =
-    createPlayerMarkerModel(player) ?? createFallbackPlayerMarker(grayscale);
+  const resolution = resolvePlayerMarker(player);
+  const marker = resolution.object ?? createFallbackPlayerMarker(grayscale);
   const usesModel = !(marker instanceof CSS2DObject);
+  const avatarModelId = usesModel ? resolution.avatarModelId : null;
   const groundOffsetBase = usesModel ? getModelGroundOffset(marker) : 0;
   const label = createFormattedPlayerLabel(
     player.name,
@@ -149,6 +169,7 @@ function createPlayerMarkerVisuals(args: {
     underground,
     depthCue,
     usesModel,
+    avatarModelId,
     labelBaseOffset,
     groundOffsetBase,
   };
@@ -167,9 +188,7 @@ function updatePlayerMarkerObject(
 
 function createPlayerMarkerRoot(args: {
   player: PlayerData;
-  createPlayerMarkerModel: (
-    player: PlayerData,
-  ) => THREE.Object3D | CSS2DObject | null;
+  resolvePlayerMarker: (player: PlayerData) => PlayerMarkerResolution;
   createFormattedPlayerLabel: (
     text: string,
     grayscale?: boolean,
@@ -177,7 +196,7 @@ function createPlayerMarkerRoot(args: {
     pixelOffset?: number,
   ) => CSS2DObject;
 }): THREE.Group {
-  const { player, createPlayerMarkerModel, createFormattedPlayerLabel } = args;
+  const { player, resolvePlayerMarker, createFormattedPlayerLabel } = args;
   const [px, py, pz] = worldToScene(
     player.position[0],
     player.position[1],
@@ -192,11 +211,12 @@ function createPlayerMarkerRoot(args: {
     underground,
     depthCue,
     usesModel,
+    avatarModelId,
     labelBaseOffset,
     groundOffsetBase,
   } = createPlayerMarkerVisuals({
     player,
-    createPlayerMarkerModel,
+    resolvePlayerMarker,
     createFormattedPlayerLabel,
   });
 
@@ -223,6 +243,7 @@ function createPlayerMarkerRoot(args: {
     underground,
     depthCue,
     usesModel,
+    avatarModelId,
   } satisfies PlayerMarkerState;
 
   return root;
@@ -242,7 +263,12 @@ function updateRootMarkerScale(root: THREE.Object3D, scale: number) {
     nestedChild.scale.setScalar(scale);
     const groundOffsetBase = nestedChild.userData.markerGroundOffsetBase;
     if (typeof groundOffsetBase === "number") {
-      nestedChild.position.z = -groundOffsetBase * scale;
+      // The player position Z is the feet, which can sit a fraction of a block
+      // above the surface block top. Seat the (bottom-aligned) avatar model on
+      // that block top so it rests on the ground instead of floating, while the
+      // fallback dot keeps its offset of 0.
+      const groundSeatOffset = root.position.z - Math.floor(root.position.z);
+      nestedChild.position.z = -(groundOffsetBase * scale + groundSeatOffset);
     }
   }
 
@@ -344,10 +370,8 @@ export function rebuildSpawnMarker(args: {
 export function syncPlayerMarkers(args: {
   players: PlayerData[];
   markerGroup: THREE.Group | null;
-  hasPlayerMarkerModel: boolean;
-  createPlayerMarkerModel: (
-    player: PlayerData,
-  ) => THREE.Object3D | CSS2DObject | null;
+  resolvePlayerMarker: (player: PlayerData) => PlayerMarkerResolution;
+  getPlayerMarkerIdentity: (player: PlayerData) => PlayerMarkerIdentity;
   createFormattedPlayerLabel: (
     text: string,
     grayscale?: boolean,
@@ -360,8 +384,8 @@ export function syncPlayerMarkers(args: {
   const {
     players,
     markerGroup,
-    hasPlayerMarkerModel,
-    createPlayerMarkerModel,
+    resolvePlayerMarker,
+    getPlayerMarkerIdentity,
     createFormattedPlayerLabel,
     disposePlayerMarkerModel,
     disposeTextSprite,
@@ -398,7 +422,7 @@ export function syncPlayerMarkers(args: {
       markerGroup.add(
         createPlayerMarkerRoot({
           player,
-          createPlayerMarkerModel,
+          resolvePlayerMarker,
           createFormattedPlayerLabel,
         }),
       );
@@ -424,7 +448,7 @@ export function syncPlayerMarkers(args: {
       markerGroup.add(
         createPlayerMarkerRoot({
           player,
-          createPlayerMarkerModel,
+          resolvePlayerMarker,
           createFormattedPlayerLabel,
         }),
       );
@@ -434,12 +458,17 @@ export function syncPlayerMarkers(args: {
     const grayscale = !player.isActive;
     const underground = isPlayerUnderground(player);
     const depthCue = getPlayerDepthCue(player);
-    const shouldUseModel = hasPlayerMarkerModel;
+    const identity = getPlayerMarkerIdentity(player);
+    const shouldUseModel = identity.usesModel;
+    const nextAvatarModelId = identity.usesModel
+      ? identity.avatarModelId
+      : null;
     if (
       state.grayscale !== grayscale ||
       state.underground !== underground ||
       state.depthCue !== depthCue ||
-      state.usesModel !== shouldUseModel
+      state.usesModel !== shouldUseModel ||
+      state.avatarModelId !== nextAvatarModelId
     ) {
       disposeMarkerObject({
         object: state.marker,
@@ -459,11 +488,12 @@ export function syncPlayerMarkers(args: {
         underground: nextUnderground,
         depthCue: nextDepthCue,
         usesModel,
+        avatarModelId,
         labelBaseOffset,
         groundOffsetBase,
       } = createPlayerMarkerVisuals({
         player,
-        createPlayerMarkerModel,
+        resolvePlayerMarker,
         createFormattedPlayerLabel,
       });
 
@@ -485,6 +515,7 @@ export function syncPlayerMarkers(args: {
         underground: nextUnderground,
         depthCue: nextDepthCue,
         usesModel,
+        avatarModelId,
       } satisfies PlayerMarkerState;
       continue;
     }

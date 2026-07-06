@@ -3,6 +3,7 @@ import type { EntityModelAssetService } from "../services/entity-model-assets.js
 import { BadRequestError, NotFoundError } from "./errors.js";
 
 const ASSET_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
+const ENTITY_MODEL_ID_PATTERN = /^[A-Za-z0-9._-]+:[A-Za-z0-9._/-]+$/;
 
 export function createAssetsRouter(
   entityModelAssets: EntityModelAssetService,
@@ -12,6 +13,21 @@ export function createAssetsRouter(
   router.get("/player-marker", async (_req: Request, res: Response) => {
     res.json(await entityModelAssets.getPlayerMarkerManifest());
   });
+
+  router.get(
+    "/player-marker/:entityModelId",
+    async (req: Request, res: Response) => {
+      const entityModelId = Array.isArray(req.params.entityModelId)
+        ? req.params.entityModelId[0]
+        : req.params.entityModelId;
+      if (!entityModelId || !ENTITY_MODEL_ID_PATTERN.test(entityModelId)) {
+        throw new BadRequestError("Invalid entity model ID");
+      }
+      res.json(
+        await entityModelAssets.getPlayerMarkerManifestById(entityModelId),
+      );
+    },
+  );
 
   router.get(
     "/entity-models/files/:token",

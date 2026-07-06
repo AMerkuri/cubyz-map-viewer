@@ -1,21 +1,27 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type {
   CSS2DObject,
   CSS2DRenderer,
 } from "three/addons/renderers/CSS2DRenderer.js";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   createEmptyLoadingBreakdown,
   type LoadingBreakdown,
 } from "../../../lib/world-view-debug.js";
+import type { PlayerData } from "../hooks/usePlayers.js";
 import type {
   ChunkIndexEntry,
   SurfaceIndexEntry,
 } from "../hooks/useWorldData.js";
+import {
+  type AvatarAssetCache,
+  DEFAULT_AVATAR_MODEL_ID,
+  disposeAvatarAssetCache,
+  ensureAvatarAssets,
+} from "../lib/avatar-assets.js";
 import { refreshBiomeLabels as refreshBiomeLabelsManaged } from "../lib/biome-labels.js";
 import { MAX_VOXEL_RETRIES } from "../lib/constants.js";
 import {
@@ -35,12 +41,10 @@ import {
 } from "../lib/markers.js";
 import {
   createFormattedPlayerLabel,
-  createGrayscaleTexture,
   createMarkerDot,
   createMarkerLabel,
   createPlayerMarkerModel,
   disposePlayerMarkerModel,
-  disposePlayerMarkerTemplate,
   disposeTextSprite,
 } from "../lib/primitives.js";
 import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
@@ -120,89 +124,6 @@ const PLAYER_MARKER_SCALE_REFERENCE_DISTANCE = 200;
 const PLAYER_MARKER_MIN_SCALE = 1;
 const PLAYER_MARKER_MAX_SCALE = 100;
 const TEMP_TO_MARKER = new THREE.Vector3();
-
-interface PlayerMarkerAssetManifest {
-  available: boolean;
-  entityModelId: string | null;
-  modelUrl: string | null;
-  textureUrl: string | null;
-  height: number | null;
-  coordinateSystem: string | null;
-}
-
-function isPlayerMarkerAssetManifest(
-  value: unknown,
-): value is PlayerMarkerAssetManifest {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const manifest = value as Partial<PlayerMarkerAssetManifest>;
-  return typeof manifest.available === "boolean";
-}
-
-async function fetchPlayerMarkerAssetManifest(): Promise<PlayerMarkerAssetManifest> {
-  const response = await fetch("/api/assets/player-marker");
-  if (!response.ok) {
-    throw new Error(`Player marker manifest failed: ${response.status}`);
-  }
-  const manifest: unknown = await response.json();
-  if (!isPlayerMarkerAssetManifest(manifest)) {
-    throw new Error("Invalid player marker manifest");
-  }
-  return manifest;
-}
-
-function createNormalizedPlayerMarkerTemplate(
-  template: THREE.Object3D,
-  manifest: PlayerMarkerAssetManifest,
-): THREE.Object3D {
-  const normalizedRoot = new THREE.Group();
-  normalizedRoot.add(template);
-
-  if (manifest.coordinateSystem?.includes("y_up")) {
-    template.rotation.x = Math.PI / 2;
-  }
-
-  normalizedRoot.updateMatrixWorld(true);
-
-  const initialBounds = new THREE.Box3().setFromObject(normalizedRoot);
-  const initialSize = initialBounds.getSize(new THREE.Vector3());
-  const targetHeight =
-    typeof manifest.height === "number" && Number.isFinite(manifest.height)
-      ? manifest.height
-      : null;
-  if (targetHeight && initialSize.z > 0) {
-    template.scale.multiplyScalar(targetHeight / initialSize.z);
-    normalizedRoot.updateMatrixWorld(true);
-  }
-
-  const bounds = new THREE.Box3().setFromObject(normalizedRoot);
-  template.position.x -= (bounds.min.x + bounds.max.x) / 2;
-  template.position.y -= (bounds.min.y + bounds.max.y) / 2;
-  template.position.z -= bounds.min.z;
-  normalizedRoot.userData.playerMarkerBaseScale = 1;
-  normalizedRoot.userData.playerMarkerGroundOffset = targetHeight
-    ? targetHeight * 0.5
-    : 0;
-  normalizedRoot.updateMatrixWorld(true);
-  return normalizedRoot;
-}
-
-function createPlayerMarkerGltfLoader(
-  manifest: PlayerMarkerAssetManifest,
-): GLTFLoader {
-  const manager = new THREE.LoadingManager();
-  manager.setURLModifier((url) => {
-    if (!manifest.textureUrl || url === manifest.modelUrl) {
-      return url;
-    }
-    if (url.startsWith("data:") || url.startsWith("blob:")) {
-      return url;
-    }
-    return url.match(/\.(png|jpe?g|webp)$/i) ? manifest.textureUrl : url;
-  });
-  return new GLTFLoader(manager);
-}
 
 export function World3DView({
   mode,
@@ -403,14 +324,8 @@ export function World3DView({
     avgDecodedBodyBytes: null,
     avgRawBufferBytes: null,
   });
-  const playerMarkerModelTemplateRef = useRef<THREE.Object3D | null>(null);
-  const playerMarkerTextureRef = useRef<THREE.Texture | null>(null);
-  const playerMarkerGrayscaleTextureRef = useRef<THREE.Texture | null>(null);
-  const playerAssetsLoadIdRef = useRef(0);
-  const playerAssetsLoadingRef = useRef(false);
-  const playerAssetsLoadedRef = useRef(false);
-  const playerAssetsRetryAttemptRef = useRef(0);
-  const playerAssetsRetryTimerRef = useRef<number | null>(null);
+  const avatarAssetCacheRef = useRef<AvatarAssetCache>(new Map());
+  const avatarAssetsLoadGenerationRef = useRef(0);
   const activeFocusLodRef = useRef<number>(1);
   const activeTerrainLodRef = useRef<number>(1);
   const voxelFocusStateRef = useRef<VoxelFocusState>({
@@ -420,160 +335,46 @@ export function World3DView({
     initialized: false,
   });
 
+  const requiredAvatarModelIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (showPlayers || players.length > 0) {
+      // The default avatar backs any player whose own model fails to load.
+      ids.add(DEFAULT_AVATAR_MODEL_ID);
+    }
+    for (const player of players) {
+      if (typeof player.entityModelId === "string" && player.entityModelId) {
+        ids.add(player.entityModelId);
+      }
+    }
+    return [...ids].sort();
+  }, [players, showPlayers]);
+
+  const requiredAvatarModelIdsKey = requiredAvatarModelIds.join("|");
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by requiredAvatarModelIdsKey to avoid array identity churn.
   useEffect(() => {
-    const shouldLoadPlayerAssets = showPlayers || players.length > 0;
-    if (!shouldLoadPlayerAssets || playerAssetsLoadedRef.current) {
+    if (requiredAvatarModelIds.length === 0) {
       return;
     }
 
-    if (playerAssetsLoadingRef.current) {
-      return;
-    }
-
-    const loadId = ++playerAssetsLoadIdRef.current;
-    let cancelled = false;
-    const textureLoader = new THREE.TextureLoader();
-
-    async function loadPlayerAssets() {
-      if (playerAssetsLoadingRef.current || playerAssetsLoadedRef.current) {
-        return;
-      }
-
-      playerAssetsLoadingRef.current = true;
-      try {
-        const manifest = await fetchPlayerMarkerAssetManifest();
-        if (!manifest.available) {
-          if (!cancelled && loadId === playerAssetsLoadIdRef.current) {
-            playerAssetsLoadedRef.current = true;
-            playerAssetsLoadingRef.current = false;
-            onUpdatePlayerMarkers();
-          }
-          return;
-        }
-
-        if (!manifest.modelUrl || !manifest.textureUrl) {
-          throw new Error("Player marker manifest is missing asset URLs");
-        }
-
-        const gltfLoader = createPlayerMarkerGltfLoader(manifest);
-        const [textureResult, modelResult] = await Promise.allSettled([
-          textureLoader.loadAsync(manifest.textureUrl),
-          gltfLoader.loadAsync(manifest.modelUrl),
-        ]);
-
-        if (cancelled || loadId !== playerAssetsLoadIdRef.current) {
-          if (textureResult.status === "fulfilled") {
-            textureResult.value.dispose();
-          }
-          if (modelResult.status === "fulfilled") {
-            disposePlayerMarkerTemplate(modelResult.value.scene);
-          }
-          return;
-        }
-
-        if (
-          textureResult.status === "fulfilled" &&
-          modelResult.status === "fulfilled"
-        ) {
-          const markerTemplate = createNormalizedPlayerMarkerTemplate(
-            modelResult.value.scene,
-            manifest,
-          );
-          textureResult.value.colorSpace = THREE.SRGBColorSpace;
-          textureResult.value.magFilter = THREE.NearestFilter;
-          textureResult.value.minFilter = THREE.NearestFilter;
-          playerMarkerTextureRef.current?.dispose();
-          playerMarkerGrayscaleTextureRef.current?.dispose();
-          playerMarkerTextureRef.current = textureResult.value;
-          playerMarkerGrayscaleTextureRef.current = createGrayscaleTexture(
-            textureResult.value,
-          );
-          playerMarkerModelTemplateRef.current = markerTemplate;
-          playerAssetsLoadedRef.current = true;
-          playerAssetsRetryAttemptRef.current = 0;
-          playerAssetsLoadingRef.current = false;
-          if (playerAssetsRetryTimerRef.current) {
-            window.clearTimeout(playerAssetsRetryTimerRef.current);
-            playerAssetsRetryTimerRef.current = null;
-          }
-          onUpdatePlayerMarkers();
-          return;
-        }
-
-        if (textureResult.status === "fulfilled") {
-          textureResult.value.dispose();
-        }
-        if (modelResult.status === "fulfilled") {
-          disposePlayerMarkerTemplate(modelResult.value.scene);
-        }
-
-        playerAssetsLoadedRef.current = false;
-        playerAssetsLoadingRef.current = false;
-        if (playerAssetsRetryAttemptRef.current === 0) {
-          playerAssetsRetryAttemptRef.current = 1;
-          playerAssetsRetryTimerRef.current = window.setTimeout(() => {
-            playerAssetsRetryTimerRef.current = null;
-            void loadPlayerAssets();
-          }, 1000);
-        }
+    const generation = avatarAssetsLoadGenerationRef.current;
+    ensureAvatarAssets({
+      entityModelIds: requiredAvatarModelIds,
+      cache: avatarAssetCacheRef.current,
+      onChange: () => {
         onUpdatePlayerMarkers();
-      } catch {
-        if (cancelled || loadId !== playerAssetsLoadIdRef.current) {
-          return;
-        }
+      },
+      isCurrent: () => generation === avatarAssetsLoadGenerationRef.current,
+    });
+  }, [requiredAvatarModelIdsKey]);
 
-        playerAssetsLoadedRef.current = false;
-        playerAssetsLoadingRef.current = false;
-        if (playerAssetsRetryAttemptRef.current === 0) {
-          playerAssetsRetryAttemptRef.current = 1;
-          playerAssetsRetryTimerRef.current = window.setTimeout(() => {
-            playerAssetsRetryTimerRef.current = null;
-            void loadPlayerAssets();
-          }, 1000);
-        }
-        onUpdatePlayerMarkers();
-      }
-    }
-
-    void loadPlayerAssets();
-
+  useEffect(() => {
+    const cache = avatarAssetCacheRef.current;
     return () => {
-      cancelled = true;
-      playerAssetsLoadIdRef.current += 1;
-      playerAssetsLoadingRef.current = false;
-      playerAssetsRetryAttemptRef.current = 0;
-      if (playerAssetsRetryTimerRef.current) {
-        window.clearTimeout(playerAssetsRetryTimerRef.current);
-        playerAssetsRetryTimerRef.current = null;
-      }
+      avatarAssetsLoadGenerationRef.current += 1;
+      disposeAvatarAssetCache(cache);
     };
-  }, [showPlayers, players.length]);
-
-  useEffect(
-    () => () => {
-      playerAssetsLoadIdRef.current += 1;
-      playerAssetsLoadingRef.current = false;
-      playerAssetsLoadedRef.current = false;
-      playerAssetsRetryAttemptRef.current = 0;
-      if (playerAssetsRetryTimerRef.current) {
-        window.clearTimeout(playerAssetsRetryTimerRef.current);
-        playerAssetsRetryTimerRef.current = null;
-      }
-      if (playerMarkerTextureRef.current) {
-        playerMarkerTextureRef.current.dispose();
-        playerMarkerTextureRef.current = null;
-      }
-      if (playerMarkerGrayscaleTextureRef.current) {
-        playerMarkerGrayscaleTextureRef.current.dispose();
-        playerMarkerGrayscaleTextureRef.current = null;
-      }
-      if (playerMarkerModelTemplateRef.current) {
-        disposePlayerMarkerTemplate(playerMarkerModelTemplateRef.current);
-        playerMarkerModelTemplateRef.current = null;
-      }
-    },
-    [],
-  );
+  }, []);
 
   function rebuildVoxelIndexCache(entries: ChunkIndexEntry[]) {
     const { availableKeys, roots } = rebuildVoxelIndex(entries);
@@ -1117,32 +918,55 @@ export function World3DView({
     });
   }
 
+  function resolveLoadedAvatarModelId(player: PlayerData): string | null {
+    const cache = avatarAssetCacheRef.current;
+    const own = player.entityModelId;
+    if (own) {
+      const ownEntry = cache.get(own);
+      if (ownEntry?.state === "loaded") {
+        return own;
+      }
+    }
+    // Fall back to the default avatar when the player's own model is not
+    // loadable but the default is available.
+    const defaultEntry = cache.get(DEFAULT_AVATAR_MODEL_ID);
+    if (defaultEntry?.state === "loaded") {
+      return DEFAULT_AVATAR_MODEL_ID;
+    }
+    return null;
+  }
+
   function updatePlayerMarkers() {
-    const playerMarkerModelTemplate = playerMarkerModelTemplateRef.current;
-    const playerMarkerTexture = playerMarkerTextureRef.current;
-    const playerMarkerGrayscaleTexture =
-      playerMarkerGrayscaleTextureRef.current;
+    const cache = avatarAssetCacheRef.current;
     syncPlayerMarkers({
       players: playersRef.current,
       markerGroup: markerGroupRef.current,
-      hasPlayerMarkerModel: Boolean(
-        playerMarkerModelTemplate &&
-          playerMarkerTexture &&
-          playerMarkerGrayscaleTexture,
-      ),
-      createPlayerMarkerModel:
-        playerMarkerModelTemplate &&
-        playerMarkerTexture &&
-        playerMarkerGrayscaleTexture
-          ? (player) =>
-              createPlayerMarkerModel(
-                playerMarkerModelTemplate,
-                player.isActive
-                  ? playerMarkerTexture
-                  : playerMarkerGrayscaleTexture,
-                player.position[2] < 0,
-              )
-          : () => null,
+      resolvePlayerMarker: (player) => {
+        const avatarModelId = resolveLoadedAvatarModelId(player);
+        if (!avatarModelId) {
+          return { object: null, avatarModelId: null };
+        }
+        const entry = cache.get(avatarModelId);
+        if (
+          !entry ||
+          entry.state !== "loaded" ||
+          !entry.template ||
+          !entry.activeTexture ||
+          !entry.inactiveTexture
+        ) {
+          return { object: null, avatarModelId: null };
+        }
+        const object = createPlayerMarkerModel(
+          entry.template,
+          player.isActive ? entry.activeTexture : entry.inactiveTexture,
+          player.position[2] < 0,
+        );
+        return { object, avatarModelId };
+      },
+      getPlayerMarkerIdentity: (player) => {
+        const avatarModelId = resolveLoadedAvatarModelId(player);
+        return { usesModel: avatarModelId !== null, avatarModelId };
+      },
       createFormattedPlayerLabel,
       disposePlayerMarkerModel,
       disposeTextSprite,
