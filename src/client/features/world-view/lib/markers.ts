@@ -180,8 +180,8 @@ function updatePlayerMarkerObject(
   player: PlayerData,
 ) {
   marker.position.set(0, 0, 0);
-  // The GLB marker template faces opposite Cubyz entity yaw after z-up conversion.
-  marker.rotation.z = Math.PI - (player.rotation[2] ?? 0);
+  // Cubyz yaw uses the opposite positive rotation direction from Three.js Z rotation.
+  marker.rotation.z = -(player.rotation[2] ?? 0);
   marker.userData.player = player;
   marker.userData.playerMarker = true;
 }
