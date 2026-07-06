@@ -23,7 +23,7 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 
 ## Route Surface
 
-- `/api/world`, `/api/world/surface-index`, `/api/world/chunk-index`: bootstrap world and index data
+- `/api/world`, `/api/world/surface-index`, `/api/world/chunk-index`, `/api/world/block-palette`: bootstrap world, index, and save block palette data
 - `/api/players`: parsed player data with server-owned `isActive` and resolved `entityModelId`
 - `/api/terrain/:lod/:x/:y`: seam-safe terrain JSON built from the same-LOD 3x3 surface neighborhood; cached with ETag
 - `/api/biomes/:lod/:x/:y`: grouped biome-label regions from `.surface` data
@@ -41,6 +41,7 @@ Keep this layering real. In particular, voxel routes should go through `VoxelMes
 - Voxel compression settings are configured once at startup and applied when each encoded variant is first generated. The default tuning is Brotli `quality=6`, `lgwin=11`, and gzip `level=3`.
 - The voxel generator keeps the binary layout compact by reusing the existing per-quad AO byte for LOD `1/2` top faces and concave vertical wall corners instead of adding a separate wall-lighting payload.
 - The voxel generator encodes vertex X/Y/Z as `u32` fixed-point coordinates in `1/4096` voxel-cell units relative to the response origin, allowing model vertices inside a block while preserving exact full-cube boundaries.
+- The voxel generator writes a padded `u16` per-quad block palette index section after the winding flags and before vertex positions. Values resolve through `/api/world/block-palette`; out-of-range indices are encoded as `0xFFFF` so the client omits block identity instead of guessing.
 - Full-cube blocks still use exterior-air traversal plus greedy merged cube faces. Supported LOD `1` non-cube blocks emit explicit model quads with the existing palette color, no per-quad AO, and conservative non-occluding traversal so neighboring cube faces are not hidden by decorative geometry.
 - Supported rotation semantic shapes are handled server-side. `cubyz:stairs` decodes the low 8 block-data bits as removed 2x2x2 sub-block octants and keeps data `0` on the full-cube fast path; `cubyz:fence` emits center posts plus saved horizontal connection arms for fences, walls, and bars; `cubyz:branch` emits center and six-direction branch arms from saved connection bits; `cubyz:carpet`, `cubyz:sign`, `cubyz:hanging`, and selected `cubyz:direction` blocks select finite model variants from block data.
 - Higher LOD non-cube and semantic blocks use `lodReplacement` when it resolves to a palette entry; otherwise they fall back to the documented safe cube/air fallback shape instead of emitting tiny model geometry.

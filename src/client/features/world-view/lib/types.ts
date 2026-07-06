@@ -64,6 +64,7 @@ export interface WorkerQuadrantMesh {
   normals: Float32Array;
   baseColors: Float32Array;
   faceAo: Uint8Array;
+  trianglePaletteIndices: Uint32Array;
   indices: Uint32Array;
 }
 
@@ -160,6 +161,7 @@ export interface LoadedVoxelTile {
     mesh: THREE.Mesh;
     baseColors: Float32Array;
     faceAo: Uint8Array;
+    trianglePaletteIndices: Uint32Array;
     aoBoundarySignature: string;
   }[];
   minZ: number;
@@ -192,6 +194,7 @@ export interface VoxelFocusState {
 
 export interface CursorHoverInfo {
   pos: [number, number, number];
+  blockId?: string;
   voxelChunkLod?: number;
   voxelRegion?: [number, number];
 }

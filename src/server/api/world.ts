@@ -8,6 +8,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { type Request, type Response, Router } from "express";
+import type { Palette } from "../parsers/palette.js";
 import { MAP_SIZE } from "../parsers/surface.js";
 import type { WorldMetadata } from "../parsers/world-meta.js";
 import { buildChunkIndex } from "../services/chunk-index.js";
@@ -24,6 +25,7 @@ interface SurfaceIndex {
 export function createWorldRouter(
   savePath: string,
   worldMeta: WorldMetadata,
+  blockPalette: Palette,
 ): Router {
   const router = Router();
 
@@ -39,6 +41,10 @@ export function createWorldRouter(
   router.get("/chunk-index", async (_req: Request, res: Response) => {
     const index = await buildChunkIndex(savePath);
     res.json(index);
+  });
+
+  router.get("/block-palette", (_req: Request, res: Response) => {
+    res.json(blockPalette.entries);
   });
 
   return router;

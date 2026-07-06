@@ -31,6 +31,7 @@ export function createCursorInteractionHandlers(args: {
   terrainGroupRef: { current: THREE.Group | null };
   voxelGroupRef: { current: THREE.Group | null };
   loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  getBlockIdForPaletteIndex: (paletteIndex: number) => string | undefined;
   keysHeldRef: { current: Set<string> };
   onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
 }): CursorInteractionHandlers {
@@ -45,6 +46,7 @@ export function createCursorInteractionHandlers(args: {
     terrainGroupRef,
     voxelGroupRef,
     loadedVoxelsRef,
+    getBlockIdForPaletteIndex,
     keysHeldRef,
     onCursorMoveRef,
   } = args;
@@ -67,6 +69,7 @@ export function createCursorInteractionHandlers(args: {
     isTerrain: boolean,
     voxelChunkLod?: number,
     voxelRegion?: [number, number],
+    blockId?: string,
   ) {
     const point = intersection.point;
     const terrainOffsetZ = isTerrain
@@ -77,16 +80,12 @@ export function createCursorInteractionHandlers(args: {
       Math.round(point.y),
       Math.round(point.z - terrainOffsetZ),
     ];
-    onCursorMoveRef.current({ pos, voxelChunkLod, voxelRegion });
+    onCursorMoveRef.current({ pos, blockId, voxelChunkLod, voxelRegion });
   }
 
-  function resolveHoveredVoxelTile(
+  function findHoveredVoxelTile(
     intersection: THREE.Intersection,
   ): LoadedVoxelTile | undefined {
-    if (!debugEnabledRef.current || !showChunkBordersRef.current) {
-      return undefined;
-    }
-
     let node: THREE.Object3D | null = intersection.object;
     while (node) {
       const voxelKey = node.userData.voxelKey as string | undefined;
@@ -97,6 +96,23 @@ export function createCursorInteractionHandlers(args: {
     }
 
     return undefined;
+  }
+
+  function resolveVoxelBlockId(
+    intersection: THREE.Intersection,
+    tile: LoadedVoxelTile | undefined,
+  ): string | undefined {
+    if (!tile || intersection.faceIndex == null) return undefined;
+    const subMesh = tile.subMeshes.find(
+      (candidate) => candidate.mesh === intersection.object,
+    );
+    if (!subMesh) return undefined;
+
+    const paletteIndex = subMesh.trianglePaletteIndices[intersection.faceIndex];
+    if (paletteIndex === undefined || !Number.isSafeInteger(paletteIndex)) {
+      return undefined;
+    }
+    return getBlockIdForPaletteIndex(paletteIndex);
   }
 
   function isObjectEffectivelyVisible(object: THREE.Object3D): boolean {
@@ -118,7 +134,7 @@ export function createCursorInteractionHandlers(args: {
 
     for (const intersection of intersections) {
       if (!isObjectEffectivelyVisible(intersection.object)) continue;
-      const tile = resolveHoveredVoxelTile(intersection);
+      const tile = findHoveredVoxelTile(intersection);
       if (!best) {
         best = { intersection, tile };
         continue;
@@ -273,13 +289,16 @@ export function createCursorInteractionHandlers(args: {
       const voxelIntersections = raycaster.intersectObjects(voxelTargets, true);
       const voxelHit = selectBestVoxelIntersection(voxelIntersections);
       if (voxelHit) {
+        const debugTile =
+          debugEnabledRef.current && showChunkBordersRef.current
+            ? voxelHit.tile
+            : undefined;
         reportIntersection(
           voxelHit.intersection,
           false,
-          voxelHit.tile?.lod,
-          voxelHit.tile
-            ? [voxelHit.tile.regionX, voxelHit.tile.regionY]
-            : undefined,
+          debugTile?.lod,
+          debugTile ? [debugTile.regionX, debugTile.regionY] : undefined,
+          resolveVoxelBlockId(voxelHit.intersection, voxelHit.tile),
         );
         return;
       }

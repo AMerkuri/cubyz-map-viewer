@@ -43,20 +43,32 @@ export function WorldViewPageContent({
     worldData,
   });
 
-  const handleCursorMove = useCallback((info: CursorHoverInfo | null) => {
-    const el = cursorHudRef.current;
-    if (!el) return;
-    if (!info) {
-      el.style.display = "none";
-      return;
-    }
-    el.style.display = "";
-    const [x, y, z] = info.pos;
-    el.textContent =
-      info.voxelChunkLod !== undefined
-        ? `X ${x}  Y ${y}  Z ${z}  LOD ${info.voxelChunkLod} ${info.voxelRegion?.[0] ?? "?"}/${info.voxelRegion?.[1] ?? "?"}`
-        : `X ${x}  Y ${y}  Z ${z}`;
-  }, []);
+  const handleCursorMove = useCallback(
+    (info: CursorHoverInfo | null) => {
+      const el = cursorHudRef.current;
+      if (!el) return;
+      if (!info) {
+        el.style.display = "none";
+        return;
+      }
+      el.style.display = "";
+      const [x, y, z] = info.pos;
+      const firstRow = `X ${x}  Y ${y}  Z ${z}`;
+      const metadataParts = state.layerVisibility.debug
+        ? [
+            info.blockId,
+            info.voxelChunkLod !== undefined
+              ? `LOD ${info.voxelChunkLod} ${info.voxelRegion?.[0] ?? "?"}/${info.voxelRegion?.[1] ?? "?"}`
+              : undefined,
+          ].filter((part): part is string => Boolean(part))
+        : [];
+      el.textContent =
+        metadataParts.length > 0
+          ? `${firstRow}\n${metadataParts.join("  ")}`
+          : firstRow;
+    },
+    [state.layerVisibility.debug],
+  );
 
   const handlePlayerClick = useCallback(
     (player: PlayerData) => {

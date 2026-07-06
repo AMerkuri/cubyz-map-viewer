@@ -22,10 +22,7 @@ export type SupportedBlockSemantic =
   | "cubyz:sign"
   | "cubyz:hanging"
   | "cubyz:direction";
-export type SupportedCubeBlockRotation =
-  | "cubyz:decayable"
-  | "cubyz:log"
-  | "cubyz:ore";
+type SupportedCubeBlockRotation = "cubyz:decayable" | "cubyz:log" | "cubyz:ore";
 
 export interface BlockModelVertex {
   x: number;

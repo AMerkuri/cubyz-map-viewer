@@ -58,6 +58,7 @@ export function buildVoxelQuadrantSubMeshes(
     mesh: THREE.Mesh;
     baseColors: Float32Array;
     faceAo: Uint8Array;
+    trianglePaletteIndices: Uint32Array;
     aoBoundarySignature: string;
   }[];
   minZ: number;
@@ -68,6 +69,7 @@ export function buildVoxelQuadrantSubMeshes(
     mesh: THREE.Mesh;
     baseColors: Float32Array;
     faceAo: Uint8Array;
+    trianglePaletteIndices: Uint32Array;
     aoBoundarySignature: string;
   }[] = [];
 
@@ -93,6 +95,7 @@ export function buildVoxelQuadrantSubMeshes(
       mesh,
       baseColors: quadrant.baseColors,
       faceAo: quadrant.faceAo,
+      trianglePaletteIndices: quadrant.trianglePaletteIndices,
       aoBoundarySignature: "",
     });
   }

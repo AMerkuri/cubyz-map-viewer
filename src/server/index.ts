@@ -484,7 +484,7 @@ async function main() {
   });
 
   // API routes
-  app.use("/api/world", createWorldRouter(savePath, worldMeta));
+  app.use("/api/world", createWorldRouter(savePath, worldMeta, blockPalette));
   app.use("/api/players", createPlayersRouter(savePath));
   app.use("/api/assets", createAssetsRouter(entityModelAssets));
   app.use("/api/terrain", createTerrainRouter(savePath, colorMap));

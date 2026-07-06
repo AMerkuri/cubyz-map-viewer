@@ -266,6 +266,8 @@ export function initializeSceneRuntime(args: {
     terrainGroupRef,
     voxelGroupRef,
     loadedVoxelsRef,
+    getBlockIdForPaletteIndex: (paletteIndex) =>
+      worldDataRef.current.blockPalette[paletteIndex],
     keysHeldRef,
     onCursorMoveRef,
   });

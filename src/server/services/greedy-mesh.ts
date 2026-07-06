@@ -21,6 +21,9 @@
  * Per-quad winding flags (quadCount bytes, padded to 4-byte alignment)
  *   u8 dir   — 1 for standard winding, 0 for flipped winding
  *
+ * Per-quad block palette indices (2 × quadCount bytes, padded to 4-byte alignment)
+ *   u16 typ — save block palette index for the rendered quad, 0xFFFF if out of range
+ *
  * Per-vertex positions  (4 × quadCount × 12 bytes)
  *   u32 x   relative to worldX in 1/4096-cell fixed-point units
  *   u32 y   relative to worldY in 1/4096-cell fixed-point units
@@ -39,7 +42,9 @@ import { FALLBACK_BLOCK_COLOR } from "./color-map.js";
 import { logger } from "./logger.js";
 
 const reportedFallbackPaletteIndices = new Set<number>();
+const reportedOutOfRangePaletteIndices = new Set<number>();
 const AIR_LIKE_COLOR = { r: 0, g: 0, b: 0 };
+const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
 
 export interface BinaryQuad {
   v0x: number;
@@ -76,6 +81,7 @@ export function encodeBinaryQuads(
   let quadColors = new Uint8Array(capacity * 3);
   let quadAo = new Uint8Array(capacity);
   let quadDirections = new Uint8Array(capacity);
+  let quadPaletteIndices = new Uint16Array(capacity);
   let vertPosX = new Uint32Array(capacity * 4);
   let vertPosY = new Uint32Array(capacity * 4);
   let vertPosZ = new Uint32Array(capacity * 4);
@@ -92,6 +98,9 @@ export function encodeBinaryQuads(
     const qd2 = new Uint8Array(capacity);
     qd2.set(quadDirections);
     quadDirections = qd2;
+    const qp2 = new Uint16Array(capacity);
+    qp2.set(quadPaletteIndices);
+    quadPaletteIndices = qp2;
     const vx2 = new Uint32Array(capacity * 4);
     vx2.set(vertPosX);
     vertPosX = vx2;
@@ -113,6 +122,7 @@ export function encodeBinaryQuads(
     quadColors[qi * 3 + 2] = rgb.b;
     quadAo[qi] = quad.packedAo;
     quadDirections[qi] = quad.dir === 1 ? 1 : 0;
+    quadPaletteIndices[qi] = toWirePaletteIndex(quad.typ);
 
     vertPosX[vi] = toFixedPosition(quad.v0x);
     vertPosY[vi] = toFixedPosition(quad.v0y);
@@ -137,9 +147,17 @@ export function encodeBinaryQuads(
   const aoPadded = (aoBytes + 3) & ~3;
   const directionBytes = quadCount;
   const directionPadded = (directionBytes + 3) & ~3;
+  const paletteBytes = quadCount * 2;
+  const palettePadded = (paletteBytes + 3) & ~3;
   const posBytes = vertexCount * 12;
   const totalBytes =
-    20 + colorPadded + aoPadded + directionPadded + posBytes + 4;
+    20 +
+    colorPadded +
+    aoPadded +
+    directionPadded +
+    palettePadded +
+    posBytes +
+    4;
   const buf = new ArrayBuffer(totalBytes);
   const view = new DataView(buf);
 
@@ -167,6 +185,16 @@ export function encodeBinaryQuads(
   }
   off = 20 + colorPadded + aoPadded + directionPadded;
 
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint16(
+      off,
+      quadPaletteIndices[qi] ?? MISSING_BLOCK_PALETTE_INDEX,
+      true,
+    );
+    off += 2;
+  }
+  off = 20 + colorPadded + aoPadded + directionPadded + palettePadded;
+
   for (let vi = 0; vi < vertexCount; vi++) {
     view.setUint32(off, vertPosX[vi] ?? 0, true);
     off += 4;
@@ -182,6 +210,23 @@ export function encodeBinaryQuads(
 
 function toFixedPosition(value: number): number {
   return Math.max(0, Math.round(value * VOXEL_POSITION_FIXED_SCALE));
+}
+
+function toWirePaletteIndex(paletteIndex: number): number {
+  if (paletteIndex >= 0 && paletteIndex < MISSING_BLOCK_PALETTE_INDEX) {
+    return paletteIndex;
+  }
+  if (!reportedOutOfRangePaletteIndices.has(paletteIndex)) {
+    reportedOutOfRangePaletteIndices.add(paletteIndex);
+    logger.error(
+      "Omitting out-of-range block palette index from voxel payload",
+      {
+        paletteIndex,
+        maxWirePaletteIndex: MISSING_BLOCK_PALETTE_INDEX - 1,
+      },
+    );
+  }
+  return MISSING_BLOCK_PALETTE_INDEX;
 }
 
 function getBlockColor(

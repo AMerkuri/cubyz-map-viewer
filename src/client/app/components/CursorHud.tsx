@@ -24,7 +24,8 @@ export function CursorHud({
         fontSize: 12,
         color: uiTheme.text.secondary,
         pointerEvents: "none",
-        whiteSpace: "nowrap",
+        textAlign: "center",
+        whiteSpace: "pre-line",
         boxShadow: uiTheme.panel.shadow,
         backdropFilter: "blur(5px)",
       }}

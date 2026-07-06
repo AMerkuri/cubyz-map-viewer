@@ -42,6 +42,12 @@ async function fetchChunkIndex(): Promise<ChunkIndexEntry[]> {
   return res.json();
 }
 
+async function fetchBlockPalette(): Promise<string[]> {
+  const res = await fetch("/api/world/block-palette");
+  if (!res.ok) throw new Error("Failed to fetch block palette");
+  return res.json();
+}
+
 export function useWorldData(loadChunkIndex = true) {
   const queryClient = useQueryClient();
 
@@ -61,8 +67,14 @@ export function useWorldData(loadChunkIndex = true) {
     enabled: loadChunkIndex,
   });
 
+  const blockPaletteQuery = useQuery({
+    queryKey: ["block-palette"],
+    queryFn: fetchBlockPalette,
+  });
+
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["world"] });
+    void queryClient.invalidateQueries({ queryKey: ["block-palette"] });
   }, [queryClient]);
 
   const refreshSurfaceIndex = useCallback(() => {
@@ -76,6 +88,7 @@ export function useWorldData(loadChunkIndex = true) {
   const loading =
     worldQuery.isLoading ||
     indexQuery.isLoading ||
+    blockPaletteQuery.isLoading ||
     (loadChunkIndex && chunkIndexQuery.isLoading);
   const error = worldQuery.error
     ? worldQuery.error instanceof Error
@@ -89,10 +102,15 @@ export function useWorldData(loadChunkIndex = true) {
         ? chunkIndexQuery.error instanceof Error
           ? chunkIndexQuery.error.message
           : "Unknown error"
-        : null;
+        : blockPaletteQuery.error
+          ? blockPaletteQuery.error instanceof Error
+            ? blockPaletteQuery.error.message
+            : "Unknown error"
+          : null;
 
   return {
     worldData: worldQuery.data ?? null,
+    blockPalette: blockPaletteQuery.data ?? [],
     surfaceIndex: indexQuery.data ?? [],
     chunkIndex: chunkIndexQuery.data ?? [],
     loading,

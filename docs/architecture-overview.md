@@ -56,10 +56,12 @@ At a high level:
 
 - voxel payloads are requested by LOD and region coordinates
 - `/api/world/chunk-index` returns one entry per available voxel region column with `lod`, `regionX`, and `regionY`
+- `/api/world/block-palette` returns the save block palette string table so the client can resolve voxel face palette indices to saved block IDs without per-hover requests
 - the server generates payloads from `.region` files and keeps coordinate space in world units
 - the server resolves Cubyz block shape metadata from layered block definitions, OBJ model assets, and supported rotation semantics, keeps full-cube terrain on the greedy meshing path, and emits explicit quads for supported LOD `1` non-cube block models or generated semantic shapes
 - voxel vertex positions are encoded as unsigned fixed-point values relative to the response origin, using `1/4096` voxel-cell units for X, Y, and Z; the client decodes them as `origin + fixed * voxelSize / 4096`
 - voxel mesh payloads include one packed AO byte per quad; at LOD `1` and `2` that AO applies to top faces and to a thin top band on vertical walls so tall cliffs do not get full-height AO gradients, while the client still performs the final visibility-dependent top-edge seam softening after LOD coverage is resolved
+- voxel mesh payloads include a compact per-quad block palette index section; the client preserves this as per-triangle metadata through worker quadrant splitting so voxel raycast hover can display the saved block ID for the visible face
 - the client uses loaded voxel mesh bounds to keep nearby visible geometry detailed, while unloaded regions still rely on cheap region-aligned distance heuristics from the chunk index
 - the client may apply final visibility-dependent shading after LOD coverage is resolved, so the payload structure and face-data semantics must stay aligned across both sides
 
