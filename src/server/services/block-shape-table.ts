@@ -21,7 +21,8 @@ export type SupportedBlockSemantic =
   | "cubyz:carpet"
   | "cubyz:sign"
   | "cubyz:hanging"
-  | "cubyz:direction";
+  | "cubyz:direction"
+  | "cubyz:texture_pile";
 type SupportedCubeBlockRotation = "cubyz:decayable" | "cubyz:log" | "cubyz:ore";
 
 export interface BlockModelVertex {
@@ -76,6 +77,7 @@ export interface BlockSemanticShape {
   quads: BlockModelQuad[];
   variantQuads: Record<string, BlockModelQuad[]>;
   radius: number | null;
+  states: number | null;
 }
 
 export type BlockShape =
@@ -123,13 +125,16 @@ const SUPPORTED_SEMANTICS = new Set<string>([
   "cubyz:sign",
   "cubyz:hanging",
   "cubyz:direction",
+  "cubyz:texture_pile",
 ]);
+const TEXTURE_PILE_MIN_STATES = 2;
+const TEXTURE_PILE_MAX_STATES = 16;
 const SUPPORTED_CUBE_ROTATIONS = new Set<string>([
   "cubyz:decayable",
   "cubyz:log",
   "cubyz:ore",
 ]);
-const SHAPE_SEMANTIC_SIGNATURE_VERSION = "semantic-shapes-v1";
+const SHAPE_SEMANTIC_SIGNATURE_VERSION = "semantic-shapes-v2";
 const EMPTY_BOUNDS = {
   min: { x: 0, y: 0, z: 0 },
   max: { x: 0, y: 0, z: 0 },
@@ -513,10 +518,14 @@ async function buildSemanticShape(
   semantic: SupportedBlockSemantic,
   blockPalette: Palette,
 ): Promise<BlockSemanticShape> {
-  const modelRefs = readSemanticModelRefs(
-    definition.data.model,
-    definition.namespace,
-  );
+  const modelRefs =
+    semantic === "cubyz:texture_pile"
+      ? readTexturePileModelRefs(definition.data.model, definition.namespace)
+      : readSemanticModelRefs(definition.data.model, definition.namespace);
+  const states =
+    semantic === "cubyz:texture_pile"
+      ? readTexturePileStates(definition.data.model, definition.blockId)
+      : null;
   const variantQuads: Record<string, BlockModelQuad[]> = {};
   const loadedRefs: Record<string, string> = {};
 
@@ -566,6 +575,7 @@ async function buildSemanticShape(
     quads: variantQuads.base ?? [],
     variantQuads,
     radius: readRadius(definition.data.model),
+    states,
   };
 }
 
@@ -578,6 +588,7 @@ function toSemanticSignatureInput(
     lodReplacement: shape.lodReplacement,
     modelRefs: shape.modelRefs,
     radius: shape.radius,
+    states: shape.states,
   };
 }
 
@@ -586,7 +597,8 @@ function requiresSemanticModel(semantic: SupportedBlockSemantic): boolean {
     semantic === "cubyz:carpet" ||
     semantic === "cubyz:sign" ||
     semantic === "cubyz:hanging" ||
-    semantic === "cubyz:direction"
+    semantic === "cubyz:direction" ||
+    semantic === "cubyz:texture_pile"
   );
 }
 
@@ -726,6 +738,37 @@ function readSemanticModelRefs(
     if (ref) refs[key] = ref;
   }
   return refs;
+}
+
+function readTexturePileModelRefs(
+  value: ZonValue | undefined,
+  fallbackNamespace: string,
+): Record<string, string> {
+  if (!value || Array.isArray(value) || typeof value !== "object") return {};
+  const object = value as Record<string, ZonValue>;
+  const base = readAssetRef(object.model, fallbackNamespace);
+  return base ? { base } : {};
+}
+
+function readTexturePileStates(
+  value: ZonValue | undefined,
+  blockId: string,
+): number | null {
+  if (!value || Array.isArray(value) || typeof value !== "object") return null;
+  const states = (value as Record<string, ZonValue>).states;
+  if (typeof states !== "number" || !Number.isFinite(states)) return null;
+  const rounded = Math.trunc(states);
+  if (rounded < TEXTURE_PILE_MIN_STATES || rounded > TEXTURE_PILE_MAX_STATES) {
+    reportShapeDiagnostic("texture-pile-state-count", blockId, {
+      states: rounded,
+      min: TEXTURE_PILE_MIN_STATES,
+      max: TEXTURE_PILE_MAX_STATES,
+    });
+  }
+  return Math.max(
+    TEXTURE_PILE_MIN_STATES,
+    Math.min(TEXTURE_PILE_MAX_STATES, rounded),
+  );
 }
 
 function readRadius(value: ZonValue | undefined): number | null {

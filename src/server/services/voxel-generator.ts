@@ -1066,12 +1066,12 @@ export async function generateVoxelMesh(
       Math.floor(x / CHUNK_SIZE) * 4 + Math.floor(y / CHUNK_SIZE),
     );
     const data = getBlockData(blockValue);
-    for (const { quad, turns, transform } of getModelQuadsForData(
+    for (const { quad, turns, transform, eighths } of getModelQuadsForData(
       shape,
       data,
     )) {
       const transformed = quad.vertices.map((vertex) =>
-        transformModelVertex(vertex, turns, transform),
+        transformModelVertex(vertex, turns, transform, eighths),
       ) as [
         BlockModelVertex,
         BlockModelVertex,
@@ -1103,9 +1103,10 @@ function transformModelVertex(
   vertex: BlockModelVertex,
   turns: number,
   transform: SemanticTransform = "none",
+  eighths = 0,
 ): BlockModelVertex {
   if (transform !== "none")
-    return transformSemanticVertex(vertex, transform, turns);
+    return transformSemanticVertex(vertex, transform, turns, eighths);
   let x = vertex.x;
   let y = vertex.y;
   for (let index = 0; index < turns; index++) {
@@ -1113,7 +1114,28 @@ function transformModelVertex(
     y = x;
     x = nextX;
   }
-  return { x, y, z: vertex.z };
+  return rotateEighthsAboutCenter({ x, y, z: vertex.z }, eighths);
+}
+
+// Rotate a vertex around the block's vertical (Z) axis through its center in
+// 45-degree increments. Cubyz sign floor/ceiling variants use eight-way
+// orientation, which quarter-turn `turns` cannot represent.
+function rotateEighthsAboutCenter(
+  vertex: BlockModelVertex,
+  eighths: number,
+): BlockModelVertex {
+  const steps = ((eighths % 8) + 8) % 8;
+  if (steps === 0) return vertex;
+  const angle = (steps * Math.PI) / 4;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const cx = vertex.x - 0.5;
+  const cy = vertex.y - 0.5;
+  return {
+    x: cx * cos - cy * sin + 0.5,
+    y: cx * sin + cy * cos + 0.5,
+    z: vertex.z,
+  };
 }
 
 type SemanticTransform =
@@ -1128,8 +1150,9 @@ function transformSemanticVertex(
   vertex: BlockModelVertex,
   transform: SemanticTransform,
   turns: number,
+  eighths = 0,
 ): BlockModelVertex {
-  const planar = transformModelVertex(vertex, turns, "none");
+  const planar = transformModelVertex(vertex, turns, "none", eighths);
   switch (transform) {
     case "none":
       return planar;
@@ -1153,6 +1176,7 @@ function getModelQuadsForData(
   quad: (typeof shape.quads)[number];
   turns: number;
   transform?: SemanticTransform;
+  eighths?: number;
 }> {
   if (shape.kind === "semantic") return getSemanticQuadsForData(shape, data);
   if (shape.rotation !== "cubyz:torch") {
@@ -1236,6 +1260,7 @@ function getSemanticQuadsForData(
   quad: BlockModelShape["quads"][number];
   turns: number;
   transform?: SemanticTransform;
+  eighths?: number;
 }> {
   switch (shape.semantic) {
     case "cubyz:stairs":
@@ -1261,7 +1286,21 @@ function getSemanticQuadsForData(
       ).map((quad) => ({ quad, turns: 0 }));
     case "cubyz:direction":
       return getDirectionQuads(shape, data);
+    case "cubyz:texture_pile":
+      return getTexturePileQuads(shape);
   }
+}
+
+function getTexturePileQuads(
+  shape: BlockSemanticShape,
+): ReturnType<typeof getSemanticQuadsForData> {
+  // Texture-pile geometry is uniform across states; block `data` only selects a
+  // texture slot in Cubyz (`@min(block.data, states - 1)`). The viewer renders
+  // the referenced plane model with the block palette color and ignores the
+  // slot, so any saved data value - including values outside the configured
+  // state count - resolves to the same valid plane geometry without failing
+  // mesh generation.
+  return shape.quads.map((quad) => ({ quad, turns: 0 }));
 }
 
 function createStairsQuads(data: number): BlockModelShape["quads"] {
@@ -1461,30 +1500,36 @@ function getSignQuads(
   shape: BlockSemanticShape,
   data: number,
 ): ReturnType<typeof getSemanticQuadsForData> {
+  // Cubyz sign data layout (see mods/cubyz/rotations/sign.zig):
+  //   0..7   floor variant, eight 45-degree Z rotations placed on `dirDown`
+  //   8..15  ceiling variant, eight 45-degree Z rotations placed on `dirUp`
+  //   16..19 side variant attached to -X, -Y, +X, +Y respectively
   if (data < 8) {
     return (shape.variantQuads.floor ?? []).map((quad) => ({
       quad,
-      turns: data & 7,
+      turns: 0,
+      eighths: data & 7,
     }));
   }
   if (data < 16) {
     return (shape.variantQuads.ceiling ?? []).map((quad) => ({
       quad,
-      turns: data & 7,
+      turns: 0,
       transform: "ceiling" as const,
+      eighths: data & 7,
     }));
   }
+  // Side signs share a single base side panel model attached to the -X face.
+  // Cubyz produces the four wall attachments by rotating that base model around
+  // Z in quarter turns (see sign.zig side rotations), so `data - 16` maps
+  // directly to 0/90/180/270-degree Z rotations, i.e. 0/2/4/6 eighth steps.
+  // This keeps the panel vertical instead of laying it flat like the axis-remap
+  // face transforms would.
   const side = data - 16;
-  const transforms: SemanticTransform[] = [
-    "face-x-",
-    "face-y-",
-    "face-x+",
-    "face-y+",
-  ];
   return (shape.variantQuads.side ?? []).map((quad) => ({
     quad,
     turns: 0,
-    transform: transforms[side] ?? "face-x-",
+    eighths: (side & 3) * 2,
   }));
 }
 
