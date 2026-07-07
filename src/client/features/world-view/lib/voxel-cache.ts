@@ -1,6 +1,6 @@
 import type * as THREE from "three";
 
-import { estimateLoadedVoxelTileBytes } from "./memory.js";
+import { estimateLoadedVoxelTileMemory } from "./memory.js";
 import type { LoadedVoxelTile, WarmCachedVoxelTile } from "./types.js";
 
 function detachVoxelTileFromScene(
@@ -95,7 +95,7 @@ export function moveVoxelTileToWarmCache(args: {
     voxelGroup,
     chunkBorderGroup,
   } = args;
-  const bytes = estimateLoadedVoxelTileBytes(tile);
+  const bytes = estimateLoadedVoxelTileMemory(tile).totalBytes;
   detachVoxelTileFromScene(tile, voxelGroup, chunkBorderGroup);
 
   const existing = warmCachedVoxels.get(tile.key);

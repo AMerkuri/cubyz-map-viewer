@@ -8,6 +8,8 @@ import type { WorkerIn, WorkerOut } from "../lib/types.js";
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 const VOXEL_POSITION_FIXED_SCALE = 4096;
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
+const VOXEL_BINARY_MAGIC = 0x324d5856;
+const POSITION_KIND_INTEGER = 1;
 
 /**
  * Off-thread voxel mesh builder.
@@ -140,11 +142,14 @@ function buildMeshArrays(buf: ArrayBuffer): {
   if (buf.byteLength < 20) throw new Error("buffer too small for header");
 
   const view = new DataView(buf);
-  const worldX = view.getInt32(0, true);
-  const worldY = view.getInt32(4, true);
-  const worldZ = view.getInt32(8, true);
-  const quadCount = view.getUint32(12, true);
-  const voxelSize = view.getUint32(16, true) || 1;
+  const hasVersionedHeader =
+    buf.byteLength >= 24 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC;
+  const headerBytes = hasVersionedHeader ? 24 : 20;
+  const worldX = view.getInt32(hasVersionedHeader ? 4 : 0, true);
+  const worldY = view.getInt32(hasVersionedHeader ? 8 : 4, true);
+  const worldZ = view.getInt32(hasVersionedHeader ? 12 : 8, true);
+  const quadCount = view.getUint32(hasVersionedHeader ? 16 : 12, true);
+  const voxelSize = view.getUint32(hasVersionedHeader ? 20 : 16, true) || 1;
 
   const vertexCount = quadCount * 4;
 
@@ -154,14 +159,39 @@ function buildMeshArrays(buf: ArrayBuffer): {
   const directionPadded = (quadCount + 3) & ~3;
   const palettePadded = (quadCount * 2 + 3) & ~3;
   const renderKindPadded = (quadCount + 3) & ~3;
-  const expectedSize =
-    20 +
+  const sourceKindPadded = hasVersionedHeader ? (quadCount + 3) & ~3 : 0;
+  const positionKindPadded = hasVersionedHeader ? (quadCount + 3) & ~3 : 0;
+  const positionKindOffset =
+    headerBytes +
     colorPadded +
     aoPadded +
     directionPadded +
     palettePadded +
     renderKindPadded +
-    vertexCount * 12;
+    sourceKindPadded;
+  const positionOffset = positionKindOffset + positionKindPadded;
+  let positionBytes = vertexCount * 12;
+  if (hasVersionedHeader) {
+    if (buf.byteLength < positionOffset + positionKindPadded) {
+      throw new Error("buffer truncated before voxel position kinds");
+    }
+    positionBytes = 0;
+    for (let qi = 0; qi < quadCount; qi++) {
+      const positionKind = view.getUint8(positionKindOffset + qi);
+      positionBytes +=
+        positionKind === POSITION_KIND_INTEGER ? 4 * 3 * 2 : 4 * 3 * 4;
+    }
+  }
+  const expectedSize =
+    headerBytes +
+    colorPadded +
+    aoPadded +
+    directionPadded +
+    palettePadded +
+    renderKindPadded +
+    sourceKindPadded +
+    positionKindPadded +
+    positionBytes;
   if (buf.byteLength < expectedSize) throw new Error("buffer truncated");
 
   // The server appends a u32 LE chunk-coverage bitmask after the mesh data.
@@ -173,38 +203,56 @@ function buildMeshArrays(buf: ArrayBuffer): {
       ? view.getUint32(expectedSize, true)
       : 0xffff;
 
-  const aoOffset = 20 + colorPadded;
-  let directionOff = 20 + colorPadded + aoPadded;
-  const paletteOffset = 20 + colorPadded + aoPadded + directionPadded;
+  const aoOffset = headerBytes + colorPadded;
+  let directionOff = headerBytes + colorPadded + aoPadded;
+  const paletteOffset = headerBytes + colorPadded + aoPadded + directionPadded;
   const renderKindOffset = paletteOffset + palettePadded;
-  const positionOffset = renderKindOffset + renderKindPadded;
 
   // --- Positions ---
   const positions = new Float32Array(vertexCount * 3);
   let minZ = Number.POSITIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
   let off = positionOffset;
-  for (let vi = 0; vi < vertexCount; vi++) {
-    const rx = view.getUint32(off, true);
-    off += 4;
-    const ry = view.getUint32(off, true);
-    off += 4;
-    const rz = view.getUint32(off, true);
-    off += 4;
-    positions[vi * 3] = worldX + (rx * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
-    positions[vi * 3 + 1] =
-      worldY + (ry * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
-    positions[vi * 3 + 2] =
-      worldZ + (rz * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
-    if (positions[vi * 3 + 2] < minZ) minZ = positions[vi * 3 + 2];
-    if (positions[vi * 3 + 2] > maxZ) maxZ = positions[vi * 3 + 2];
+  for (let qi = 0; qi < quadCount; qi++) {
+    const positionKind = hasVersionedHeader
+      ? view.getUint8(positionKindOffset + qi)
+      : 2;
+    for (let corner = 0; corner < 4; corner++) {
+      const vi = qi * 4 + corner;
+      let rx: number;
+      let ry: number;
+      let rz: number;
+      if (positionKind === POSITION_KIND_INTEGER) {
+        rx = view.getUint16(off, true) * VOXEL_POSITION_FIXED_SCALE;
+        off += 2;
+        ry = view.getUint16(off, true) * VOXEL_POSITION_FIXED_SCALE;
+        off += 2;
+        rz = view.getUint16(off, true) * VOXEL_POSITION_FIXED_SCALE;
+        off += 2;
+      } else {
+        rx = view.getUint32(off, true);
+        off += 4;
+        ry = view.getUint32(off, true);
+        off += 4;
+        rz = view.getUint32(off, true);
+        off += 4;
+      }
+      positions[vi * 3] =
+        worldX + (rx * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
+      positions[vi * 3 + 1] =
+        worldY + (ry * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
+      positions[vi * 3 + 2] =
+        worldZ + (rz * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
+      if (positions[vi * 3 + 2] < minZ) minZ = positions[vi * 3 + 2];
+      if (positions[vi * 3 + 2] > maxZ) maxZ = positions[vi * 3 + 2];
+    }
   }
   if (!Number.isFinite(minZ)) minZ = 0;
   if (!Number.isFinite(maxZ)) maxZ = 0;
 
   // --- Base colors (per quad, normalized 0–1) ---
   const quadColors = new Float32Array(quadCount * 3);
-  let colorOff = 20;
+  let colorOff = headerBytes;
   for (let qi = 0; qi < quadCount; qi++) {
     quadColors[qi * 3] = view.getUint8(colorOff++) / 255;
     quadColors[qi * 3 + 1] = view.getUint8(colorOff++) / 255;

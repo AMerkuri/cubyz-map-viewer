@@ -3,7 +3,7 @@ import type { ChunkStats } from "../../../lib/world-view-debug.js";
 import {
   addMemoryToLod,
   estimateLoadedTerrainTileBytes,
-  estimateLoadedVoxelTileBytes,
+  estimateLoadedVoxelTileMemory,
 } from "./memory.js";
 import type {
   LoadedTerrainTile,
@@ -73,8 +73,11 @@ export function publishChunkStats(args: {
   const memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>> = {};
   let terrainMemoryBytes = 0;
   let voxelMemoryBytes = 0;
+  let loadedVoxelGeometryBytes = 0;
+  let loadedVoxelMetadataBytes = 0;
   let cachedTerrainMemoryBytes = 0;
   let cachedVoxelMemoryBytes = 0;
+  let cachedVoxelByLodBytes = 0;
   let queuedMemoryBytes = 0;
 
   for (const tile of loadedTerrain.values()) {
@@ -92,15 +95,18 @@ export function publishChunkStats(args: {
 
   for (const tile of loadedVoxels.values()) {
     const lod = tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
-    const tileBytes = estimateLoadedVoxelTileBytes(tile);
+    const tileMemory = estimateLoadedVoxelTileMemory(tile);
     loadedByLod[lod] = (loadedByLod[lod] ?? 0) + 1;
-    voxelMemoryBytes += tileBytes;
-    addMemoryToLod(memoryByLod, lod, tileBytes);
+    loadedVoxelGeometryBytes += tileMemory.geometryBytes;
+    loadedVoxelMetadataBytes += tileMemory.metadataBytes;
+    voxelMemoryBytes += tileMemory.totalBytes;
+    addMemoryToLod(memoryByLod, lod, tileMemory.totalBytes);
   }
 
   for (const cached of warmCachedVoxels.values()) {
     const lod = cached.tile.lod as 1 | 2 | 4 | 8 | 16 | 32;
     cachedVoxelMemoryBytes += cached.bytes;
+    cachedVoxelByLodBytes += cached.bytes;
     addMemoryToLod(memoryByLod, lod, cached.bytes);
   }
 
@@ -113,6 +119,7 @@ export function publishChunkStats(args: {
       queuedMemoryBytes += quadrant.normals.byteLength;
       queuedMemoryBytes += quadrant.baseColors.byteLength;
       queuedMemoryBytes += quadrant.faceAo.byteLength;
+      queuedMemoryBytes += quadrant.trianglePaletteIndices.byteLength;
       queuedMemoryBytes += quadrant.indices.byteLength;
     }
     queuedMemoryBytes += item.chunkTopHeights.byteLength;
@@ -149,9 +156,13 @@ export function publishChunkStats(args: {
     memoryBreakdown: {
       terrain: terrainMemoryBytes,
       voxels: voxelMemoryBytes,
+      voxelGeometry: loadedVoxelGeometryBytes,
+      voxelMetadata: loadedVoxelMetadataBytes,
       cachedTerrain: cachedTerrainMemoryBytes,
       cachedVoxels: cachedVoxelMemoryBytes,
+      warmVoxels: cachedVoxelByLodBytes,
       queued: queuedMemoryBytes,
+      queuedVoxelOutput: queuedMemoryBytes,
     },
     memoryByLod,
     jsHeapBytes,

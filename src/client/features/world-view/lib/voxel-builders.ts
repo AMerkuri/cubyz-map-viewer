@@ -77,6 +77,7 @@ export function buildVoxelQuadrantSubMeshes(
     quadrantMeshes: typeof item.quadrantMeshes,
     material: THREE.Material,
     renderOrder: number,
+    retainBaseColors: boolean,
   ): {
     quadrantIndex: number;
     mesh: THREE.Mesh;
@@ -97,6 +98,9 @@ export function buildVoxelQuadrantSubMeshes(
     for (const quadrant of quadrantMeshes) {
       if (quadrant.indices.length === 0) continue;
       const geom = new THREE.BufferGeometry();
+      const colorAttributeArray = retainBaseColors
+        ? quadrant.baseColors.slice()
+        : quadrant.baseColors;
       geom.setAttribute(
         "position",
         new THREE.BufferAttribute(quadrant.positions, 3),
@@ -107,7 +111,7 @@ export function buildVoxelQuadrantSubMeshes(
       );
       geom.setAttribute(
         "color",
-        new THREE.BufferAttribute(quadrant.baseColors.slice(), 3),
+        new THREE.BufferAttribute(colorAttributeArray, 3),
       );
       geom.setIndex(new THREE.BufferAttribute(quadrant.indices, 1));
       geom.computeBoundingBox();
@@ -129,11 +133,12 @@ export function buildVoxelQuadrantSubMeshes(
   };
 
   return {
-    subMeshes: buildSubMeshes(item.quadrantMeshes, voxelMaterial, 0),
+    subMeshes: buildSubMeshes(item.quadrantMeshes, voxelMaterial, 0, true),
     transparentSubMeshes: buildSubMeshes(
       item.transparentQuadrantMeshes,
       transparentVoxelMaterial,
       1,
+      false,
     ),
     minZ: item.minZ,
     maxZ: item.maxZ,

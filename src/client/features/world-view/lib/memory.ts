@@ -4,6 +4,12 @@ import type { LoadedTerrainTile, LoadedVoxelTile } from "./types.js";
 
 const ESTIMATED_TEXT_SPRITE_BYTES = 256 * 64 * 4;
 
+interface VoxelTileMemoryEstimate {
+  geometryBytes: number;
+  metadataBytes: number;
+  totalBytes: number;
+}
+
 function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   let total = 0;
 
@@ -18,15 +24,27 @@ function estimateGeometryBytes(geometry: THREE.BufferGeometry): number {
   return total;
 }
 
-export function estimateLoadedVoxelTileBytes(tile: LoadedVoxelTile): number {
-  let total =
-    tile.chunkTopHeights.byteLength +
-    estimateGeometryBytes(tile.borderLines.geometry);
+export function estimateLoadedVoxelTileMemory(
+  tile: LoadedVoxelTile,
+): VoxelTileMemoryEstimate {
+  let geometryBytes = estimateGeometryBytes(tile.borderLines.geometry);
+  let metadataBytes = tile.chunkTopHeights.byteLength;
   for (const sm of [...tile.subMeshes, ...tile.transparentSubMeshes]) {
-    total += estimateGeometryBytes(sm.mesh.geometry);
-    total += sm.baseColors.byteLength + sm.faceAo.byteLength;
+    const geometry = sm.mesh.geometry;
+    geometryBytes += estimateGeometryBytes(geometry);
+    const colorAttr = geometry.getAttribute("color");
+    const retainedBaseColorBytes =
+      colorAttr?.array === sm.baseColors ? 0 : sm.baseColors.byteLength;
+    metadataBytes +=
+      retainedBaseColorBytes +
+      sm.faceAo.byteLength +
+      sm.trianglePaletteIndices.byteLength;
   }
-  return total;
+  return {
+    geometryBytes,
+    metadataBytes,
+    totalBytes: geometryBytes + metadataBytes,
+  };
 }
 
 export function estimateLoadedTerrainTileBytes(

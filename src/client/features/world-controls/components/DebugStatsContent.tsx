@@ -51,6 +51,14 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       </div>
       <div>Voxels: {formatMemoryBytes(chunkStats.memoryBreakdown.voxels)}</div>
       <div>
+        Voxel geometry:{" "}
+        {formatMemoryBytes(chunkStats.memoryBreakdown.voxelGeometry)}
+      </div>
+      <div>
+        Voxel metadata:{" "}
+        {formatMemoryBytes(chunkStats.memoryBreakdown.voxelMetadata)}
+      </div>
+      <div>
         Terrain warm cache:{" "}
         {formatMemoryBytes(chunkStats.memoryBreakdown.cachedTerrain)} (
         {chunkStats.warmCacheCount.terrain})
@@ -61,6 +69,10 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         {chunkStats.warmCacheCount.voxels})
       </div>
       <div>Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}</div>
+      <div>
+        Queued voxel output:{" "}
+        {formatMemoryBytes(chunkStats.memoryBreakdown.queuedVoxelOutput)}
+      </div>
       <div>
         JS heap:{" "}
         {chunkStats.jsHeapBytes === null

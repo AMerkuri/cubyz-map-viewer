@@ -28,6 +28,10 @@ import {
 import {
   type BinaryQuad,
   encodeBinaryQuads,
+  getBinaryQuadPositionKindOffset,
+  getBinaryQuadPositionOffset,
+  readBinaryHeader,
+  readBinaryQuadMetrics,
   VOXEL_REGION_SIZE,
 } from "./greedy-mesh.js";
 import { logger } from "./logger.js";
@@ -38,6 +42,13 @@ const COLUMN_VOXELS = VOXEL_REGION_SIZE;
 const CHUNK_COLUMNS_PER_AXIS = COLUMN_VOXELS / CHUNK_SIZE;
 const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
+// Safety ceiling that bounds pathological model/semantic geometry without
+// dropping ordinary dense decorative regions (spawn areas, sign-heavy plots,
+// forests). Sampled dense regions emit on the order of tens of thousands of
+// model quads, so this ceiling is set well above normal usage and only guards
+// against runaway payloads. Model geometry is dropped per-block only once the
+// region exceeds this ceiling.
+const LOD1_MODEL_QUAD_BUDGET = 200_000;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??
     join(process.cwd(), "dist", "server", "cache", "voxels"),
@@ -156,17 +167,20 @@ export async function generateVoxelMesh(
   const cached = await readPersistentMesh(persistentCachePath, cacheKey);
   if (cached) {
     const view = new DataView(cached);
+    const header = readBinaryHeader(view, cached.byteLength);
     return {
       buffer: cached,
       stats: {
         cacheTier: "disk",
-        quadCount: view.getUint32(12, true),
+        ...readBinaryQuadMetrics(cached),
+        droppedModelQuads: 0,
+        modelQuadBudget: LOD1_MODEL_QUAD_BUDGET,
         chunkColumns: countChunkColumns(view, cached.byteLength),
         regionsParsed: 0,
         chunksMeshed: 0,
         visitedAirCells: 0,
         facesBeforeMerge: 0,
-        minWorldZ: view.getInt32(8, true),
+        minWorldZ: header.worldZ,
         maxWorldZ: extractMaxWorldZ(view, cached.byteLength),
       },
     };
@@ -188,6 +202,7 @@ export async function generateVoxelMesh(
   const transparentFaceCells = new Set<string>();
   const modelBlocks = new Set<string>();
   const modelQuads: BinaryQuad[] = [];
+  let droppedModelQuads = 0;
   const visibleChunkColumns = new Set<number>();
   let regionsParsed = 0;
   let chunksMeshed = 0;
@@ -303,7 +318,8 @@ export async function generateVoxelMesh(
 
   if (faces.size === 0 && modelQuads.length === 0) return { buffer: null };
 
-  const quads = [...buildMergedQuads(faces), ...modelQuads];
+  const mergedQuads = buildMergedQuads(faces);
+  const quads = [...mergedQuads, ...modelQuads];
   let minFaceZ = Number.POSITIVE_INFINITY;
   for (const [key, typ] of faces) {
     const [xStr, yStr, _zStr, face] = key.split("/") as [
@@ -339,7 +355,7 @@ export async function generateVoxelMesh(
     chunkCoverage |= 1 << idx;
   }
 
-  const mesh = encodeBinaryQuads(
+  const encodedMesh = encodeBinaryQuads(
     quads,
     regionX,
     regionY,
@@ -348,8 +364,11 @@ export async function generateVoxelMesh(
     blockColors,
     chunkCoverage,
   );
+  const mesh = encodedMesh.buffer;
   const view = new DataView(mesh);
-  if (view.getUint32(12, true) === 0) return { buffer: null };
+  if (readBinaryHeader(view, mesh.byteLength).quadCount === 0) {
+    return { buffer: null };
+  }
 
   await mkdir(persistentCacheDir, { recursive: true });
   await writePersistentMesh(persistentCachePath, cacheKey, mesh);
@@ -357,7 +376,9 @@ export async function generateVoxelMesh(
     buffer: mesh,
     stats: {
       cacheTier: "worker",
-      quadCount: quads.length,
+      ...encodedMesh.metrics,
+      droppedModelQuads,
+      modelQuadBudget: LOD1_MODEL_QUAD_BUDGET,
       chunkColumns: visibleChunkColumns.size,
       regionsParsed,
       chunksMeshed,
@@ -1182,13 +1203,12 @@ export async function generateVoxelMesh(
       Math.floor(x / CHUNK_SIZE) * 4 + Math.floor(y / CHUNK_SIZE),
     );
     const data = getBlockData(blockValue);
-    for (const {
-      quad,
-      turns,
-      transform,
-      eighths,
-      direction,
-    } of getModelQuadsForData(shape, data)) {
+    const modelEntries = getModelQuadsForData(shape, data);
+    if (modelQuads.length + modelEntries.length > LOD1_MODEL_QUAD_BUDGET) {
+      droppedModelQuads += modelEntries.length;
+      return;
+    }
+    for (const { quad, turns, transform, eighths, direction } of modelEntries) {
       const transformed = quad.vertices.map((vertex) =>
         direction !== undefined
           ? transformDirectionVertex(vertex, direction)
@@ -1216,6 +1236,7 @@ export async function generateVoxelMesh(
         dir: 1,
         packedAo: 0,
         renderKind: getRenderKind(paletteIndex),
+        sourceKind: "model",
       });
     }
   }
@@ -2530,20 +2551,38 @@ function countChunkColumns(view: DataView, byteLength: number): number {
 }
 
 function extractMaxWorldZ(view: DataView, _byteLength: number): number {
-  const worldZ = view.getInt32(8, true);
-  const quadCount = view.getUint32(12, true);
-  const voxelSize = view.getUint32(16, true) || 1;
+  const header = readBinaryHeader(view, view.byteLength);
+  const worldZ = header.worldZ;
+  const quadCount = header.quadCount;
+  const voxelSize = header.voxelSize;
   const vertexCount = quadCount * 4;
-  const colorPadded = (quadCount * 3 + 3) & ~3;
-  const aoPadded = (quadCount + 3) & ~3;
-  const directionPadded = (quadCount + 3) & ~3;
-  let off = 20 + colorPadded + aoPadded + directionPadded;
+  let off = getBinaryQuadPositionOffset(view.buffer);
   let maxRelZ = 0;
-  for (let i = 0; i < vertexCount; i++) {
-    off += 8;
-    const relZ = view.getUint32(off, true);
-    if (relZ > maxRelZ) maxRelZ = relZ;
-    off += 4;
+  if (header.hasPositionKinds) {
+    const positionKindOffset = getBinaryQuadPositionKindOffset(view.buffer);
+    for (let qi = 0; qi < quadCount; qi++) {
+      const positionKind = view.getUint8(positionKindOffset + qi);
+      for (let corner = 0; corner < 4; corner++) {
+        if (positionKind === 1) {
+          off += 4;
+          const relZ = view.getUint16(off, true) * VOXEL_POSITION_FIXED_SCALE;
+          if (relZ > maxRelZ) maxRelZ = relZ;
+          off += 2;
+        } else {
+          off += 8;
+          const relZ = view.getUint32(off, true);
+          if (relZ > maxRelZ) maxRelZ = relZ;
+          off += 4;
+        }
+      }
+    }
+  } else {
+    for (let i = 0; i < vertexCount; i++) {
+      off += 8;
+      const relZ = view.getUint32(off, true);
+      if (relZ > maxRelZ) maxRelZ = relZ;
+      off += 4;
+    }
   }
   return worldZ + (maxRelZ * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
 }

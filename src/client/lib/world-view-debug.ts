@@ -29,9 +29,13 @@ export type ChunkStats = {
   memoryBreakdown: {
     terrain: number;
     voxels: number;
+    voxelGeometry: number;
+    voxelMetadata: number;
     cachedTerrain: number;
     cachedVoxels: number;
+    warmVoxels: number;
     queued: number;
+    queuedVoxelOutput: number;
   };
   memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
   jsHeapBytes: number | null;
@@ -137,9 +141,13 @@ export function createEmptyChunkStats(): ChunkStats {
     memoryBreakdown: {
       terrain: 0,
       voxels: 0,
+      voxelGeometry: 0,
+      voxelMetadata: 0,
       cachedTerrain: 0,
       cachedVoxels: 0,
+      warmVoxels: 0,
       queued: 0,
+      queuedVoxelOutput: 0,
     },
     memoryByLod: {},
     jsHeapBytes: null,

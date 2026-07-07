@@ -16,6 +16,7 @@ interface CachedVoxelMesh {
   buf: Buffer;
   sourceSignature: string;
   cacheTier: VoxelGenerationStats["cacheTier"];
+  stats?: VoxelGenerationStats;
   variants: Map<VoxelContentEncoding, CachedVoxelVariant>;
   variantJobs: Map<CompressedVoxelEncoding, Promise<CachedVoxelVariant>>;
 }
@@ -34,6 +35,17 @@ interface VoxelEncodingBenchmark {
 interface VoxelMeshBenchmark {
   key: string;
   rawByteLength: number;
+  metrics?: Pick<
+    VoxelGenerationStats,
+    | "quadCount"
+    | "greedyCubeQuads"
+    | "modelQuads"
+    | "droppedModelQuads"
+    | "modelQuadBudget"
+    | "transparentQuads"
+    | "rawPayloadBytes"
+    | "cacheTier"
+  >;
   variants: VoxelEncodingBenchmark[];
 }
 
@@ -80,6 +92,12 @@ interface VoxelRequestMetrics {
   byteLength: number;
   cacheTier?: VoxelGenerationStats["cacheTier"];
   quadCount?: number;
+  greedyCubeQuads?: number;
+  modelQuads?: number;
+  droppedModelQuads?: number;
+  modelQuadBudget?: number;
+  transparentQuads?: number;
+  rawPayloadBytes?: number;
   chunkColumns?: number;
   regionsParsed?: number;
   chunksMeshed?: number;
@@ -258,6 +276,16 @@ export class VoxelMeshService {
           inFlightJobs: this.inFlight.size,
           byteLength: variant.buf.byteLength,
           cacheTier: cached.cacheTier,
+          quadCount: cached.stats?.quadCount,
+          greedyCubeQuads: cached.stats?.greedyCubeQuads,
+          modelQuads: cached.stats?.modelQuads,
+          droppedModelQuads: cached.stats?.droppedModelQuads,
+          modelQuadBudget: cached.stats?.modelQuadBudget,
+          transparentQuads: cached.stats?.transparentQuads,
+          rawPayloadBytes: cached.stats?.rawPayloadBytes,
+          chunkColumns: cached.stats?.chunkColumns,
+          minWorldZ: cached.stats?.minWorldZ,
+          maxWorldZ: cached.stats?.maxWorldZ,
         },
       };
     }
@@ -298,6 +326,12 @@ export class VoxelMeshService {
       byteLength: result.status === "ok" ? result.buffer.byteLength : 0,
       cacheTier: result.stats?.cacheTier,
       quadCount: result.stats?.quadCount,
+      greedyCubeQuads: result.stats?.greedyCubeQuads,
+      modelQuads: result.stats?.modelQuads,
+      droppedModelQuads: result.stats?.droppedModelQuads,
+      modelQuadBudget: result.stats?.modelQuadBudget,
+      transparentQuads: result.stats?.transparentQuads,
+      rawPayloadBytes: result.stats?.rawPayloadBytes,
       chunkColumns: result.stats?.chunkColumns,
       regionsParsed: result.stats?.regionsParsed,
       chunksMeshed: result.stats?.chunksMeshed,
@@ -344,6 +378,7 @@ export class VoxelMeshService {
       buf: responseBuffer,
       sourceSignature,
       cacheTier: result.stats?.cacheTier ?? "worker",
+      stats: result.stats,
       variants,
       variantJobs: new Map(),
     };
@@ -436,6 +471,18 @@ export class VoxelMeshService {
     return {
       key,
       rawByteLength: cached.buf.byteLength,
+      metrics: cached.stats
+        ? {
+            cacheTier: cached.stats.cacheTier,
+            quadCount: cached.stats.quadCount,
+            greedyCubeQuads: cached.stats.greedyCubeQuads,
+            modelQuads: cached.stats.modelQuads,
+            droppedModelQuads: cached.stats.droppedModelQuads,
+            modelQuadBudget: cached.stats.modelQuadBudget,
+            transparentQuads: cached.stats.transparentQuads,
+            rawPayloadBytes: cached.stats.rawPayloadBytes,
+          }
+        : undefined,
       variants,
     };
   }

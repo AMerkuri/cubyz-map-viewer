@@ -20,6 +20,12 @@ export interface VoxelJob {
 export interface VoxelGenerationStats {
   cacheTier: "worker" | "disk";
   quadCount: number;
+  greedyCubeQuads: number;
+  modelQuads: number;
+  droppedModelQuads: number;
+  modelQuadBudget: number;
+  transparentQuads: number;
+  rawPayloadBytes: number;
   chunkColumns: number;
   regionsParsed: number;
   chunksMeshed: number;

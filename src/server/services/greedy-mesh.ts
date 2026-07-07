@@ -5,7 +5,8 @@
  *
  * Binary layout
  * ─────────────
- * Header (20 bytes)
+ * Header (24 bytes)
+ *   u32  magic/version marker
  *   i32  worldX
  *   i32  worldY
  *   i32  worldZBase
@@ -27,10 +28,15 @@
  * Per-quad render kinds (quadCount bytes, padded to 4-byte alignment)
  *   u8 renderKind — 1 opaque, 2 transparent
  *
- * Per-vertex positions  (4 × quadCount × 12 bytes)
- *   u32 x   relative to worldX in 1/4096-cell fixed-point units
- *   u32 y   relative to worldY in 1/4096-cell fixed-point units
- *   u32 z   relative to worldZBase in 1/4096-cell fixed-point units
+ * Per-quad source kinds (quadCount bytes, padded to 4-byte alignment)
+ *   u8 sourceKind — 1 greedy cube, 2 model/semantic geometry
+ *
+ * Per-quad position kinds (quadCount bytes, padded to 4-byte alignment)
+ *   u8 positionKind — 1 u16 integer cell coordinates, 2 u32 fixed-point
+ *
+ * Per-vertex positions  (4 vertices per quad)
+ *   positionKind 1: u16 x, u16 y, u16 z relative to worldX/Y/ZBase in cells
+ *   positionKind 2: u32 x, u32 y, u32 z relative to worldX/Y/ZBase in 1/4096-cell fixed-point units
  *
  * Trailer (4 bytes)
  *   u32 chunkCoverage  — 16-bit bitmask, bit (cx*4+cy) set when the 32×32
@@ -48,6 +54,11 @@ const reportedFallbackPaletteIndices = new Set<number>();
 const reportedOutOfRangePaletteIndices = new Set<number>();
 const AIR_LIKE_COLOR = { r: 0, g: 0, b: 0 };
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
+const VOXEL_BINARY_MAGIC = 0x324d5856;
+const POSITION_KIND_INTEGER = 1;
+const POSITION_KIND_FIXED = 2;
+const SOURCE_KIND_GREEDY = 1;
+const SOURCE_KIND_MODEL = 2;
 
 export interface BinaryQuad {
   v0x: number;
@@ -66,6 +77,15 @@ export interface BinaryQuad {
   dir: number;
   packedAo: number;
   renderKind: number;
+  sourceKind?: "greedy" | "model";
+}
+
+interface BinaryQuadMetrics {
+  quadCount: number;
+  greedyCubeQuads: number;
+  modelQuads: number;
+  transparentQuads: number;
+  rawPayloadBytes: number;
 }
 
 /** Width/depth of one voxel region column in world blocks (4 chunks × 32 = 128) */
@@ -79,7 +99,7 @@ export function encodeBinaryQuads(
   voxelSize: number,
   blockColors: BlockColorTable,
   chunkCoverage: number,
-): ArrayBuffer {
+): { buffer: ArrayBuffer; metrics: BinaryQuadMetrics } {
   let capacity = Math.max(4096, quads.length || 1);
   let quadCount = 0;
   let quadColors = new Uint8Array(capacity * 3);
@@ -87,9 +107,15 @@ export function encodeBinaryQuads(
   let quadDirections = new Uint8Array(capacity);
   let quadPaletteIndices = new Uint16Array(capacity);
   let quadRenderKinds = new Uint8Array(capacity);
+  let quadSourceKinds = new Uint8Array(capacity);
+  let quadPositionKinds = new Uint8Array(capacity);
   let vertPosX = new Uint32Array(capacity * 4);
   let vertPosY = new Uint32Array(capacity * 4);
   let vertPosZ = new Uint32Array(capacity * 4);
+  let greedyCubeQuads = 0;
+  let modelQuads = 0;
+  let transparentQuads = 0;
+  let positionBytes = 0;
 
   function ensureCapacity() {
     if (quadCount < capacity) return;
@@ -109,6 +135,12 @@ export function encodeBinaryQuads(
     const qr2 = new Uint8Array(capacity);
     qr2.set(quadRenderKinds);
     quadRenderKinds = qr2;
+    const qs2 = new Uint8Array(capacity);
+    qs2.set(quadSourceKinds);
+    quadSourceKinds = qs2;
+    const qpk2 = new Uint8Array(capacity);
+    qpk2.set(quadPositionKinds);
+    quadPositionKinds = qpk2;
     const vx2 = new Uint32Array(capacity * 4);
     vx2.set(vertPosX);
     vertPosX = vx2;
@@ -132,6 +164,19 @@ export function encodeBinaryQuads(
     quadDirections[qi] = quad.dir === 1 ? 1 : 0;
     quadPaletteIndices[qi] = toWirePaletteIndex(quad.typ);
     quadRenderKinds[qi] = quad.renderKind === 2 ? 2 : 1;
+    if (quadRenderKinds[qi] === 2) transparentQuads++;
+    if (quad.sourceKind === "model") {
+      quadSourceKinds[qi] = SOURCE_KIND_MODEL;
+      modelQuads++;
+    } else {
+      quadSourceKinds[qi] = SOURCE_KIND_GREEDY;
+      greedyCubeQuads++;
+    }
+    const integerPositionKind = canEncodeIntegerPositions(quad);
+    quadPositionKinds[qi] = integerPositionKind
+      ? POSITION_KIND_INTEGER
+      : POSITION_KIND_FIXED;
+    positionBytes += integerPositionKind ? 4 * 3 * 2 : 4 * 3 * 4;
 
     vertPosX[vi] = toFixedPosition(quad.v0x);
     vertPosY[vi] = toFixedPosition(quad.v0y);
@@ -149,7 +194,6 @@ export function encodeBinaryQuads(
     quadCount++;
   }
 
-  const vertexCount = quadCount * 4;
   const colorBytes = quadCount * 3;
   const colorPadded = (colorBytes + 3) & ~3;
   const aoBytes = quadCount;
@@ -160,42 +204,48 @@ export function encodeBinaryQuads(
   const palettePadded = (paletteBytes + 3) & ~3;
   const renderKindBytes = quadCount;
   const renderKindPadded = (renderKindBytes + 3) & ~3;
-  const posBytes = vertexCount * 12;
+  const sourceKindBytes = quadCount;
+  const sourceKindPadded = (sourceKindBytes + 3) & ~3;
+  const positionKindBytes = quadCount;
+  const positionKindPadded = (positionKindBytes + 3) & ~3;
   const totalBytes =
-    20 +
+    24 +
     colorPadded +
     aoPadded +
     directionPadded +
     palettePadded +
     renderKindPadded +
-    posBytes +
+    sourceKindPadded +
+    positionKindPadded +
+    positionBytes +
     4;
   const buf = new ArrayBuffer(totalBytes);
   const view = new DataView(buf);
 
-  view.setInt32(0, worldX, true);
-  view.setInt32(4, worldY, true);
-  view.setInt32(8, worldZ, true);
-  view.setUint32(12, quadCount, true);
-  view.setUint32(16, voxelSize, true);
+  view.setUint32(0, VOXEL_BINARY_MAGIC, true);
+  view.setInt32(4, worldX, true);
+  view.setInt32(8, worldY, true);
+  view.setInt32(12, worldZ, true);
+  view.setUint32(16, quadCount, true);
+  view.setUint32(20, voxelSize, true);
 
-  let off = 20;
+  let off = 24;
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadColors[qi * 3]);
     view.setUint8(off++, quadColors[qi * 3 + 1]);
     view.setUint8(off++, quadColors[qi * 3 + 2]);
   }
-  off = 20 + colorPadded;
+  off = 24 + colorPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadAo[qi]);
   }
-  off = 20 + colorPadded + aoPadded;
+  off = 24 + colorPadded + aoPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadDirections[qi]);
   }
-  off = 20 + colorPadded + aoPadded + directionPadded;
+  off = 24 + colorPadded + aoPadded + directionPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint16(
@@ -205,30 +255,210 @@ export function encodeBinaryQuads(
     );
     off += 2;
   }
-  off = 20 + colorPadded + aoPadded + directionPadded + palettePadded;
+  off = 24 + colorPadded + aoPadded + directionPadded + palettePadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadRenderKinds[qi] ?? 1);
   }
   off =
-    20 +
+    24 +
     colorPadded +
     aoPadded +
     directionPadded +
     palettePadded +
     renderKindPadded;
 
-  for (let vi = 0; vi < vertexCount; vi++) {
-    view.setUint32(off, vertPosX[vi] ?? 0, true);
-    off += 4;
-    view.setUint32(off, vertPosY[vi] ?? 0, true);
-    off += 4;
-    view.setUint32(off, vertPosZ[vi] ?? 0, true);
-    off += 4;
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadSourceKinds[qi] ?? SOURCE_KIND_GREEDY);
+  }
+  off =
+    24 +
+    colorPadded +
+    aoPadded +
+    directionPadded +
+    palettePadded +
+    renderKindPadded +
+    sourceKindPadded;
+
+  for (let qi = 0; qi < quadCount; qi++) {
+    view.setUint8(off++, quadPositionKinds[qi] ?? POSITION_KIND_FIXED);
+  }
+  off =
+    24 +
+    colorPadded +
+    aoPadded +
+    directionPadded +
+    palettePadded +
+    renderKindPadded +
+    sourceKindPadded +
+    positionKindPadded;
+
+  for (let qi = 0; qi < quadCount; qi++) {
+    for (let corner = 0; corner < 4; corner++) {
+      const vi = qi * 4 + corner;
+      if (quadPositionKinds[qi] === POSITION_KIND_INTEGER) {
+        view.setUint16(
+          off,
+          (vertPosX[vi] ?? 0) / VOXEL_POSITION_FIXED_SCALE,
+          true,
+        );
+        off += 2;
+        view.setUint16(
+          off,
+          (vertPosY[vi] ?? 0) / VOXEL_POSITION_FIXED_SCALE,
+          true,
+        );
+        off += 2;
+        view.setUint16(
+          off,
+          (vertPosZ[vi] ?? 0) / VOXEL_POSITION_FIXED_SCALE,
+          true,
+        );
+        off += 2;
+      } else {
+        view.setUint32(off, vertPosX[vi] ?? 0, true);
+        off += 4;
+        view.setUint32(off, vertPosY[vi] ?? 0, true);
+        off += 4;
+        view.setUint32(off, vertPosZ[vi] ?? 0, true);
+        off += 4;
+      }
+    }
   }
 
   view.setUint32(off, chunkCoverage, true);
-  return buf;
+  return {
+    buffer: buf,
+    metrics: {
+      quadCount,
+      greedyCubeQuads,
+      modelQuads,
+      transparentQuads,
+      rawPayloadBytes: buf.byteLength,
+    },
+  };
+}
+
+export function readBinaryQuadMetrics(buf: ArrayBuffer): BinaryQuadMetrics {
+  const view = new DataView(buf);
+  const header = readBinaryHeader(view, buf.byteLength);
+  const layout = getBinaryQuadLayout(header.quadCount, header.headerBytes);
+  let transparentQuads = 0;
+  let greedyCubeQuads = 0;
+  let modelQuads = 0;
+  for (let qi = 0; qi < header.quadCount; qi++) {
+    if (view.getUint8(layout.renderKindOffset + qi) === 2) transparentQuads++;
+    if (header.hasSourceKinds) {
+      if (view.getUint8(layout.sourceKindOffset + qi) === SOURCE_KIND_MODEL) {
+        modelQuads++;
+      } else {
+        greedyCubeQuads++;
+      }
+    }
+  }
+  if (!header.hasSourceKinds) greedyCubeQuads = header.quadCount;
+  return {
+    quadCount: header.quadCount,
+    greedyCubeQuads,
+    modelQuads,
+    transparentQuads,
+    rawPayloadBytes: buf.byteLength,
+  };
+}
+
+export function getBinaryQuadPositionOffset(buf: ArrayBufferLike): number {
+  const view = new DataView(buf);
+  const header = readBinaryHeader(view, buf.byteLength);
+  return getBinaryQuadLayout(header.quadCount, header.headerBytes)
+    .positionOffset;
+}
+
+export function getBinaryQuadPositionKindOffset(buf: ArrayBufferLike): number {
+  const view = new DataView(buf);
+  const header = readBinaryHeader(view, buf.byteLength);
+  return getBinaryQuadLayout(header.quadCount, header.headerBytes)
+    .positionKindOffset;
+}
+
+export function readBinaryHeader(
+  view: DataView,
+  byteLength: number,
+): {
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+  quadCount: number;
+  voxelSize: number;
+  headerBytes: number;
+  hasSourceKinds: boolean;
+  hasPositionKinds: boolean;
+} {
+  if (byteLength < 20) throw new Error("buffer too small for voxel header");
+  if (byteLength >= 24 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) {
+    return {
+      worldX: view.getInt32(4, true),
+      worldY: view.getInt32(8, true),
+      worldZ: view.getInt32(12, true),
+      quadCount: view.getUint32(16, true),
+      voxelSize: view.getUint32(20, true) || 1,
+      headerBytes: 24,
+      hasSourceKinds: true,
+      hasPositionKinds: true,
+    };
+  }
+  return {
+    worldX: view.getInt32(0, true),
+    worldY: view.getInt32(4, true),
+    worldZ: view.getInt32(8, true),
+    quadCount: view.getUint32(12, true),
+    voxelSize: view.getUint32(16, true) || 1,
+    headerBytes: 20,
+    hasSourceKinds: false,
+    hasPositionKinds: false,
+  };
+}
+
+function getBinaryQuadLayout(quadCount: number, headerBytes: number) {
+  const colorPadded = (quadCount * 3 + 3) & ~3;
+  const aoPadded = (quadCount + 3) & ~3;
+  const directionPadded = (quadCount + 3) & ~3;
+  const palettePadded = (quadCount * 2 + 3) & ~3;
+  const renderKindPadded = (quadCount + 3) & ~3;
+  const sourceKindPadded = headerBytes === 24 ? (quadCount + 3) & ~3 : 0;
+  const positionKindPadded = headerBytes === 24 ? (quadCount + 3) & ~3 : 0;
+  const aoOffset = headerBytes + colorPadded;
+  const directionOffset = aoOffset + aoPadded;
+  const paletteOffset = directionOffset + directionPadded;
+  const renderKindOffset = paletteOffset + palettePadded;
+  const sourceKindOffset = renderKindOffset + renderKindPadded;
+  const positionKindOffset = sourceKindOffset + sourceKindPadded;
+  const positionOffset = positionKindOffset + positionKindPadded;
+  return {
+    aoOffset,
+    directionOffset,
+    paletteOffset,
+    renderKindOffset,
+    sourceKindOffset,
+    positionKindOffset,
+    positionOffset,
+  };
+}
+
+function canEncodeIntegerPositions(quad: BinaryQuad): boolean {
+  return [
+    quad.v0x,
+    quad.v0y,
+    quad.v0z,
+    quad.v1x,
+    quad.v1y,
+    quad.v1z,
+    quad.v2x,
+    quad.v2y,
+    quad.v2z,
+    quad.v3x,
+    quad.v3y,
+    quad.v3z,
+  ].every((value) => Number.isInteger(value) && value >= 0 && value <= 0xffff);
 }
 
 function toFixedPosition(value: number): number {
