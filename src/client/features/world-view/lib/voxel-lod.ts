@@ -33,7 +33,6 @@ function addVisibleQuadrant(
 function getTileEffectiveDist(
   cameraPosition: THREE.Vector3,
   entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">,
-  loadedTile?: Pick<LoadedVoxelTile, "minZ" | "maxZ">,
 ): number {
   const size = regionWorldSize(entry.lod);
   const dx =
@@ -48,22 +47,11 @@ function getTileEffectiveDist(
       : cameraPosition.y > entry.regionY + size
         ? cameraPosition.y - (entry.regionY + size)
         : 0;
-  const minZ = loadedTile ? Math.min(loadedTile.minZ, loadedTile.maxZ) : null;
-  const maxZ = loadedTile ? Math.max(loadedTile.minZ, loadedTile.maxZ) : null;
-  const dz =
-    minZ === null || maxZ === null
-      ? 0
-      : cameraPosition.z < minZ
-        ? minZ - cameraPosition.z
-        : cameraPosition.z > maxZ
-          ? cameraPosition.z - maxZ
-          : 0;
-  return Math.hypot(dx, dy, dz);
+  return Math.hypot(dx, dy);
 }
 
 function getTileLodSelectionDist(args: {
   entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">;
-  loadedTile?: Pick<LoadedVoxelTile, "minZ" | "maxZ">;
   cameraPosition: THREE.Vector3;
   cameraForward: THREE.Vector3;
   voxelBehindCameraDotStart: number;
@@ -71,13 +59,12 @@ function getTileLodSelectionDist(args: {
 }): number {
   const {
     entry,
-    loadedTile,
     cameraPosition,
     cameraForward,
     voxelBehindCameraDotStart,
     voxelBehindCameraMaxMultiplier,
   } = args;
-  const effectiveDist = getTileEffectiveDist(cameraPosition, entry, loadedTile);
+  const effectiveDist = getTileEffectiveDist(cameraPosition, entry);
   const forwardLenSq =
     cameraForward.x * cameraForward.x + cameraForward.y * cameraForward.y;
   if (forwardLenSq <= 1e-6) return effectiveDist;
@@ -248,12 +235,7 @@ export function runVoxelLodSelection(args: {
   };
 
   const getEffectiveDist = (lod: number, regionX: number, regionY: number) => {
-    const key = voxelTileKey(lod, regionX, regionY);
-    return getTileEffectiveDist(
-      cameraPosition,
-      { lod, regionX, regionY },
-      loadedVoxels.get(key),
-    );
+    return getTileEffectiveDist(cameraPosition, { lod, regionX, regionY });
   };
 
   const getLodSelectionDist = (
@@ -263,7 +245,6 @@ export function runVoxelLodSelection(args: {
   ) => {
     return getTileLodSelectionDist({
       entry: { lod, regionX, regionY },
-      loadedTile: loadedVoxels.get(voxelTileKey(lod, regionX, regionY)),
       cameraPosition,
       cameraForward,
       voxelBehindCameraDotStart: debugSettings.voxelBehindCameraDotStart,
