@@ -25,6 +25,7 @@ export interface RollingVoxelBenchmarkStats {
   avgEncodedBodyBytes: number | null;
   avgDecodedBodyBytes: number | null;
   avgRawBufferBytes: number | null;
+  avgWorkerOutputBytes: number | null;
 }
 
 export function publishChunkStats(args: {

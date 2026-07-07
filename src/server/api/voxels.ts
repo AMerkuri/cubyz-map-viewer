@@ -216,6 +216,8 @@ export function createVoxelsRouter(
       modelQuadBudget: response.metrics.modelQuadBudget,
       transparentQuads: response.metrics.transparentQuads,
       rawPayloadBytes: response.metrics.rawPayloadBytes,
+      greedyRecordBytes: response.metrics.greedyRecordBytes,
+      modelRecordBytes: response.metrics.modelRecordBytes,
       chunkColumns: response.metrics.chunkColumns,
       regionsParsed: response.metrics.regionsParsed,
       chunksMeshed: response.metrics.chunksMeshed,

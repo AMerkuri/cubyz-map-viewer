@@ -28,6 +28,8 @@ import {
 import {
   type BinaryQuad,
   encodeBinaryQuads,
+  GREEDY_RECORD_BYTES,
+  type GreedyFaceCode,
   getBinaryQuadPositionKindOffset,
   getBinaryQuadPositionOffset,
   readBinaryHeader,
@@ -55,6 +57,15 @@ const PROJECT_VOXEL_CACHE_DIR = resolve(
 );
 
 type Direction = "x-" | "x+" | "y-" | "y+" | "z+" | "z-";
+
+const GREEDY_FACE_CODE: Record<Direction, GreedyFaceCode> = {
+  "x+": 0,
+  "x-": 1,
+  "y+": 2,
+  "y-": 3,
+  "z+": 4,
+  "z-": 5,
+};
 
 interface SurfaceHeightsData {
   heights: Int32Array;
@@ -348,6 +359,16 @@ export async function generateVoxelMesh(
     quad.v1z -= baseCellZ;
     quad.v2z -= baseCellZ;
     quad.v3z -= baseCellZ;
+    if (quad.sourceKind !== "model") {
+      if (
+        quad.face === GREEDY_FACE_CODE["z+"] ||
+        quad.face === GREEDY_FACE_CODE["z-"]
+      ) {
+        quad.plane = (quad.plane ?? 0) - baseCellZ;
+      } else {
+        quad.v = (quad.v ?? 0) - baseCellZ;
+      }
+    }
   }
 
   let chunkCoverage = 0;
@@ -2284,9 +2305,11 @@ function createMergedQuad(
   packedAo: number,
   renderKind: number,
 ): BinaryQuad {
+  const parametric = { face: GREEDY_FACE_CODE[face], plane, u, v, du, dv };
   switch (face) {
     case "x+":
       return {
+        ...parametric,
         v0x: plane,
         v0y: u,
         v0z: v,
@@ -2306,6 +2329,7 @@ function createMergedQuad(
       };
     case "x-":
       return {
+        ...parametric,
         v0x: plane,
         v0y: u,
         v0z: v,
@@ -2325,6 +2349,7 @@ function createMergedQuad(
       };
     case "y+":
       return {
+        ...parametric,
         v0x: u,
         v0y: plane,
         v0z: v,
@@ -2344,6 +2369,7 @@ function createMergedQuad(
       };
     case "y-":
       return {
+        ...parametric,
         v0x: u,
         v0y: plane,
         v0z: v,
@@ -2363,6 +2389,7 @@ function createMergedQuad(
       };
     case "z+":
       return {
+        ...parametric,
         v0x: u,
         v0y: v,
         v0z: plane,
@@ -2382,6 +2409,7 @@ function createMergedQuad(
       };
     case "z-":
       return {
+        ...parametric,
         v0x: u,
         v0y: v,
         v0z: plane,
@@ -2556,12 +2584,48 @@ function extractMaxWorldZ(view: DataView, _byteLength: number): number {
   const quadCount = header.quadCount;
   const voxelSize = header.voxelSize;
   const vertexCount = quadCount * 4;
-  let off = getBinaryQuadPositionOffset(view.buffer);
   let maxRelZ = 0;
-  if (header.hasPositionKinds) {
+  if (header.greedyRecordCount !== undefined) {
+    const layout = getNewBinaryQuadLayout(quadCount, header.headerBytes);
+    const expectedBytes =
+      layout.greedyRecordOffset +
+      header.greedyRecordCount * GREEDY_RECORD_BYTES +
+      (header.modelRecordCount ?? 0) * 48 +
+      4;
+    if (view.byteLength < expectedBytes) {
+      throw new Error("buffer truncated before optimized voxel max-Z records");
+    }
+    let greedyOff = layout.greedyRecordOffset;
+    for (let qi = 0; qi < header.greedyRecordCount; qi++) {
+      const face = view.getUint8(greedyOff) as GreedyFaceCode;
+      greedyOff += 2;
+      const plane = view.getUint16(greedyOff, true);
+      greedyOff += 2;
+      greedyOff += 2;
+      const v = view.getUint16(greedyOff, true);
+      greedyOff += 2;
+      greedyOff += 2;
+      const dv = view.getUint16(greedyOff, true);
+      greedyOff += 2;
+      const zMax = face === 4 || face === 5 ? plane : v + dv;
+      maxRelZ = Math.max(maxRelZ, zMax * VOXEL_POSITION_FIXED_SCALE);
+    }
+    let modelOff =
+      layout.greedyRecordOffset +
+      (header.greedyRecordCount ?? 0) * GREEDY_RECORD_BYTES;
+    for (let qi = 0; qi < (header.modelRecordCount ?? 0); qi++) {
+      for (let corner = 0; corner < 4; corner++) {
+        modelOff += 8;
+        const relZ = view.getUint32(modelOff, true);
+        if (relZ > maxRelZ) maxRelZ = relZ;
+        modelOff += 4;
+      }
+    }
+  } else if (header.hasPositionKinds) {
+    let off = getBinaryQuadPositionOffset(view.buffer);
     const positionKindOffset = getBinaryQuadPositionKindOffset(view.buffer);
     for (let qi = 0; qi < quadCount; qi++) {
-      const positionKind = view.getUint8(positionKindOffset + qi);
+      const positionKind = view.getUint8((positionKindOffset ?? 0) + qi);
       for (let corner = 0; corner < 4; corner++) {
         if (positionKind === 1) {
           off += 4;
@@ -2577,6 +2641,7 @@ function extractMaxWorldZ(view: DataView, _byteLength: number): number {
       }
     }
   } else {
+    let off = getBinaryQuadPositionOffset(view.buffer);
     for (let i = 0; i < vertexCount; i++) {
       off += 8;
       const relZ = view.getUint32(off, true);
@@ -2585,4 +2650,21 @@ function extractMaxWorldZ(view: DataView, _byteLength: number): number {
     }
   }
   return worldZ + (maxRelZ * voxelSize) / VOXEL_POSITION_FIXED_SCALE;
+}
+
+function getNewBinaryQuadLayout(quadCount: number, headerBytes: number) {
+  const colorPadded = (quadCount * 3 + 3) & ~3;
+  const aoPadded = (quadCount + 3) & ~3;
+  const directionPadded = (quadCount + 3) & ~3;
+  const palettePadded = (quadCount * 2 + 3) & ~3;
+  const renderKindPadded = (quadCount + 3) & ~3;
+  return {
+    greedyRecordOffset:
+      headerBytes +
+      colorPadded +
+      aoPadded +
+      directionPadded +
+      palettePadded +
+      renderKindPadded,
+  };
 }

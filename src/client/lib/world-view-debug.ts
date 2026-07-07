@@ -53,6 +53,7 @@ export type ChunkStats = {
     avgEncodedBodyBytes: number | null;
     avgDecodedBodyBytes: number | null;
     avgRawBufferBytes: number | null;
+    avgWorkerOutputBytes: number | null;
   };
 };
 
@@ -165,6 +166,7 @@ export function createEmptyChunkStats(): ChunkStats {
       avgEncodedBodyBytes: null,
       avgDecodedBodyBytes: null,
       avgRawBufferBytes: null,
+      avgWorkerOutputBytes: null,
     },
   };
 }

@@ -26,6 +26,8 @@ export interface VoxelGenerationStats {
   modelQuadBudget: number;
   transparentQuads: number;
   rawPayloadBytes: number;
+  greedyRecordBytes: number;
+  modelRecordBytes: number;
   chunkColumns: number;
   regionsParsed: number;
   chunksMeshed: number;

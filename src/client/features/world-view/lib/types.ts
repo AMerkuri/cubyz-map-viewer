@@ -130,6 +130,7 @@ export interface WorkerOut {
     encodedBodyBytes: number | null;
     decodedBodyBytes: number | null;
     rawBufferBytes: number;
+    workerOutputBytes: number;
     contentEncoding: string | null;
   };
   error?: string;

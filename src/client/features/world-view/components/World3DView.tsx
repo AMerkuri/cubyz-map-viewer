@@ -335,6 +335,7 @@ export function World3DView({
     avgEncodedBodyBytes: null,
     avgDecodedBodyBytes: null,
     avgRawBufferBytes: null,
+    avgWorkerOutputBytes: null,
   });
   const avatarAssetCacheRef = useRef<AvatarAssetCache>(new Map());
   const avatarAssetsLoadGenerationRef = useRef(0);
@@ -1193,6 +1194,12 @@ export function World3DView({
             current.avgRawBufferBytes,
             current.samples,
             sample.rawBufferBytes,
+            nextSamples,
+          ),
+          avgWorkerOutputBytes: averageNullableMetric(
+            current.avgWorkerOutputBytes,
+            current.samples,
+            sample.workerOutputBytes,
             nextSamples,
           ),
         };

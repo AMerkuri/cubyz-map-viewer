@@ -114,6 +114,10 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         Avg worker input:{" "}
         {formatNullableBytes(chunkStats.voxelBenchmark.avgRawBufferBytes)}
       </div>
+      <div>
+        Avg worker output:{" "}
+        {formatNullableBytes(chunkStats.voxelBenchmark.avgWorkerOutputBytes)}
+      </div>
     </div>
   );
 }

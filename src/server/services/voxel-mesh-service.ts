@@ -44,6 +44,8 @@ interface VoxelMeshBenchmark {
     | "modelQuadBudget"
     | "transparentQuads"
     | "rawPayloadBytes"
+    | "greedyRecordBytes"
+    | "modelRecordBytes"
     | "cacheTier"
   >;
   variants: VoxelEncodingBenchmark[];
@@ -98,6 +100,8 @@ interface VoxelRequestMetrics {
   modelQuadBudget?: number;
   transparentQuads?: number;
   rawPayloadBytes?: number;
+  greedyRecordBytes?: number;
+  modelRecordBytes?: number;
   chunkColumns?: number;
   regionsParsed?: number;
   chunksMeshed?: number;
@@ -283,6 +287,8 @@ export class VoxelMeshService {
           modelQuadBudget: cached.stats?.modelQuadBudget,
           transparentQuads: cached.stats?.transparentQuads,
           rawPayloadBytes: cached.stats?.rawPayloadBytes,
+          greedyRecordBytes: cached.stats?.greedyRecordBytes,
+          modelRecordBytes: cached.stats?.modelRecordBytes,
           chunkColumns: cached.stats?.chunkColumns,
           minWorldZ: cached.stats?.minWorldZ,
           maxWorldZ: cached.stats?.maxWorldZ,
@@ -332,6 +338,8 @@ export class VoxelMeshService {
       modelQuadBudget: result.stats?.modelQuadBudget,
       transparentQuads: result.stats?.transparentQuads,
       rawPayloadBytes: result.stats?.rawPayloadBytes,
+      greedyRecordBytes: result.stats?.greedyRecordBytes,
+      modelRecordBytes: result.stats?.modelRecordBytes,
       chunkColumns: result.stats?.chunkColumns,
       regionsParsed: result.stats?.regionsParsed,
       chunksMeshed: result.stats?.chunksMeshed,
@@ -481,6 +489,8 @@ export class VoxelMeshService {
             modelQuadBudget: cached.stats.modelQuadBudget,
             transparentQuads: cached.stats.transparentQuads,
             rawPayloadBytes: cached.stats.rawPayloadBytes,
+            greedyRecordBytes: cached.stats.greedyRecordBytes,
+            modelRecordBytes: cached.stats.modelRecordBytes,
           }
         : undefined,
       variants,

@@ -8,8 +8,28 @@ import type { WorkerIn, WorkerOut } from "../lib/types.js";
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 const VOXEL_POSITION_FIXED_SCALE = 4096;
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
-const VOXEL_BINARY_MAGIC = 0x324d5856;
+const VOXEL_BINARY_MAGIC = 0x334d5856;
+const LEGACY_VOXEL_BINARY_MAGIC = 0x324d5856;
 const POSITION_KIND_INTEGER = 1;
+const GREEDY_RECORD_BYTES = 12;
+const MODEL_RECORD_BYTES = 48;
+
+type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
+
+interface DecodedQuad {
+  positions: number[];
+  dir: number;
+  color: [number, number, number];
+  packedAo: number;
+  paletteIndex: number;
+  renderKind: 1 | 2;
+}
+
+interface QuadrantCounts {
+  vertices: number;
+  indices: number;
+  triangles: number;
+}
 
 /**
  * Off-thread voxel mesh builder.
@@ -85,6 +105,7 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             encodedBodyBytes: benchmark.encodedBodyBytes,
             decodedBodyBytes: benchmark.decodedBodyBytes,
             rawBufferBytes: benchmark.rawBufferBytes,
+            workerOutputBytes: getWorkerOutputBytes(result),
             contentEncoding: benchmark.contentEncoding,
           }
         : undefined,
@@ -105,6 +126,7 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             encodedBodyBytes: benchmark.encodedBodyBytes,
             decodedBodyBytes: benchmark.decodedBodyBytes,
             rawBufferBytes: benchmark.rawBufferBytes,
+            workerOutputBytes: 0,
             contentEncoding: benchmark.contentEncoding,
           }
         : undefined,
@@ -113,6 +135,24 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
     workerGlobal.postMessage(out);
   }
 };
+
+function getWorkerOutputBytes(
+  result: ReturnType<typeof buildMeshArrays>,
+): number {
+  let bytes = result.chunkTopHeights.byteLength;
+  for (const quadrant of [
+    ...result.quadrantMeshes,
+    ...result.transparentQuadrantMeshes,
+  ]) {
+    bytes += quadrant.positions.byteLength;
+    bytes += quadrant.normals.byteLength;
+    bytes += quadrant.baseColors.byteLength;
+    bytes += quadrant.faceAo.byteLength;
+    bytes += quadrant.trianglePaletteIndices.byteLength;
+    bytes += quadrant.indices.byteLength;
+  }
+  return bytes;
+}
 
 function buildMeshArrays(buf: ArrayBuffer): {
   quadrantMeshes: {
@@ -142,8 +182,12 @@ function buildMeshArrays(buf: ArrayBuffer): {
   if (buf.byteLength < 20) throw new Error("buffer too small for header");
 
   const view = new DataView(buf);
+  if (buf.byteLength >= 32 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) {
+    return buildOptimizedMeshArrays(view, buf.byteLength);
+  }
   const hasVersionedHeader =
-    buf.byteLength >= 24 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC;
+    buf.byteLength >= 24 &&
+    view.getUint32(0, true) === LEGACY_VOXEL_BINARY_MAGIC;
   const headerBytes = hasVersionedHeader ? 24 : 20;
   const worldX = view.getInt32(hasVersionedHeader ? 4 : 0, true);
   const worldY = view.getInt32(hasVersionedHeader ? 8 : 4, true);
@@ -559,6 +603,480 @@ function buildMeshArrays(buf: ArrayBuffer): {
     minZ,
     maxZ,
   };
+}
+
+function buildOptimizedMeshArrays(
+  view: DataView,
+  byteLength: number,
+): ReturnType<typeof buildMeshArrays> {
+  const worldX = view.getInt32(4, true);
+  const worldY = view.getInt32(8, true);
+  const worldZ = view.getInt32(12, true);
+  const quadCount = view.getUint32(16, true);
+  const voxelSize = view.getUint32(20, true) || 1;
+  const greedyRecordCount = view.getUint32(24, true);
+  const modelRecordCount = view.getUint32(28, true);
+  if (greedyRecordCount + modelRecordCount !== quadCount) {
+    throw new Error("voxel payload record counts do not match quad count");
+  }
+
+  const colorPadded = (quadCount * 3 + 3) & ~3;
+  const aoPadded = (quadCount + 3) & ~3;
+  const directionPadded = (quadCount + 3) & ~3;
+  const palettePadded = (quadCount * 2 + 3) & ~3;
+  const renderKindPadded = (quadCount + 3) & ~3;
+  const colorOffset = 32;
+  const aoOffset = colorOffset + colorPadded;
+  const directionOffset = aoOffset + aoPadded;
+  const paletteOffset = directionOffset + directionPadded;
+  const renderKindOffset = paletteOffset + palettePadded;
+  const greedyRecordOffset = renderKindOffset + renderKindPadded;
+  const modelRecordOffset =
+    greedyRecordOffset + greedyRecordCount * GREEDY_RECORD_BYTES;
+  const expectedSize =
+    modelRecordOffset + modelRecordCount * MODEL_RECORD_BYTES;
+  if (byteLength < expectedSize) {
+    throw new Error("buffer truncated before optimized voxel records");
+  }
+
+  const chunkCoverage =
+    byteLength >= expectedSize + 4
+      ? view.getUint32(expectedSize, true)
+      : 0xffff;
+  const regionWorldSize = 128 * voxelSize;
+  const chunkWorldSize = 32 * voxelSize;
+  const chunkTopHeights = new Float32Array(16);
+  chunkTopHeights.fill(Number.NEGATIVE_INFINITY);
+  const opaqueCounts = createQuadrantCounts();
+  const transparentCounts = createQuadrantCounts();
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+
+  forEachOptimizedQuad(
+    view,
+    quadCount,
+    greedyRecordCount,
+    worldX,
+    worldY,
+    worldZ,
+    voxelSize,
+    colorOffset,
+    aoOffset,
+    directionOffset,
+    paletteOffset,
+    renderKindOffset,
+    greedyRecordOffset,
+    modelRecordOffset,
+    (quad) => {
+      const normal = computeQuadNormal(quad.positions, quad.dir);
+      for (let i = 2; i < quad.positions.length; i += 3) {
+        minZ = Math.min(minZ, quad.positions[i] ?? 0);
+        maxZ = Math.max(maxZ, quad.positions[i] ?? 0);
+      }
+      updateChunkTopHeights(
+        chunkTopHeights,
+        quad.positions,
+        normal,
+        quad.renderKind,
+        worldX,
+        worldY,
+        regionWorldSize,
+        chunkWorldSize,
+      );
+      const quadrant = getQuadQuadrant(
+        quad.positions,
+        worldX,
+        worldY,
+        regionWorldSize,
+      );
+      const counts = quad.renderKind === 2 ? transparentCounts : opaqueCounts;
+      counts[quadrant].vertices += 4;
+      counts[quadrant].indices += 6;
+      counts[quadrant].triangles += 2;
+    },
+  );
+
+  if (!Number.isFinite(minZ)) minZ = 0;
+  if (!Number.isFinite(maxZ)) maxZ = 0;
+
+  const opaqueWriters = createQuadrantWriters(opaqueCounts);
+  const transparentWriters = createQuadrantWriters(transparentCounts);
+  const depthCueRange = Math.max(maxZ - minZ, voxelSize);
+  forEachOptimizedQuad(
+    view,
+    quadCount,
+    greedyRecordCount,
+    worldX,
+    worldY,
+    worldZ,
+    voxelSize,
+    colorOffset,
+    aoOffset,
+    directionOffset,
+    paletteOffset,
+    renderKindOffset,
+    greedyRecordOffset,
+    modelRecordOffset,
+    (quad) => {
+      const quadrant = getQuadQuadrant(
+        quad.positions,
+        worldX,
+        worldY,
+        regionWorldSize,
+      );
+      const writers =
+        quad.renderKind === 2 ? transparentWriters : opaqueWriters;
+      writeQuadToQuadrant(writers[quadrant], quad, minZ, depthCueRange);
+    },
+  );
+
+  return {
+    quadrantMeshes: opaqueWriters.map(toQuadrantMesh),
+    transparentQuadrantMeshes: transparentWriters.map(toQuadrantMesh),
+    chunkCoverage,
+    chunkTopHeights,
+    voxelSize,
+    minZ,
+    maxZ,
+  };
+}
+
+function forEachOptimizedQuad(
+  view: DataView,
+  quadCount: number,
+  greedyRecordCount: number,
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  voxelSize: number,
+  colorOffset: number,
+  aoOffset: number,
+  directionOffset: number,
+  paletteOffset: number,
+  renderKindOffset: number,
+  greedyRecordOffset: number,
+  modelRecordOffset: number,
+  visit: (quad: DecodedQuad) => void,
+): void {
+  for (let qi = 0; qi < quadCount; qi++) {
+    const colorOff = colorOffset + qi * 3;
+    const paletteIndex = view.getUint16(paletteOffset + qi * 2, true);
+    const quad: DecodedQuad = {
+      positions:
+        qi < greedyRecordCount
+          ? readGreedyPositions(
+              view,
+              greedyRecordOffset + qi * GREEDY_RECORD_BYTES,
+              worldX,
+              worldY,
+              worldZ,
+              voxelSize,
+            )
+          : readModelPositions(
+              view,
+              modelRecordOffset + (qi - greedyRecordCount) * MODEL_RECORD_BYTES,
+              worldX,
+              worldY,
+              worldZ,
+              voxelSize,
+            ),
+      dir: view.getUint8(directionOffset + qi),
+      color: [
+        view.getUint8(colorOff) / 255,
+        view.getUint8(colorOff + 1) / 255,
+        view.getUint8(colorOff + 2) / 255,
+      ],
+      packedAo: view.getUint8(aoOffset + qi),
+      paletteIndex:
+        paletteIndex === MISSING_BLOCK_PALETTE_INDEX
+          ? Number.MAX_SAFE_INTEGER
+          : paletteIndex,
+      renderKind: view.getUint8(renderKindOffset + qi) === 2 ? 2 : 1,
+    };
+    visit(quad);
+  }
+}
+
+function readGreedyPositions(
+  view: DataView,
+  off: number,
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  voxelSize: number,
+): number[] {
+  const face = view.getUint8(off) as GreedyFaceCode;
+  const plane = view.getUint16(off + 2, true);
+  const u = view.getUint16(off + 4, true);
+  const v = view.getUint16(off + 6, true);
+  const du = view.getUint16(off + 8, true);
+  const dv = view.getUint16(off + 10, true);
+  const x = (value: number) => worldX + value * voxelSize;
+  const y = (value: number) => worldY + value * voxelSize;
+  const z = (value: number) => worldZ + value * voxelSize;
+  switch (face) {
+    case 0:
+    case 1:
+      return [
+        x(plane),
+        y(u),
+        z(v),
+        x(plane),
+        y(u + du),
+        z(v),
+        x(plane),
+        y(u + du),
+        z(v + dv),
+        x(plane),
+        y(u),
+        z(v + dv),
+      ];
+    case 2:
+    case 3:
+      return [
+        x(u),
+        y(plane),
+        z(v),
+        x(u + du),
+        y(plane),
+        z(v),
+        x(u + du),
+        y(plane),
+        z(v + dv),
+        x(u),
+        y(plane),
+        z(v + dv),
+      ];
+    case 4:
+    case 5:
+      return [
+        x(u),
+        y(v),
+        z(plane),
+        x(u + du),
+        y(v),
+        z(plane),
+        x(u + du),
+        y(v + dv),
+        z(plane),
+        x(u),
+        y(v + dv),
+        z(plane),
+      ];
+  }
+}
+
+function readModelPositions(
+  view: DataView,
+  offset: number,
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  voxelSize: number,
+): number[] {
+  const positions: number[] = [];
+  let off = offset;
+  for (let corner = 0; corner < 4; corner++) {
+    const rx = view.getUint32(off, true);
+    off += 4;
+    const ry = view.getUint32(off, true);
+    off += 4;
+    const rz = view.getUint32(off, true);
+    off += 4;
+    positions.push(
+      worldX + (rx * voxelSize) / VOXEL_POSITION_FIXED_SCALE,
+      worldY + (ry * voxelSize) / VOXEL_POSITION_FIXED_SCALE,
+      worldZ + (rz * voxelSize) / VOXEL_POSITION_FIXED_SCALE,
+    );
+  }
+  return positions;
+}
+
+function createQuadrantCounts(): QuadrantCounts[] {
+  return Array.from({ length: 4 }, () => ({
+    vertices: 0,
+    indices: 0,
+    triangles: 0,
+  }));
+}
+
+function createQuadrantWriters(counts: QuadrantCounts[]) {
+  return counts.map((count, quadrantIndex) => ({
+    quadrantIndex,
+    positions: new Float32Array(count.vertices * 3),
+    normals: new Float32Array(count.vertices * 3),
+    baseColors: new Float32Array(count.vertices * 3),
+    faceAo: new Uint8Array(count.vertices),
+    trianglePaletteIndices: new Uint32Array(count.triangles),
+    indices: new Uint32Array(count.indices),
+    vertexOffset: 0,
+    indexOffset: 0,
+    triangleOffset: 0,
+  }));
+}
+
+function toQuadrantMesh(
+  writer: ReturnType<typeof createQuadrantWriters>[number],
+) {
+  return {
+    quadrantIndex: writer.quadrantIndex,
+    positions: writer.positions,
+    normals: writer.normals,
+    baseColors: writer.baseColors,
+    faceAo: writer.faceAo,
+    trianglePaletteIndices: writer.trianglePaletteIndices,
+    indices: writer.indices,
+  };
+}
+
+function writeQuadToQuadrant(
+  writer: ReturnType<typeof createQuadrantWriters>[number],
+  quad: DecodedQuad,
+  minZ: number,
+  depthCueRange: number,
+): void {
+  const normal = computeQuadNormal(quad.positions, quad.dir);
+  const tint = getVoxelFaceTint(normal[0], normal[1], normal[2]);
+  const baseVertex = writer.vertexOffset;
+  for (let v = 0; v < 4; v++) {
+    const src = v * 3;
+    const dst = (baseVertex + v) * 3;
+    const vertexZ = quad.positions[src + 2] ?? 0;
+    const depthCue = getVoxelDepthCue(normal[2], vertexZ, minZ, depthCueRange);
+    writer.positions[dst] = quad.positions[src] ?? 0;
+    writer.positions[dst + 1] = quad.positions[src + 1] ?? 0;
+    writer.positions[dst + 2] = vertexZ;
+    writer.normals[dst] = normal[0];
+    writer.normals[dst + 1] = normal[1];
+    writer.normals[dst + 2] = normal[2];
+    writer.baseColors[dst] = clamp01(quad.color[0] * tint.r * depthCue);
+    writer.baseColors[dst + 1] = clamp01(quad.color[1] * tint.g * depthCue);
+    writer.baseColors[dst + 2] = clamp01(quad.color[2] * tint.b * depthCue);
+    writer.faceAo[baseVertex + v] = Math.min(
+      3,
+      (quad.packedAo >> (v * 2)) & 0b11,
+    );
+  }
+  const indexBase = writer.indexOffset;
+  if (quad.dir === 1) {
+    writer.indices.set(
+      [
+        baseVertex,
+        baseVertex + 1,
+        baseVertex + 2,
+        baseVertex,
+        baseVertex + 2,
+        baseVertex + 3,
+      ],
+      indexBase,
+    );
+  } else {
+    writer.indices.set(
+      [
+        baseVertex,
+        baseVertex + 2,
+        baseVertex + 1,
+        baseVertex,
+        baseVertex + 3,
+        baseVertex + 2,
+      ],
+      indexBase,
+    );
+  }
+  writer.trianglePaletteIndices[writer.triangleOffset] = quad.paletteIndex;
+  writer.trianglePaletteIndices[writer.triangleOffset + 1] = quad.paletteIndex;
+  writer.vertexOffset += 4;
+  writer.indexOffset += 6;
+  writer.triangleOffset += 2;
+}
+
+function computeQuadNormal(
+  positions: number[],
+  dir: number,
+): [number, number, number] {
+  const ia = 0;
+  const ib = dir === 1 ? 3 : 6;
+  const ic = dir === 1 ? 6 : 3;
+  const ex = (positions[ib] ?? 0) - (positions[ia] ?? 0);
+  const ey = (positions[ib + 1] ?? 0) - (positions[ia + 1] ?? 0);
+  const ez = (positions[ib + 2] ?? 0) - (positions[ia + 2] ?? 0);
+  const fx = (positions[ic] ?? 0) - (positions[ia] ?? 0);
+  const fy = (positions[ic + 1] ?? 0) - (positions[ia + 1] ?? 0);
+  const fz = (positions[ic + 2] ?? 0) - (positions[ia + 2] ?? 0);
+  const nx = ey * fz - ez * fy;
+  const ny = ez * fx - ex * fz;
+  const nz = ex * fy - ey * fx;
+  const length = Math.hypot(nx, ny, nz);
+  if (length === 0) return [0, 0, 0];
+  return [nx / length, ny / length, nz / length];
+}
+
+function getQuadQuadrant(
+  positions: number[],
+  worldX: number,
+  worldY: number,
+  regionWorldSize: number,
+): number {
+  const centerX =
+    ((positions[0] ?? 0) + (positions[3] ?? 0) + (positions[6] ?? 0)) / 3;
+  const centerY =
+    ((positions[1] ?? 0) + (positions[4] ?? 0) + (positions[7] ?? 0)) / 3;
+  const localX = centerX - worldX;
+  const localY = centerY - worldY;
+  return (
+    (localX >= regionWorldSize / 2 ? 1 : 0) +
+    (localY >= regionWorldSize / 2 ? 2 : 0)
+  );
+}
+
+function updateChunkTopHeights(
+  chunkTopHeights: Float32Array,
+  positions: number[],
+  normal: [number, number, number],
+  renderKind: 1 | 2,
+  worldX: number,
+  worldY: number,
+  regionWorldSize: number,
+  chunkWorldSize: number,
+): void {
+  if (normal[2] <= 0.5 || renderKind === 2) return;
+  for (const tri of [
+    [0, 1, 2],
+    [0, 2, 3],
+  ] as const) {
+    const ax = positions[tri[0] * 3] ?? 0;
+    const ay = positions[tri[0] * 3 + 1] ?? 0;
+    const az = positions[tri[0] * 3 + 2] ?? 0;
+    const bx = positions[tri[1] * 3] ?? 0;
+    const by = positions[tri[1] * 3 + 1] ?? 0;
+    const bz = positions[tri[1] * 3 + 2] ?? 0;
+    const cx = positions[tri[2] * 3] ?? 0;
+    const cy = positions[tri[2] * 3 + 1] ?? 0;
+    const cz = positions[tri[2] * 3 + 2] ?? 0;
+    const localXMin = Math.min(ax, bx, cx) - worldX;
+    const localXMax = Math.max(ax, bx, cx) - worldX;
+    const localYMin = Math.min(ay, by, cy) - worldY;
+    const localYMax = Math.max(ay, by, cy) - worldY;
+    if (
+      localXMax <= 0 ||
+      localYMax <= 0 ||
+      localXMin >= regionWorldSize ||
+      localYMin >= regionWorldSize
+    )
+      continue;
+    const eps = 1e-4;
+    const colX0 = Math.max(0, Math.floor(localXMin / chunkWorldSize));
+    const colX1 = Math.min(3, Math.floor((localXMax - eps) / chunkWorldSize));
+    const colY0 = Math.max(0, Math.floor(localYMin / chunkWorldSize));
+    const colY1 = Math.min(3, Math.floor((localYMax - eps) / chunkWorldSize));
+    const triTopZ = Math.max(az, bz, cz);
+    for (let colX = colX0; colX <= colX1; colX++) {
+      for (let colY = colY0; colY <= colY1; colY++) {
+        const index = colX * 4 + colY;
+        if (triTopZ > chunkTopHeights[index]) chunkTopHeights[index] = triTopZ;
+      }
+    }
+  }
 }
 
 function getVoxelFaceTint(
