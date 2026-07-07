@@ -28,6 +28,7 @@ This document covers client-owned architecture and runtime behavior. Shared cont
 - `useWorldData()` always loads world metadata, the surface index, the save block palette, and the voxel chunk index during initial page load so voxel rendering prerequisites are available immediately.
 - `useWebSocket()` maintains the `/ws` connection, and `useWorldViewRefreshSubscriptions()` maps socket events to query invalidation.
 - `WorldControlsProvider` owns low-frequency UI state and persists graphics/layer settings through `src/client/lib/world-view-storage.ts`; older stored versions are discarded and the app falls back to defaults.
+- Atmosphere is client-local presentation state under the existing graphics/debug settings. The default balanced atmosphere uses a fixed midday time-of-day, a Cubyz-stylized CSS sky gradient behind the transparent WebGL canvas, atmosphere-colored ambient/hemisphere/sun/fill lights, and restrained fog-like depth enhancement. The debug parameters panel exposes viewer-local time of day and atmosphere quality; quality `0` disables the atmosphere layer and restores the fixed dark background and previous midday-style light baseline.
 - Chunk stats are published continuously from the scene runtime so loading UI can stay accurate even when debug overlays are off.
 - The loading overlay appears immediately when work starts, stays visible for a short linger after work completes, and uses a compact green cube on mobile.
 - `World3DView.tsx` keeps scene state in refs and delegates most runtime work to `features/world-view/lib/`; avoid moving per-frame state into React state.
@@ -53,6 +54,7 @@ This document covers client-owned architecture and runtime behavior. Shared cont
 - If WebSocket event names or `terrain-updates-batch` payload shape change, update `useWebSocket()`, `useWorldViewRefreshSubscriptions()`, the server broadcaster, and docs together.
 - The mobile/compact HUD reuses the same controls/debug/info content as desktop; loading overlay visuals may differ by viewport, but the visibility and progress source stay shared.
 - Player marker model URLs are server-provided manifest URLs. Do not hardcode Cubyz asset paths in the client.
+- Phase 1 atmosphere intentionally does not include water reflection/refraction, temporal anti-aliasing, cascaded shadows, PCSS soft shadows, raymarched fly-through volumetric clouds, or sun-shaft rendering. Those are future rendering phases that may reuse the viewer-local atmosphere state.
 - If worker files or worker import paths move, run `npm run build`; the worker URL/bundling path is easy to break silently.
 
 ## Related Docs

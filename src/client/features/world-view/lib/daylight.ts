@@ -4,12 +4,6 @@ export const DAYLIGHT_MAIN_SUN_POSITION = {
   z: 300,
 } as const;
 
-export const DAYLIGHT_FILL_POSITION = {
-  x: -90,
-  y: 70,
-  z: 180,
-} as const;
-
 // FOR DEBUGGING
 // export const VOXEL_FACE_SHADING = {
 //   base: 1,

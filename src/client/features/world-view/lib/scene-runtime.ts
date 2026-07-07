@@ -4,15 +4,12 @@ import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import type { MapDebugSettings } from "../../../lib/world-view-debug.js";
 import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
+import { createAtmosphereRuntime } from "./atmosphere.js";
 import {
   focusCameraOnVisibleSurfacePosition,
   updateKeyboardCameraMotion,
 } from "./camera.js";
 import { createCursorInteractionHandlers } from "./cursor.js";
-import {
-  DAYLIGHT_FILL_POSITION,
-  DAYLIGHT_MAIN_SUN_POSITION,
-} from "./daylight.js";
 import type { CursorHoverInfo, LoadedVoxelTile, WorkerOut } from "./types.js";
 
 const MIN_CAMERA_DISTANCE = 1;
@@ -160,8 +157,9 @@ export function initializeSceneRuntime(args: {
   );
   camera.up.set(0, 0, 1);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.setClearColor(0x000000, 0);
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.domElement.style.touchAction = "none";
@@ -184,26 +182,12 @@ export function initializeSceneRuntime(args: {
     TWO: THREE.TOUCH.DOLLY_ROTATE,
   };
 
-  // Keep the darker backdrop, but light the world itself like midday.
-  // Favor a stronger sun over flat ambient fill so terrain and voxels keep readable shading.
-  scene.add(new THREE.AmbientLight(0x43485a, 0.7));
-  const skyLight = new THREE.HemisphereLight(0xd7e7ff, 0x66704f, 0.55);
-  skyLight.position.set(0, 0, 1);
-  scene.add(skyLight);
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1.75);
-  directionalLight.position.set(
-    DAYLIGHT_MAIN_SUN_POSITION.x,
-    DAYLIGHT_MAIN_SUN_POSITION.y,
-    DAYLIGHT_MAIN_SUN_POSITION.z,
-  );
-  scene.add(directionalLight);
-  const fillLight = new THREE.DirectionalLight(0xbec8d8, 0.18);
-  fillLight.position.set(
-    DAYLIGHT_FILL_POSITION.x,
-    DAYLIGHT_FILL_POSITION.y,
-    DAYLIGHT_FILL_POSITION.z,
-  );
-  scene.add(fillLight);
+  const atmosphereRuntime = createAtmosphereRuntime({
+    container,
+    scene,
+    quality: debugSettingsRef.current.atmosphereQuality,
+    timeOfDay: debugSettingsRef.current.atmosphereTimeOfDay,
+  });
 
   const terrainGroup = new THREE.Group();
   const voxelGroup = new THREE.Group();
@@ -396,6 +380,8 @@ export function initializeSceneRuntime(args: {
   let isPointerInteracting = false;
   let lastActiveAt = performance.now();
   let currentEffectiveCap = debugSettingsRef.current.frameRateCapFps;
+  let currentAtmosphereQuality = debugSettingsRef.current.atmosphereQuality;
+  let currentAtmosphereTimeOfDay = debugSettingsRef.current.atmosphereTimeOfDay;
 
   function markActive(at = performance.now()) {
     lastActiveAt = at;
@@ -446,6 +432,20 @@ export function initializeSceneRuntime(args: {
       currentEffectiveCap = effectiveCap;
       resetFrameDeadline(now, effectiveCap > 0 ? 1000 / effectiveCap : 0);
       scheduleNextLodPoll(now, idleEligible);
+    }
+
+    const atmosphereQuality = debugSettingsRef.current.atmosphereQuality;
+    const atmosphereTimeOfDay = debugSettingsRef.current.atmosphereTimeOfDay;
+    if (
+      atmosphereQuality !== currentAtmosphereQuality ||
+      atmosphereTimeOfDay !== currentAtmosphereTimeOfDay
+    ) {
+      currentAtmosphereQuality = atmosphereQuality;
+      currentAtmosphereTimeOfDay = atmosphereTimeOfDay;
+      atmosphereRuntime.apply({
+        quality: atmosphereQuality,
+        timeOfDay: atmosphereTimeOfDay,
+      });
     }
 
     const frameIntervalMs = effectiveCap <= 0 ? 0 : 1000 / effectiveCap;
@@ -723,6 +723,7 @@ export function initializeSceneRuntime(args: {
 
     controls.dispose();
     preUploadTarget.dispose();
+    atmosphereRuntime.dispose();
     renderer.dispose();
     if (container.contains(renderer.domElement)) {
       container.removeChild(renderer.domElement);

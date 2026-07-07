@@ -23,7 +23,13 @@ interface MapDebugParametersProps {
   onVoxelHeightsChange: (active: boolean) => void;
 }
 
-const SECTION_ORDER = ["Loading", "LOD", "Focus", "Memory"] as const;
+const SECTION_ORDER = [
+  "Atmosphere",
+  "Loading",
+  "LOD",
+  "Focus",
+  "Memory",
+] as const;
 const RESET_GLYPH_SIZE = 12;
 
 type DebugSection = (typeof SECTION_ORDER)[number];

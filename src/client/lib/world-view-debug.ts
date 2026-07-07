@@ -53,6 +53,8 @@ export type ChunkStats = {
 };
 
 export interface MapDebugSettings {
+  atmosphereTimeOfDay: number;
+  atmosphereQuality: number;
   frameRateCapFps: number;
   idleFrameRateCapFps: number;
   lodUnloadHysteresis: number;
@@ -78,7 +80,7 @@ export interface MapDebugSettings {
 
 export interface MapDebugParameterDefinition {
   key: keyof MapDebugSettings;
-  section: "Loading" | "LOD" | "Focus" | "Memory";
+  section: "Atmosphere" | "Loading" | "LOD" | "Focus" | "Memory";
   label: string;
   description: string;
   min: number;
@@ -94,6 +96,8 @@ export interface MapDebugParameterDefinition {
 const MB = 1024 * 1024;
 
 export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
+  atmosphereTimeOfDay: 12,
+  atmosphereQuality: 1,
   frameRateCapFps: 60,
   idleFrameRateCapFps: 15,
   maxConcurrentTerrainFetches: 4,
@@ -158,6 +162,32 @@ export function createEmptyChunkStats(): ChunkStats {
 }
 
 export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
+  {
+    key: "atmosphereTimeOfDay",
+    section: "Atmosphere",
+    label: "Time Of Day",
+    description:
+      "Viewer-local atmosphere time. It changes sky color and lighting only; server data, world time, and voxel payloads are unchanged.",
+    min: 0,
+    max: 24,
+    step: 0.25,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.atmosphereTimeOfDay,
+    decimals: 2,
+    formatDisplay: (value) => `${value.toFixed(2)}h`,
+  },
+  {
+    key: "atmosphereQuality",
+    section: "Atmosphere",
+    label: "Atmosphere Quality",
+    description:
+      "Scales stylized sky, time-of-day lighting, and fog-like depth enhancement. 0 restores the fixed-lighting fallback.",
+    min: 0,
+    max: 2,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.atmosphereQuality,
+    formatDisplay: (value) =>
+      value <= 0 ? "Off" : value >= 2 ? "High" : "Balanced",
+  },
   {
     key: "maxConcurrentTerrainFetches",
     section: "Loading",

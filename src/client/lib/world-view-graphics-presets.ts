@@ -21,6 +21,8 @@ export type GraphicsPreset = {
       MapDebugSettings,
       | "frameRateCapFps"
       | "idleFrameRateCapFps"
+      | "atmosphereTimeOfDay"
+      | "atmosphereQuality"
       | "maxConcurrentTerrainFetches"
       | "terrainMeshBuildBudgetMs"
       | "maxTerrainMeshesPerFrame"
@@ -51,6 +53,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 1150,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      atmosphereTimeOfDay: 12,
+      atmosphereQuality: 2,
       frameRateCapFps: 0,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 6,
@@ -79,6 +83,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 900,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      atmosphereTimeOfDay: 12,
+      atmosphereQuality: 2,
       frameRateCapFps: 120,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 5,
@@ -107,6 +113,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 1,
     debugSettings: {
+      atmosphereTimeOfDay: 12,
+      atmosphereQuality: 1,
       frameRateCapFps: 60,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 4,
@@ -136,6 +144,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 2,
     debugSettings: {
+      atmosphereTimeOfDay: 12,
+      atmosphereQuality: 1,
       frameRateCapFps: 40,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 3,
@@ -164,6 +174,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     voxelLod1MaxDist: 600,
     minRenderedVoxelLod: 4,
     debugSettings: {
+      atmosphereTimeOfDay: 12,
+      atmosphereQuality: 0,
       frameRateCapFps: 40,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 2,
