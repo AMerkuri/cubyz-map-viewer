@@ -43,7 +43,7 @@ The voxel mesh generator SHALL render supported connectivity model blocks accord
 - **THEN** the generated mesh includes branch surface geometry matching the six-direction connection bits represented by the block `data`
 
 ### Requirement: Voxel meshes render attachment and direction variants
-The voxel mesh generator SHALL render supported attachment and direction-based model variants according to the block `data` semantics of their rotation mode.
+The voxel mesh generator SHALL render supported attachment and direction-based model variants according to the block `data` semantics of their rotation mode, matching Cubyz game orientation for saved direction data values.
 
 #### Scenario: Carpet-style block attaches to faces
 - **WHEN** an LOD 1 voxel region contains a supported `cubyz:carpet` block
@@ -57,9 +57,17 @@ The voxel mesh generator SHALL render supported attachment and direction-based m
 - **WHEN** an LOD 1 voxel region contains a supported `cubyz:sign` side block with block `data` in the side range `16..19`
 - **THEN** the generated mesh uses the side model variant attached to the corresponding `-X`, `-Y`, `+X`, or `+Y` face represented by the block `data`
 
-#### Scenario: Hanging or direction block selects a finite model variant
-- **WHEN** an LOD 1 voxel region contains a supported `cubyz:hanging` or selected `cubyz:direction` model block
-- **THEN** the generated mesh uses the model variant represented by the block `data`
+#### Scenario: Hanging block selects a finite model variant
+- **WHEN** an LOD 1 voxel region contains a supported `cubyz:hanging` model block
+- **THEN** the generated mesh uses the top or bottom model variant represented by the block `data`
+
+#### Scenario: Direction block uses Cubyz neighbor orientation data
+- **WHEN** an LOD 1 voxel region contains a supported `cubyz:direction` model block with block `data` in the Cubyz `Neighbor` range `0..5`
+- **THEN** the generated mesh uses the model orientation represented by Cubyz `Neighbor` order: `0 = dirUp`, `1 = dirDown`, `2 = dirPosX`, `3 = dirNegX`, `4 = dirPosY`, and `5 = dirNegY`
+
+#### Scenario: Direction block data exceeds finite variants
+- **WHEN** an LOD 1 voxel region contains a supported `cubyz:direction` model block whose block `data` exceeds `5`
+- **THEN** the generated mesh uses the same model orientation Cubyz selects for data value `5`
 
 ### Requirement: Shape semantic support participates in voxel cache validity
 Voxel mesh cache keys SHALL include a shape semantic version or signature so generated meshes are invalidated when supported rotation semantics or generated shape variants change.

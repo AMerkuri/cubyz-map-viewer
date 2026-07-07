@@ -134,7 +134,7 @@ const SUPPORTED_CUBE_ROTATIONS = new Set<string>([
   "cubyz:log",
   "cubyz:ore",
 ]);
-const SHAPE_SEMANTIC_SIGNATURE_VERSION = "semantic-shapes-v2";
+const SHAPE_SEMANTIC_SIGNATURE_VERSION = "semantic-shapes-v3";
 const EMPTY_BOUNDS = {
   min: { x: 0, y: 0, z: 0 },
   max: { x: 0, y: 0, z: 0 },

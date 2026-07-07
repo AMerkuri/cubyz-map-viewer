@@ -1182,12 +1182,17 @@ export async function generateVoxelMesh(
       Math.floor(x / CHUNK_SIZE) * 4 + Math.floor(y / CHUNK_SIZE),
     );
     const data = getBlockData(blockValue);
-    for (const { quad, turns, transform, eighths } of getModelQuadsForData(
-      shape,
-      data,
-    )) {
+    for (const {
+      quad,
+      turns,
+      transform,
+      eighths,
+      direction,
+    } of getModelQuadsForData(shape, data)) {
       const transformed = quad.vertices.map((vertex) =>
-        transformModelVertex(vertex, turns, transform, eighths),
+        direction !== undefined
+          ? transformDirectionVertex(vertex, direction)
+          : transformModelVertex(vertex, turns, transform, eighths),
       ) as [
         BlockModelVertex,
         BlockModelVertex,
@@ -1263,6 +1268,69 @@ type SemanticTransform =
   | "face-y-"
   | "face-y+";
 
+// Cubyz `Neighbor` data order used by `cubyz:direction` model blocks:
+// 0 = dirUp, 1 = dirDown, 2 = dirPosX, 3 = dirNegX, 4 = dirPosY, 5 = dirNegY.
+type DirectionOrientation = 0 | 1 | 2 | 3 | 4 | 5;
+
+// Mirrors Cubyz's precomputed direction model variants
+// (mods/cubyz/rotations/direction.zig), which apply `Mat4f.rotationX/Y/Z`
+// matrix products around the block center (0.5, 0.5, 0.5) via
+// `rotation.rotationMatrixTransform`. This is a dedicated path rather than a
+// reuse of `SemanticTransform` because the direction matrices combine
+// rotations around multiple axes and are not expressible as the existing
+// hand-written face remaps.
+function transformDirectionVertex(
+  vertex: BlockModelVertex,
+  orientation: DirectionOrientation,
+): BlockModelVertex {
+  const x = vertex.x - 0.5;
+  const y = vertex.y - 0.5;
+  const z = vertex.z - 0.5;
+  let rx: number;
+  let ry: number;
+  let rz: number;
+  switch (orientation) {
+    case 0: // dirUp: identity
+      rx = x;
+      ry = y;
+      rz = z;
+      break;
+    case 1: // dirDown: rotationY(pi)
+      rx = -x;
+      ry = y;
+      rz = -z;
+      break;
+    case 2: // dirPosX: rotationZ(-pi/2) * rotationX(-pi/2)
+      rx = z;
+      ry = -x;
+      rz = -y;
+      break;
+    case 3: // dirNegX: rotationZ(pi/2) * rotationX(-pi/2)
+      rx = -z;
+      ry = x;
+      rz = -y;
+      break;
+    case 4: // dirPosY: rotationX(-pi/2)
+      rx = x;
+      ry = z;
+      rz = -y;
+      break;
+    case 5: // dirNegY: rotationZ(pi) * rotationX(-pi/2)
+      rx = -x;
+      ry = -z;
+      rz = -y;
+      break;
+  }
+  return { x: rx + 0.5, y: ry + 0.5, z: rz + 0.5 };
+}
+
+// Cubyz selects the direction model variant with `@min(block.data, 5)`
+// (mods/cubyz/rotations/direction.zig `model`). Data values are unsigned, so
+// only the upper bound needs clamping.
+function clampDirectionOrientation(data: number): DirectionOrientation {
+  return Math.min(data, 5) as DirectionOrientation;
+}
+
 function transformSemanticVertex(
   vertex: BlockModelVertex,
   transform: SemanticTransform,
@@ -1294,6 +1362,7 @@ function getModelQuadsForData(
   turns: number;
   transform?: SemanticTransform;
   eighths?: number;
+  direction?: DirectionOrientation;
 }> {
   if (shape.kind === "semantic") return getSemanticQuadsForData(shape, data);
   if (shape.rotation !== "cubyz:torch") {
@@ -1378,6 +1447,7 @@ function getSemanticQuadsForData(
   turns: number;
   transform?: SemanticTransform;
   eighths?: number;
+  direction?: DirectionOrientation;
 }> {
   switch (shape.semantic) {
     case "cubyz:stairs":
@@ -1654,16 +1724,8 @@ function getDirectionQuads(
   shape: BlockSemanticShape,
   data: number,
 ): ReturnType<typeof getSemanticQuadsForData> {
-  const transforms: SemanticTransform[] = [
-    "face-x-",
-    "face-x+",
-    "face-y-",
-    "face-y+",
-    "none",
-    "ceiling",
-  ];
-  const transform = transforms[Math.min(data, 5)] ?? "none";
-  return shape.quads.map((quad) => ({ quad, turns: 0, transform }));
+  const direction = clampDirectionOrientation(data);
+  return shape.quads.map((quad) => ({ quad, turns: 0, direction }));
 }
 
 function addBox(
