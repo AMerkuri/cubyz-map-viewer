@@ -5,7 +5,7 @@ Define how Cubyz block model shapes are discovered, encoded, cached, and rendere
 ## Requirements
 
 ### Requirement: Server builds block shape metadata from Cubyz assets
-The server SHALL build voxel block shape metadata from the active save palette, layered Cubyz block definitions, block model OBJ assets, supported block model reference forms, and supported block rotation metadata during startup.
+The server SHALL build voxel block shape metadata from the active save palette, layered Cubyz block definitions, block model OBJ assets, supported block model reference forms, and supported block rotation metadata during startup. Supported OBJ block model vertices SHALL preserve their authored block-local coordinates, including coordinates outside the `0..1` unit-block range, unless explicit supported metadata defines a different coordinate interpretation.
 
 #### Scenario: Layered assets define a supported model block
 - **WHEN** a palette entry resolves to a block definition with a supported `.model` reference in either core assets or save override assets
@@ -18,6 +18,10 @@ The server SHALL build voxel block shape metadata from the active save palette, 
 #### Scenario: Block definition or model asset is unsupported
 - **WHEN** a palette entry references unsupported model or rotation metadata
 - **THEN** the server uses a safe fallback shape for that palette entry and logs a diagnostic without failing startup
+
+#### Scenario: Authored model bounds exceed one block
+- **WHEN** a palette entry resolves to a supported OBJ model whose authored vertex bounds extend outside the `0..1` unit-block range
+- **THEN** the server records shape metadata using those authored coordinates rather than shrinking the model through an inferred `16x` downscale
 
 ### Requirement: Voxel meshes include supported non-cube block model geometry
 The voxel mesh generator SHALL emit explicit model quads for supported non-cube block shapes while preserving greedy merged cube geometry for full-cube blocks.

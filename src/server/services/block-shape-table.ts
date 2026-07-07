@@ -134,7 +134,7 @@ const SUPPORTED_CUBE_ROTATIONS = new Set<string>([
   "cubyz:log",
   "cubyz:ore",
 ]);
-const SHAPE_SEMANTIC_SIGNATURE_VERSION = "semantic-shapes-v3";
+const SHAPE_SEMANTIC_SIGNATURE_VERSION = "semantic-shapes-v4";
 const EMPTY_BOUNDS = {
   min: { x: 0, y: 0, z: 0 },
   max: { x: 0, y: 0, z: 0 },
@@ -477,11 +477,10 @@ async function parseObjModel(
       }
     }
 
-    const scale = inferModelCoordinateScale(vertices);
     const normalizedVertices = vertices.map((vertex) => ({
-      x: normalizeCoord(vertex.x, scale),
-      y: normalizeCoord(vertex.y, scale),
-      z: normalizeCoord(vertex.z, scale),
+      x: normalizeCoord(vertex.x),
+      y: normalizeCoord(vertex.y),
+      z: normalizeCoord(vertex.z),
     }));
     const bounds = computeBounds(normalizedVertices);
     const quads: BlockModelQuad[] = [];
@@ -612,19 +611,6 @@ function resolveObjIndex(index: number, count: number): number | null {
   if (!Number.isInteger(index) || index === 0) return null;
   const resolved = index > 0 ? index - 1 : count + index;
   return resolved >= 0 && resolved < count ? resolved : null;
-}
-
-function inferModelCoordinateScale(vertices: BlockModelVertex[]): number {
-  let maxAbs = 0;
-  for (const vertex of vertices) {
-    maxAbs = Math.max(
-      maxAbs,
-      Math.abs(vertex.x),
-      Math.abs(vertex.y),
-      Math.abs(vertex.z),
-    );
-  }
-  return maxAbs > 1.5 ? 16 : 1;
 }
 
 function computeBounds(
@@ -803,9 +789,8 @@ function isAirBlockId(blockId: string): boolean {
   return blockId === "cubyz:air" || blockId.endsWith(":air");
 }
 
-function normalizeCoord(value: number, scale: number): number {
-  const normalized = value / scale;
-  return Number.isFinite(normalized) ? normalized : 0;
+function normalizeCoord(value: number): number {
+  return Number.isFinite(value) ? value : 0;
 }
 
 function reportShapeDiagnostic(
