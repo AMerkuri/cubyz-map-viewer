@@ -1,22 +1,4 @@
-## Purpose
-
-Define how clients fetch, render, gate, and dispose world-space sign text in the 3D map view.
-
-## Requirements
-
-### Requirement: Sign text fetching
-
-The client SHALL fetch per-region sign records from the sign records HTTP route using a dedicated React Query hook within the world-view feature. Sign record fetching SHALL be keyed by LOD and region coordinate, consistent with existing voxel/region data loading.
-
-#### Scenario: Sign records loaded for visible regions
-
-- **WHEN** voxel regions are loaded for the current view at the sign-text LOD threshold
-- **THEN** the client SHALL fetch and cache the corresponding sign records for those regions
-
-#### Scenario: Sign records invalidated on world update
-
-- **WHEN** the client receives a `world-updated` or `terrain-updates-batch` WebSocket event affecting a region with signs
-- **THEN** the client SHALL invalidate and refetch that region's sign records
+## MODIFIED Requirements
 
 ### Requirement: On-face text rendering
 
@@ -57,31 +39,3 @@ The text quad SHALL be offset slightly toward the viewer relative to the sign bo
 
 - **WHEN** terrain geometry is between the camera and a sign
 - **THEN** the sign text SHALL be occluded by that geometry rather than drawn on top
-
-### Requirement: LOD-gated visibility
-
-Sign text SHALL be rendered only when closely zoomed in, at LOD 1. At coarser LODs the client SHALL NOT build or display sign text quads. When the active LOD changes away from LOD 1, existing sign text quads SHALL be removed; when it returns to LOD 1, they SHALL be rebuilt.
-
-#### Scenario: Zoomed in at LOD 1
-
-- **WHEN** the active LOD is 1
-- **THEN** sign text quads SHALL be built and visible on sign faces
-
-#### Scenario: Zoomed out beyond LOD 1
-
-- **WHEN** the active LOD is coarser than 1
-- **THEN** no sign text quads SHALL be present in the scene
-
-### Requirement: Resource lifecycle
-
-The client SHALL dispose sign text canvases, textures, geometries, and materials when their regions unload, when sign records change, or when the LOD moves away from the sign-text threshold, to avoid leaking GPU or memory resources. Sign text rendering SHALL be driven imperatively within the scene runtime and SHALL NOT push per-frame sign state into React state.
-
-#### Scenario: Region unload
-
-- **WHEN** a region with rendered sign text is unloaded from view
-- **THEN** the client SHALL dispose that region's sign text textures, geometries, and materials
-
-#### Scenario: Sign text updated
-
-- **WHEN** a sign's text changes and new records are fetched
-- **THEN** the client SHALL dispose the stale text texture and rebuild the quad from the new text

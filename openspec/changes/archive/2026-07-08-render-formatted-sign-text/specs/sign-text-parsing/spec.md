@@ -1,29 +1,4 @@
-## Purpose
-
-Define how Cubyz sign block-entity data is decoded, associated with voxel mesh regions, and exposed to clients.
-
-## Requirements
-
-### Requirement: Block-entity stream decoding
-
-The server SHALL decode the block-entity stream that follows the block-array stream in each `.region` chunk blob instead of skipping it. For chunks whose block-array compression algorithm carries block entities, after reading the block array the parser SHALL treat the remaining chunk bytes as the block-entity stream and parse it.
-
-The block-entity stream format SHALL be interpreted as: an optional leading `u8` compression algorithm byte (`0` = raw) present only when the stream is non-empty, followed by zero or more entity records until the chunk blob ends. Each record SHALL consist of a 2-byte big-endian block-position index (a `u15` packed as `index = (x << 10) | (y << 5) | z` within the 32x32x32 chunk), a LEB128 varint payload length, and that many raw payload bytes.
-
-#### Scenario: Chunk with no block entities
-
-- **WHEN** a chunk blob has no remaining bytes after the block array
-- **THEN** the parser SHALL produce an empty set of sign entries for that chunk and SHALL NOT error
-
-#### Scenario: Chunk with a sign entity
-
-- **WHEN** a chunk blob contains a block-entity stream with one record whose block position maps to a sign block in the block array
-- **THEN** the parser SHALL emit a sign entry containing the chunk-local block position, the block `data` value from the block array at that position, and the decoded text payload
-
-#### Scenario: Malformed or truncated entity stream
-
-- **WHEN** the block-entity stream ends before a complete record can be read
-- **THEN** the parser SHALL stop consuming records safely, emit the records already parsed, and SHALL NOT throw
+## MODIFIED Requirements
 
 ### Requirement: Sign text extraction
 
@@ -68,17 +43,3 @@ The text-plane corners SHALL be derived from the same sign geometry logic that p
 
 - **WHEN** a sign block has no associated block-entity record (empty text)
 - **THEN** no sign record SHALL be produced for that block
-
-### Requirement: Sign records HTTP route
-
-The server SHALL expose an HTTP route that returns per-region sign records as JSON, keyed by LOD and region coordinates consistent with the voxel/region addressing scheme. The route SHALL obtain sign records through `VoxelMeshService` and SHALL NOT bypass it. The binary voxel mesh payload SHALL remain geometry-only; sign records SHALL be served exclusively through this separate route.
-
-#### Scenario: Fetching sign records for a region
-
-- **WHEN** a client requests sign records for a valid LOD and region coordinate
-- **THEN** the server SHALL respond with a JSON array of sign records for that region
-
-#### Scenario: Region with no signs
-
-- **WHEN** a client requests sign records for a region that contains no signs
-- **THEN** the server SHALL respond with an empty JSON array
