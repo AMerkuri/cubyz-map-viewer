@@ -86,12 +86,12 @@ function createInitialLayerVisibility(
   storedVoxelHeightLabels: boolean,
 ): LayerVisibility {
   return {
-    biomeLabels: storedLayerVisibility?.biomeLabels ?? false,
+    biomeLabels: storedLayerVisibility?.biomeLabels ?? true,
     players: storedLayerVisibility?.players ?? true,
     spawn: storedLayerVisibility?.spawn ?? true,
     debug: storedLayerVisibility?.debug ?? false,
     chunkBorders: storedChunkBorders,
-    showTerrainUnderlay: storedLayerVisibility?.showTerrainUnderlay ?? false,
+    showTerrainUnderlay: storedLayerVisibility?.showTerrainUnderlay ?? true,
     voxelHeightLabels: storedVoxelHeightLabels,
   };
 }

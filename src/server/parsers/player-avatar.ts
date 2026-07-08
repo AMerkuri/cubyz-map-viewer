@@ -13,8 +13,11 @@
  * entity-model palette index, which resolves through entity_model_palette to a
  * model ID such as `cubyz:cubert`.
  *
- * Resolution is deliberately conservative: any decode/lookup failure or
- * unsupported result falls back to the default avatar `cubyz:snale`.
+ * Resolution is deliberately conservative: any decode/lookup failure falls
+ * back to the default avatar `cubyz:snale`. The resolver returns any
+ * palette-resolved model ID verbatim; whether a given ID renders as a player
+ * marker is decided downstream by the manifest service (descriptor tags) and
+ * the client (asset availability).
  */
 
 import { readFile } from "node:fs/promises";
@@ -23,19 +26,9 @@ import { parseZon } from "./zon.js";
 
 const DEFAULT_AVATAR_MODEL_ID = "cubyz:snale";
 
-/** Avatar IDs the viewer is able to render as player markers. */
-const SUPPORTED_AVATAR_MODEL_IDS: readonly string[] = [
-  "cubyz:snale",
-  "cubyz:snail",
-  "cubyz:moffalo",
-  "cubyz:cubert",
-];
-
 const MODEL_COMPONENT_ID = "cubyz:model";
 const ENTITY_COMPONENT_PALETTE_FILE = "entity_component_palette.zig.zon";
 const ENTITY_MODEL_PALETTE_FILE = "entity_model_palette.zig.zon";
-
-const supportedAvatarIds = new Set(SUPPORTED_AVATAR_MODEL_IDS);
 
 interface DecodedComponent {
   componentId: number;
@@ -154,11 +147,12 @@ export async function loadEntityPalettes(
 }
 
 /**
- * Resolve a supported avatar model ID from encoded player component data.
+ * Resolve a player avatar model ID from encoded player component data.
  *
  * Returns `cubyz:snale` when the component data is missing, malformed, the
- * palettes are unavailable, the palette index is out of range, or the resolved
- * model ID is not one of the supported avatars.
+ * palettes are unavailable, or the palette index is out of range. Any other
+ * palette-resolved model ID is returned verbatim so the manifest service and
+ * client can decide availability.
  */
 export function resolveAvatarModelId(
   componentsBase64: string | null | undefined,
@@ -192,7 +186,7 @@ export function resolveAvatarModelId(
   }
 
   const modelId = palettes.modelPaletteEntries[modelPaletteIndex];
-  if (typeof modelId !== "string" || !supportedAvatarIds.has(modelId)) {
+  if (typeof modelId !== "string") {
     return DEFAULT_AVATAR_MODEL_ID;
   }
 

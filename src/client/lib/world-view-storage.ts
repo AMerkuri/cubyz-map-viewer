@@ -48,11 +48,11 @@ function sanitizeLayerVisibility(value: unknown): StoredLayerVisibility {
     debug: readBoolean((source as Record<string, unknown>).debug, false),
     showTerrainUnderlay: readBoolean(
       (source as Record<string, unknown>).showTerrainUnderlay,
-      false,
+      true,
     ),
     biomeLabels: readBoolean(
       (source as Record<string, unknown>).biomeLabels,
-      false,
+      true,
     ),
   };
 }
