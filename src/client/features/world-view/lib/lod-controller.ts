@@ -21,6 +21,9 @@ export function checkAndUpdateLod(args: {
   };
   syncVoxelRequests: (requests: Map<string, PendingVoxelFetchRequest>) => void;
   activeFocusLodRef: { current: number };
+  referenceSurfaceZ: number;
+  screenSpaceDistanceScale: number;
+  viewportHeight: number;
   syncTerrainLod: (target: THREE.Vector3, camDist: number) => void;
   updateTerrainVisibility: (target: THREE.Vector3, camDist: number) => void;
   terrainVisibilityDirtyRef: { current: boolean };
@@ -28,6 +31,7 @@ export function checkAndUpdateLod(args: {
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
     cameraForward: THREE.Vector3,
+    referenceSurfaceZ: number,
   ) => { point: THREE.Vector3; zoomDist: number };
   voxelLodThresholds: { maxDist: number; lod: number }[];
   minRenderedVoxelLod: number;
@@ -35,7 +39,12 @@ export function checkAndUpdateLod(args: {
   updateVoxelLod: (
     focusLod: number,
     cameraPosition: THREE.Vector3,
+    referenceSurfaceZ: number,
     cameraForward: THREE.Vector3,
+    screenSpaceDistanceScale: number,
+    cameraFov: number,
+    viewportHeight: number,
+    focusPoint: THREE.Vector3 | null,
   ) => void;
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
@@ -61,6 +70,9 @@ export function checkAndUpdateLod(args: {
     committedVoxelDetailRequestsRef,
     syncVoxelRequests,
     activeFocusLodRef,
+    referenceSurfaceZ,
+    screenSpaceDistanceScale,
+    viewportHeight,
     syncTerrainLod,
     updateTerrainVisibility,
     terrainVisibilityDirtyRef,
@@ -117,7 +129,12 @@ export function checkAndUpdateLod(args: {
     cameraForward.set(0, 0, 0);
   }
 
-  const focus = resolveVoxelLodFocus(camera, controls, cameraForward);
+  const focus = resolveVoxelLodFocus(
+    camera,
+    controls,
+    cameraForward,
+    referenceSurfaceZ,
+  );
   const unclampedFocusLod = getLodForDistanceWithHysteresis(
     focus.zoomDist,
     activeFocusLodRef.current,
@@ -132,7 +149,16 @@ export function checkAndUpdateLod(args: {
       )
     ];
   activeFocusLodRef.current = focusLod;
-  updateVoxelLod(focusLod, camera.position, cameraForward);
+  updateVoxelLod(
+    focusLod,
+    camera.position,
+    referenceSurfaceZ,
+    cameraForward,
+    screenSpaceDistanceScale,
+    camera.fov,
+    viewportHeight,
+    focus.point,
+  );
 
   if (debugLabelsDirtyRef.current) {
     debugLabelsDirtyRef.current = false;

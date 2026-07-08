@@ -5,6 +5,7 @@ import { LOD_LEVELS } from "./constants.js";
 import { VOXEL_TOP_AO, VOXEL_WALL_AO } from "./daylight.js";
 import {
   applyBehindCameraDistanceBias,
+  getLodForDistance,
   getLodForDistanceWithHysteresis,
   getUnloadDistForLod,
 } from "./lod-utils.js";
@@ -22,6 +23,11 @@ import {
 } from "./voxel-index.js";
 import { compareVoxelFetchRequests } from "./voxel-requests.js";
 
+const TOP_HEIGHT_GRID_SIZE = 4;
+const FOCUS_REFINEMENT_RADIUS_MULTIPLIER = 0.5;
+
+type TileEntry = Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">;
+
 function addVisibleQuadrant(
   maskMap: Map<string, number>,
   key: string,
@@ -32,7 +38,8 @@ function addVisibleQuadrant(
 
 function getTileEffectiveDist(
   cameraPosition: THREE.Vector3,
-  entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">,
+  entry: TileEntry,
+  referenceSurfaceZ: number,
 ): number {
   const size = regionWorldSize(entry.lod);
   const dx =
@@ -47,45 +54,169 @@ function getTileEffectiveDist(
       : cameraPosition.y > entry.regionY + size
         ? cameraPosition.y - (entry.regionY + size)
         : 0;
+  const dz = Math.max(0, cameraPosition.z - referenceSurfaceZ);
+  return Math.hypot(dx, dy, dz);
+}
+
+function getDistanceToTileHorizontalBounds(
+  point: THREE.Vector3,
+  entry: TileEntry,
+): number {
+  const size = regionWorldSize(entry.lod);
+  const dx =
+    point.x < entry.regionX
+      ? entry.regionX - point.x
+      : point.x > entry.regionX + size
+        ? point.x - (entry.regionX + size)
+        : 0;
+  const dy =
+    point.y < entry.regionY
+      ? entry.regionY - point.y
+      : point.y > entry.regionY + size
+        ? point.y - (entry.regionY + size)
+        : 0;
   return Math.hypot(dx, dy);
 }
 
+function getTileTopHeightAtPoint(
+  tile: LoadedVoxelTile,
+  point: THREE.Vector3 | null,
+): number | null {
+  if (!point || tile.chunkTopHeights.length !== TOP_HEIGHT_GRID_SIZE ** 2) {
+    return null;
+  }
+
+  const size = regionWorldSize(tile.lod);
+  const localX = point.x - tile.regionX;
+  const localY = point.y - tile.regionY;
+  if (localX < 0 || localX > size || localY < 0 || localY > size) return null;
+
+  const cellX = Math.min(
+    TOP_HEIGHT_GRID_SIZE - 1,
+    Math.max(0, Math.floor((localX / size) * TOP_HEIGHT_GRID_SIZE)),
+  );
+  const cellY = Math.min(
+    TOP_HEIGHT_GRID_SIZE - 1,
+    Math.max(0, Math.floor((localY / size) * TOP_HEIGHT_GRID_SIZE)),
+  );
+  const height = tile.chunkTopHeights[cellY * TOP_HEIGHT_GRID_SIZE + cellX];
+  return Number.isFinite(height) ? height : null;
+}
+
+function getLoadedTileVerticalBounds(
+  tile: LoadedVoxelTile,
+  samplePoint: THREE.Vector3 | null,
+): { minZ: number; maxZ: number } {
+  const sampledTopHeight = getTileTopHeightAtPoint(tile, samplePoint);
+  const minZ = Number.isFinite(tile.minZ) ? tile.minZ : 0;
+  const maxZ = Math.max(
+    minZ,
+    Number.isFinite(tile.maxZ) ? tile.maxZ : minZ,
+    sampledTopHeight ?? Number.NEGATIVE_INFINITY,
+  );
+  return { minZ, maxZ };
+}
+
+function getLoadedTileBoundsDistance(args: {
+  cameraPosition: THREE.Vector3;
+  tile: LoadedVoxelTile;
+  focusPoint: THREE.Vector3 | null;
+}): number {
+  const { cameraPosition, tile, focusPoint } = args;
+  const size = regionWorldSize(tile.lod);
+  const dx =
+    cameraPosition.x < tile.regionX
+      ? tile.regionX - cameraPosition.x
+      : cameraPosition.x > tile.regionX + size
+        ? cameraPosition.x - (tile.regionX + size)
+        : 0;
+  const dy =
+    cameraPosition.y < tile.regionY
+      ? tile.regionY - cameraPosition.y
+      : cameraPosition.y > tile.regionY + size
+        ? cameraPosition.y - (tile.regionY + size)
+        : 0;
+  const bounds = getLoadedTileVerticalBounds(
+    tile,
+    focusPoint ?? cameraPosition,
+  );
+  const dz =
+    cameraPosition.z < bounds.minZ
+      ? bounds.minZ - cameraPosition.z
+      : cameraPosition.z > bounds.maxZ
+        ? cameraPosition.z - bounds.maxZ
+        : 0;
+  return Math.hypot(dx, dy, dz);
+}
+
+function estimateProjectedTileSizePixels(args: {
+  tileWorldSize: number;
+  distance: number;
+  cameraFov: number;
+  viewportHeight: number;
+}): number {
+  const { tileWorldSize, distance, cameraFov, viewportHeight } = args;
+  if (
+    tileWorldSize <= 0 ||
+    distance <= 0 ||
+    !Number.isFinite(distance) ||
+    !Number.isFinite(cameraFov) ||
+    cameraFov <= 0 ||
+    !Number.isFinite(viewportHeight) ||
+    viewportHeight <= 0
+  ) {
+    return Infinity;
+  }
+
+  return (
+    (tileWorldSize / distance) *
+    (viewportHeight / (2 * Math.tan((cameraFov * Math.PI) / 360)))
+  );
+}
+
 function getTileLodSelectionDist(args: {
-  entry: Pick<ChunkIndexEntry, "lod" | "regionX" | "regionY">;
+  entry: TileEntry;
+  effectiveDist: number;
   cameraPosition: THREE.Vector3;
   cameraForward: THREE.Vector3;
   voxelBehindCameraDotStart: number;
   voxelBehindCameraMaxMultiplier: number;
+  screenSpaceDistanceScale: number;
 }): number {
   const {
     entry,
+    effectiveDist,
     cameraPosition,
     cameraForward,
     voxelBehindCameraDotStart,
     voxelBehindCameraMaxMultiplier,
+    screenSpaceDistanceScale,
   } = args;
-  const effectiveDist = getTileEffectiveDist(cameraPosition, entry);
   const forwardLenSq =
     cameraForward.x * cameraForward.x + cameraForward.y * cameraForward.y;
-  if (forwardLenSq <= 1e-6) return effectiveDist;
+  if (forwardLenSq <= 1e-6) return effectiveDist * screenSpaceDistanceScale;
 
   const size = regionWorldSize(entry.lod);
   const toCenterX = entry.regionX + size / 2 - cameraPosition.x;
   const toCenterY = entry.regionY + size / 2 - cameraPosition.y;
   const toCenterLen = Math.hypot(toCenterX, toCenterY);
-  if (toCenterLen <= 1e-6) return effectiveDist;
+  if (toCenterLen <= 1e-6) return effectiveDist * screenSpaceDistanceScale;
 
   const dot =
     (cameraForward.x * toCenterX + cameraForward.y * toCenterY) / toCenterLen;
-  if (dot >= voxelBehindCameraDotStart) return effectiveDist;
+  if (dot >= voxelBehindCameraDotStart) {
+    return effectiveDist * screenSpaceDistanceScale;
+  }
 
-  return applyBehindCameraDistanceBias({
-    effectiveDist,
-    objectWorldSize: size,
-    dot,
-    dotStart: voxelBehindCameraDotStart,
-    maxMultiplier: voxelBehindCameraMaxMultiplier,
-  });
+  return (
+    applyBehindCameraDistanceBias({
+      effectiveDist,
+      objectWorldSize: size,
+      dot,
+      dotStart: voxelBehindCameraDotStart,
+      maxMultiplier: voxelBehindCameraMaxMultiplier,
+    }) * screenSpaceDistanceScale
+  );
 }
 
 function getSelectionDistForLod(
@@ -151,7 +282,12 @@ function mergeVoxelRequest(
 export function runVoxelLodSelection(args: {
   focusLod: number;
   cameraPosition: THREE.Vector3;
+  referenceSurfaceZ: number;
   cameraForward: THREE.Vector3;
+  screenSpaceDistanceScale: number;
+  cameraFov: number;
+  viewportHeight: number;
+  focusPoint: THREE.Vector3 | null;
   roots: ChunkIndexEntry[];
   availableVoxelKeys: Set<string>;
   loadedVoxels: Map<string, LoadedVoxelTile>;
@@ -185,7 +321,12 @@ export function runVoxelLodSelection(args: {
   const {
     focusLod,
     cameraPosition,
+    referenceSurfaceZ,
     cameraForward,
+    screenSpaceDistanceScale,
+    cameraFov,
+    viewportHeight,
+    focusPoint,
     roots,
     availableVoxelKeys,
     loadedVoxels,
@@ -235,22 +376,57 @@ export function runVoxelLodSelection(args: {
   };
 
   const getEffectiveDist = (lod: number, regionX: number, regionY: number) => {
-    return getTileEffectiveDist(cameraPosition, { lod, regionX, regionY });
+    const key = voxelTileKey(lod, regionX, regionY);
+    const loadedTile = loadedVoxels.get(key);
+    if (loadedTile) {
+      return getLoadedTileBoundsDistance({
+        cameraPosition,
+        tile: loadedTile,
+        focusPoint,
+      });
+    }
+
+    return getTileEffectiveDist(
+      cameraPosition,
+      { lod, regionX, regionY },
+      referenceSurfaceZ,
+    );
   };
 
   const getLodSelectionDist = (
     lod: number,
     regionX: number,
     regionY: number,
+    effectiveDist: number,
   ) => {
-    return getTileLodSelectionDist({
+    let selectionDist = getTileLodSelectionDist({
       entry: { lod, regionX, regionY },
+      effectiveDist,
       cameraPosition,
       cameraForward,
       voxelBehindCameraDotStart: debugSettings.voxelBehindCameraDotStart,
       voxelBehindCameraMaxMultiplier:
         debugSettings.voxelBehindCameraMaxMultiplier,
+      screenSpaceDistanceScale,
     });
+
+    if (focusPoint) {
+      const focusDistance = getDistanceToTileHorizontalBounds(focusPoint, {
+        lod,
+        regionX,
+        regionY,
+      });
+      const focusRefinementRadius =
+        regionWorldSize(lod) * FOCUS_REFINEMENT_RADIUS_MULTIPLIER;
+      if (focusDistance <= focusRefinementRadius) {
+        selectionDist = Math.min(
+          selectionDist,
+          focusDistance * screenSpaceDistanceScale,
+        );
+      }
+    }
+
+    return selectionDist;
   };
 
   const getSelectionDist = (lod: number) => {
@@ -291,22 +467,39 @@ export function runVoxelLodSelection(args: {
       entry.regionX,
       entry.regionY,
     );
-    if (effectiveDist > getSelectionDist(entry.lod)) return false;
+    const scaledEffectiveDist = effectiveDist * screenSpaceDistanceScale;
+    if (scaledEffectiveDist > getSelectionDist(entry.lod)) return false;
 
     const lodSelectionDist = getLodSelectionDist(
       entry.lod,
       entry.regionX,
       entry.regionY,
-    );
-    const desiredLod = clampAllowedLod(
-      getLodForDistanceWithHysteresis(
-        lodSelectionDist,
-        focusLod,
-        voxelThresholds,
-        debugSettings.voxelLodHysteresisRatio,
-      ),
+      effectiveDist,
     );
     const loadedTile = loadedVoxels.get(key);
+    const projectedTileSizePixels = loadedTile
+      ? estimateProjectedTileSizePixels({
+          tileWorldSize: regionWorldSize(entry.lod),
+          distance: effectiveDist,
+          cameraFov,
+          viewportHeight,
+        })
+      : 0;
+    const projectedDesiredLod =
+      projectedTileSizePixels > 0
+        ? getLodForDistance(lodSelectionDist, voxelThresholds)
+        : null;
+    const hysteresisDesiredLod = getLodForDistanceWithHysteresis(
+      lodSelectionDist,
+      focusLod,
+      voxelThresholds,
+      debugSettings.voxelLodHysteresisRatio,
+    );
+    const desiredLod = clampAllowedLod(
+      projectedDesiredLod === null
+        ? hysteresisDesiredLod
+        : Math.min(projectedDesiredLod, hysteresisDesiredLod),
+    );
     const selfLoaded = !!loadedTile;
     const selfStale = isVoxelTileStale(key);
     let hasSelectedCoverage = false;
@@ -322,7 +515,8 @@ export function runVoxelLodSelection(args: {
         const child = children[quadrant];
         if (!child) continue;
         const childKey = voxelTileKey(child.lod, child.regionX, child.regionY);
-        const childAvailable = availableVoxelKeys.has(childKey);
+        const childAvailable =
+          availableVoxelKeys.has(childKey) || loadedVoxels.has(childKey);
 
         if (
           childAvailable &&
@@ -330,6 +524,32 @@ export function runVoxelLodSelection(args: {
         ) {
           hasSelectedCoverage = true;
           continue;
+        }
+
+        const childEffectiveDist = getEffectiveDist(
+          child.lod,
+          child.regionX,
+          child.regionY,
+        );
+        const childSelectionDist = getLodSelectionDist(
+          child.lod,
+          child.regionX,
+          child.regionY,
+          childEffectiveDist,
+        );
+        if (
+          childSelectionDist <= getSelectionDist(child.lod) &&
+          isAllowedLod(child.lod)
+        ) {
+          noteRequest(
+            hasLoadedFallback || selfLoaded
+              ? detailVoxelRequests
+              : coverageVoxelRequests,
+            child.lod,
+            child.regionX,
+            child.regionY,
+            childSelectionDist,
+          );
         }
 
         needsSelfFallback = isAllowedLod(entry.lod);
@@ -357,7 +577,7 @@ export function runVoxelLodSelection(args: {
         entry.lod,
         entry.regionX,
         entry.regionY,
-        effectiveDist,
+        lodSelectionDist,
       );
     }
 
@@ -388,6 +608,7 @@ export function runVoxelLodSelection(args: {
       tile.regionX,
       tile.regionY,
     );
+    const scaledEffectiveDist = effectiveDist * screenSpaceDistanceScale;
     const unloadDist = getSelectionDist(tile.lod) * 1.1;
     const keepLoaded =
       visible ||
@@ -436,7 +657,7 @@ export function runVoxelLodSelection(args: {
     if (
       !requestedVoxelRequests.has(key) &&
       !inGrace &&
-      (effectiveDist > unloadDist || !isAllowedLod(tile.lod))
+      (scaledEffectiveDist > unloadDist || !isAllowedLod(tile.lod))
     ) {
       unloadVoxelTile(key);
       debugLabelsDirty = true;
@@ -451,9 +672,10 @@ export function runVoxelLodSelection(args: {
       parsed.regionX,
       parsed.regionY,
     );
+    const scaledEffectiveDist = effectiveDist * screenSpaceDistanceScale;
     if (
       !requestedVoxelRequests.has(key) &&
-      (effectiveDist > getSelectionDist(parsed.lod) * 1.1 ||
+      (scaledEffectiveDist > getSelectionDist(parsed.lod) * 1.1 ||
         !isAllowedLod(parsed.lod))
     ) {
       loadingVoxels.delete(key);

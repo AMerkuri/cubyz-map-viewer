@@ -37,6 +37,8 @@ export type GraphicsPreset = {
       | "lodUnloadHysteresis"
       | "voxelBehindCameraDotStart"
       | "voxelBehindCameraMaxMultiplier"
+      | "lodReferenceFov"
+      | "lodReferenceViewportHeight"
       | "warmTerrainCacheMaxBytes"
       | "warmVoxelCacheLimitBytes"
     >
@@ -71,6 +73,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 2.25,
       voxelBehindCameraDotStart: -1,
       voxelBehindCameraMaxMultiplier: 1,
+      lodReferenceFov: 75,
+      lodReferenceViewportHeight: 720,
       warmTerrainCacheMaxBytes: 768 * MB,
       warmVoxelCacheLimitBytes: 1536 * MB,
     },
@@ -101,6 +105,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.75,
       voxelBehindCameraDotStart: -0.9,
       voxelBehindCameraMaxMultiplier: 1.05,
+      lodReferenceFov: 65,
+      lodReferenceViewportHeight: 2400,
       warmTerrainCacheMaxBytes: 384 * MB,
       warmVoxelCacheLimitBytes: 768 * MB,
     },
@@ -131,6 +137,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.5,
       voxelBehindCameraDotStart: -0.5,
       voxelBehindCameraMaxMultiplier: 1.05,
+      lodReferenceFov: 60,
+      lodReferenceViewportHeight: 2880,
       warmTerrainCacheMaxBytes: 256 * MB,
       warmVoxelCacheLimitBytes: 512 * MB,
     },
@@ -162,6 +170,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.25,
       voxelBehindCameraDotStart: -0.2,
       voxelBehindCameraMaxMultiplier: 1.1,
+      lodReferenceFov: 50,
+      lodReferenceViewportHeight: 3600,
       warmTerrainCacheMaxBytes: 128 * MB,
       warmVoxelCacheLimitBytes: 256 * MB,
     },
@@ -192,6 +202,8 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
       lodUnloadHysteresis: 1.1,
       voxelBehindCameraDotStart: -0.15,
       voxelBehindCameraMaxMultiplier: 1.15,
+      lodReferenceFov: 40,
+      lodReferenceViewportHeight: 4320,
       warmTerrainCacheMaxBytes: 64 * MB,
       warmVoxelCacheLimitBytes: 128 * MB,
     },

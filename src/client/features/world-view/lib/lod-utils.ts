@@ -23,6 +23,32 @@ export function getLodForDistance(
   return 32;
 }
 
+export function computeScreenSpaceDistanceScale(
+  fov: number,
+  viewportHeight: number,
+  referenceFov: number,
+  referenceViewportHeight: number,
+): number {
+  if (
+    !Number.isFinite(fov) ||
+    fov <= 0 ||
+    !Number.isFinite(referenceFov) ||
+    referenceFov <= 0 ||
+    !Number.isFinite(viewportHeight) ||
+    viewportHeight <= 0 ||
+    !Number.isFinite(referenceViewportHeight) ||
+    referenceViewportHeight <= 0
+  ) {
+    return 1;
+  }
+
+  const fovFactor =
+    Math.tan((fov * Math.PI) / 360) / Math.tan((referenceFov * Math.PI) / 360);
+  const viewportFactor = referenceViewportHeight / viewportHeight;
+  const scale = fovFactor * viewportFactor;
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
 export function getUnloadDistForLod(
   lod: number,
   thresholds: { maxDist: number; lod: number }[],

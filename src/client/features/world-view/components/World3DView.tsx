@@ -24,7 +24,7 @@ import {
 } from "../lib/avatar-assets.js";
 import { refreshBiomeLabels as refreshBiomeLabelsManaged } from "../lib/biome-labels.js";
 import { retargetCameraStateToVisibleSurface } from "../lib/camera.js";
-import { MAX_VOXEL_RETRIES } from "../lib/constants.js";
+import { MAX_VOXEL_RETRIES, VOXEL_CHUNK_CELLS } from "../lib/constants.js";
 import {
   clearCssLabelMap,
   refreshDebugLabels as refreshDebugLabelsManaged,
@@ -34,7 +34,10 @@ import {
   handleVoxelRegionUpdate,
 } from "../lib/live-updates.js";
 import { checkAndUpdateLod as checkAndUpdateLodManaged } from "../lib/lod-controller.js";
-import { createVoxelLodDistanceThresholds } from "../lib/lod-utils.js";
+import {
+  computeScreenSpaceDistanceScale,
+  createVoxelLodDistanceThresholds,
+} from "../lib/lod-utils.js";
 import {
   rebuildSpawnMarker,
   syncPlayerMarkers,
@@ -85,6 +88,7 @@ import type {
   WorkerOut,
   World3DViewProps,
 } from "../lib/types.js";
+import { regionWorldSize } from "../lib/utils.js";
 import {
   useWorld3DChunkStatsReset,
   useWorld3DDisplayEffects,
@@ -861,12 +865,22 @@ export function World3DView({
   function updateVoxelLod(
     focusLod: number,
     cameraPosition: THREE.Vector3,
+    referenceSurfaceZ: number,
     cameraForward: THREE.Vector3,
+    screenSpaceDistanceScale: number,
+    cameraFov: number,
+    viewportHeight: number,
+    focusPoint: THREE.Vector3 | null,
   ) {
     updateVoxelLodManaged({
       focusLod,
       cameraPosition,
+      referenceSurfaceZ,
       cameraForward,
+      screenSpaceDistanceScale,
+      cameraFov,
+      viewportHeight,
+      focusPoint,
       voxelRootEntries: voxelRootEntriesRef.current,
       availableVoxelKeys: availableVoxelKeysRef.current,
       loadedVoxels: loadedVoxelsRef.current,
@@ -1082,6 +1096,19 @@ export function World3DView({
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
   ) {
+    const referenceSurfaceZ = getReferenceSurfaceZ(
+      camera.position,
+      loadedVoxelsRef.current,
+      worldDataRef.current.worldData?.spawn?.[2],
+    );
+    const viewportHeight = containerRef.current?.clientHeight ?? 0;
+    const screenSpaceDistanceScale = computeScreenSpaceDistanceScale(
+      camera.fov,
+      viewportHeight,
+      debugSettingsRef.current.lodReferenceFov,
+      debugSettingsRef.current.lodReferenceViewportHeight,
+    );
+
     checkAndUpdateLodManaged({
       camera,
       controls,
@@ -1092,16 +1119,25 @@ export function World3DView({
       committedVoxelDetailRequestsRef,
       syncVoxelRequests,
       activeFocusLodRef,
+      referenceSurfaceZ,
+      screenSpaceDistanceScale,
+      viewportHeight,
       syncTerrainLod,
       updateTerrainVisibility,
       terrainVisibilityDirtyRef,
-      resolveVoxelLodFocus: (activeCamera, activeControls, cameraForward) =>
+      resolveVoxelLodFocus: (
+        activeCamera,
+        activeControls,
+        cameraForward,
+        activeReferenceSurfaceZ,
+      ) =>
         resolveVoxelLodFocus({
           camera: activeCamera,
           controls: activeControls,
           voxelGroup: voxelGroupRef.current,
           loadedVoxels: loadedVoxelsRef.current,
           cameraForward,
+          referenceSurfaceZ: activeReferenceSurfaceZ,
           voxelBehindCameraDotStart:
             debugSettingsRef.current.voxelBehindCameraDotStart,
           voxelBehindCameraMaxMultiplier:
@@ -1440,6 +1476,60 @@ export function World3DView({
       }}
     />
   );
+}
+
+function getReferenceSurfaceZ(
+  cameraPosition: THREE.Vector3,
+  loadedVoxels: Map<string, LoadedVoxelTile>,
+  fallbackZ: number | undefined,
+): number {
+  let referenceSurfaceZ = Number.NEGATIVE_INFINITY;
+
+  for (const tile of loadedVoxels.values()) {
+    const size = regionWorldSize(tile.lod);
+    const containsCamera =
+      cameraPosition.x >= tile.regionX &&
+      cameraPosition.x <= tile.regionX + size &&
+      cameraPosition.y >= tile.regionY &&
+      cameraPosition.y <= tile.regionY + size;
+    if (containsCamera) {
+      const chunkWorldSize = VOXEL_CHUNK_CELLS * tile.voxelSize;
+      const chunkX = Math.floor(
+        (cameraPosition.x - tile.regionX) / chunkWorldSize,
+      );
+      const chunkY = Math.floor(
+        (cameraPosition.y - tile.regionY) / chunkWorldSize,
+      );
+      const localTopZ =
+        chunkX >= 0 && chunkX <= 3 && chunkY >= 0 && chunkY <= 3
+          ? tile.chunkTopHeights[chunkX * 4 + chunkY]
+          : undefined;
+      const surfaceZ =
+        typeof localTopZ === "number" && Number.isFinite(localTopZ)
+          ? localTopZ
+          : tile.maxZ;
+      const implausibleHighSurface =
+        typeof fallbackZ === "number" &&
+        Number.isFinite(fallbackZ) &&
+        surfaceZ > fallbackZ + 512 &&
+        cameraPosition.z - surfaceZ < 512;
+      if (
+        Number.isFinite(surfaceZ) &&
+        surfaceZ <= cameraPosition.z &&
+        !implausibleHighSurface
+      ) {
+        referenceSurfaceZ = Math.max(referenceSurfaceZ, surfaceZ);
+      }
+    }
+  }
+
+  if (Number.isFinite(referenceSurfaceZ)) {
+    return referenceSurfaceZ;
+  }
+
+  return typeof fallbackZ === "number" && Number.isFinite(fallbackZ)
+    ? fallbackZ
+    : 0;
 }
 
 function averageNullableMetric(

@@ -291,7 +291,12 @@ export function drainVoxelFetchQueue(args: {
 export function updateVoxelLod(args: {
   focusLod: number;
   cameraPosition: THREE.Vector3;
+  referenceSurfaceZ: number;
   cameraForward: THREE.Vector3;
+  screenSpaceDistanceScale: number;
+  cameraFov: number;
+  viewportHeight: number;
+  focusPoint: THREE.Vector3 | null;
   voxelRootEntries: ChunkIndexEntry[];
   availableVoxelKeys: Set<string>;
   loadedVoxels: Map<string, LoadedVoxelTile>;
@@ -328,7 +333,12 @@ export function updateVoxelLod(args: {
   const {
     focusLod,
     cameraPosition,
+    referenceSurfaceZ,
     cameraForward,
+    screenSpaceDistanceScale,
+    cameraFov,
+    viewportHeight,
+    focusPoint,
     voxelRootEntries,
     availableVoxelKeys,
     loadedVoxels,
@@ -367,7 +377,12 @@ export function updateVoxelLod(args: {
   const result = runVoxelLodSelection({
     focusLod,
     cameraPosition,
+    referenceSurfaceZ,
     cameraForward,
+    screenSpaceDistanceScale,
+    cameraFov,
+    viewportHeight,
+    focusPoint,
     roots: voxelRootEntries,
     availableVoxelKeys,
     loadedVoxels,

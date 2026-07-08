@@ -71,6 +71,8 @@ export interface MapDebugSettings {
   voxelFocusSmoothAlpha: number;
   voxelLodHysteresisRatio: number;
   voxelBehindCameraDotStart: number;
+  lodReferenceFov: number;
+  lodReferenceViewportHeight: number;
   terrainLodHysteresisRatio: number;
   terrainMeshBuildBudgetMs: number;
   maxTerrainMeshesPerFrame: number;
@@ -119,6 +121,8 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   lodUnloadHysteresis: 1.5,
   voxelBehindCameraDotStart: -0.5,
   voxelBehindCameraMaxMultiplier: 1.05,
+  lodReferenceFov: 60,
+  lodReferenceViewportHeight: 2880,
   warmTerrainCacheMaxBytes: 256 * MB,
   warmVoxelCacheLimitBytes: 512 * MB,
   voxelFocusStickyMs: 1500,
@@ -349,6 +353,30 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     step: 0.05,
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelBehindCameraMaxMultiplier,
     decimals: 2,
+  },
+  {
+    key: "lodReferenceFov",
+    section: "LOD",
+    label: "LOD Baseline FOV",
+    description:
+      "Baseline camera vertical FOV, in degrees, used for voxel LOD scaling. Higher values select finer LOD at the same active camera FOV.",
+    min: 20,
+    max: 120,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.lodReferenceFov,
+    formatDisplay: (value) => `${Math.round(value)}°`,
+  },
+  {
+    key: "lodReferenceViewportHeight",
+    section: "LOD",
+    label: "LOD Baseline Viewport Height",
+    description:
+      "Baseline viewport height, in pixels, used for voxel LOD scaling. Lower values select finer LOD; higher values select coarser LOD at the same active viewport height.",
+    min: 360,
+    max: 4320,
+    step: 60,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.lodReferenceViewportHeight,
+    formatDisplay: (value) => `${Math.round(value)} px`,
   },
   {
     key: "voxelFocusStickyMs",

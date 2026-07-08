@@ -14,6 +14,7 @@ export function resolveVoxelLodFocus(args: {
   voxelGroup: THREE.Group | null;
   loadedVoxels: Map<string, LoadedVoxelTile>;
   cameraForward: THREE.Vector3;
+  referenceSurfaceZ: number;
   voxelBehindCameraDotStart: number;
   voxelBehindCameraMaxMultiplier: number;
   state: VoxelFocusState;
@@ -31,6 +32,7 @@ export function resolveVoxelLodFocus(args: {
     voxelGroup,
     loadedVoxels,
     cameraForward,
+    referenceSurfaceZ,
     voxelBehindCameraDotStart,
     voxelBehindCameraMaxMultiplier,
     state,
@@ -71,8 +73,7 @@ export function resolveVoxelLodFocus(args: {
     if (intersections.length > 0) {
       sampled = true;
       rawPoint = intersections[0].point.clone();
-      const hitZoomDist = camera.position.distanceTo(intersections[0].point);
-      rawZoomDist = Math.min(fallbackZoomDist, hitZoomDist);
+      rawZoomDist = camera.position.distanceTo(intersections[0].point);
       state.lastSampleAt = now;
     }
   }
@@ -83,6 +84,17 @@ export function resolveVoxelLodFocus(args: {
       state.zoomDist,
       activeFocusLod,
       voxelLodThresholds,
+    );
+  }
+
+  if (!sampled && !state.initialized && Number.isFinite(referenceSurfaceZ)) {
+    rawZoomDist = Math.max(0, camera.position.z - referenceSurfaceZ);
+  }
+
+  if (sampled && Number.isFinite(referenceSurfaceZ)) {
+    rawZoomDist = Math.max(
+      rawZoomDist,
+      Math.max(0, camera.position.z - referenceSurfaceZ),
     );
   }
 
