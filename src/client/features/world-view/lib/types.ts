@@ -64,8 +64,8 @@ export interface WorkerQuadrantMesh {
   normals: Float32Array;
   baseColors: Float32Array;
   /**
-   * Per-vertex mesh-local emitted-light color baked from same-tile and loaded
-   * LOD 1 neighbor emitter records, or null when no emitter reaches this quadrant.
+   * Per-vertex mesh-local emitted-light color baked from payload-owned own-region
+   * and halo LOD 1 emitter records, or null when no emitter reaches this quadrant.
    */
   emissiveColors: Float32Array | null;
   faceAo: Uint8Array;
@@ -80,6 +80,7 @@ export interface VoxelEmitterRecord {
   r: number;
   g: number;
   b: number;
+  halo?: boolean;
 }
 
 export interface PendingVoxelMeshItem {

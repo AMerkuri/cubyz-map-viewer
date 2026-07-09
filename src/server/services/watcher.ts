@@ -242,6 +242,13 @@ export class SaveWatcher extends EventEmitter {
         } as WatchEvent);
       });
     }
+
+    if (rel.endsWith(".region")) {
+      const regionInfo = this.parseRegionPath(rel);
+      if (regionInfo) {
+        this.queueRegionUpdate(regionInfo);
+      }
+    }
   }
 
   /**

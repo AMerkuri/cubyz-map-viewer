@@ -1,13 +1,10 @@
-import { VOXEL_EMITTED_LIGHT } from "./daylight.js";
 import type {
   LoadedVoxelTile,
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
-  VoxelEmitterRecord,
   VoxelRefreshState,
   WorkerIn,
 } from "./types.js";
-import { regionWorldSize } from "./utils.js";
 
 export function compareVoxelFetchRequests(
   a: PendingVoxelFetchRequest,
@@ -154,53 +151,6 @@ export function finishVoxelFetch(
   drainVoxelFetchQueue();
 }
 
-export function collectLoadedNeighborHaloEmitters(args: {
-  lod: number;
-  regionX: number;
-  regionY: number;
-  key: string;
-  loadedVoxels: Map<string, LoadedVoxelTile>;
-}): { records: VoxelEmitterRecord[]; sourceKeys: string[] } {
-  const { lod, regionX, regionY, key, loadedVoxels } = args;
-  if (lod !== 1) return { records: [], sourceKeys: [] };
-
-  const radius = VOXEL_EMITTED_LIGHT.radius;
-  const size = regionWorldSize(lod);
-  const minX = regionX - radius;
-  const maxX = regionX + size + radius;
-  const minY = regionY - radius;
-  const maxY = regionY + size + radius;
-  const records: VoxelEmitterRecord[] = [];
-  const sourceKeys: string[] = [];
-
-  for (const [sourceKey, tile] of loadedVoxels) {
-    if (
-      sourceKey === key ||
-      tile.lod !== 1 ||
-      tile.emitterRecords.length === 0
-    ) {
-      continue;
-    }
-
-    const firstRecordIndex = records.length;
-    for (const emitter of tile.emitterRecords) {
-      if (
-        emitter.x >= minX &&
-        emitter.x <= maxX &&
-        emitter.y >= minY &&
-        emitter.y <= maxY
-      ) {
-        records.push(emitter);
-      }
-    }
-    if (records.length > firstRecordIndex) {
-      sourceKeys.push(sourceKey);
-    }
-  }
-
-  return { records, sourceKeys };
-}
-
 export async function fetchVoxelRegion(args: {
   request: PendingVoxelFetchRequest;
   controller: AbortController;
@@ -273,22 +223,12 @@ export async function fetchVoxelRegion(args: {
       return;
     }
 
-    const haloEmitters = collectLoadedNeighborHaloEmitters({
-      lod,
-      regionX,
-      regionY,
-      key,
-      loadedVoxels: loadedVoxelsRef.current,
-    });
-
     workerRef.current.postMessage(
       {
         buffer,
         lod,
         regionX,
         regionY,
-        haloEmitterRecords: haloEmitters.records,
-        haloEmitterSourceKeys: haloEmitters.sourceKeys,
         version,
         benchmark: {
           fetchCompletedAt: performance.now(),

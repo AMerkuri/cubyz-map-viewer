@@ -6,7 +6,8 @@ import { MAP_SIZE } from "../parsers/surface.js";
 import { VOXEL_GENERATOR_CACHE_VERSION } from "./voxel-cache-version.js";
 
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
-const VOXEL_REGION_SIZE = 256;
+const VOXEL_REGION_SIZE = 128;
+const EMITTED_LIGHT_RADIUS_CELLS = 12;
 
 interface ColumnSignature {
   signature: string;
@@ -121,6 +122,10 @@ export async function computeVoxelSourceSignature(args: {
 
   const columnSignature = await buildColumnSignature(colDir);
   if (columnSignature.zValues.length === 0) return null;
+  const haloColumnSignature =
+    lod === 1
+      ? await buildHaloColumnSignature(savePath, lod, regionX, regionY)
+      : "";
 
   const surfaceSignature = await buildSurfaceSignature(
     savePath,
@@ -132,9 +137,40 @@ export async function computeVoxelSourceSignature(args: {
 
   return createHash("sha1")
     .update(
-      `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}`,
+      `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${haloColumnSignature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}`,
     )
     .update(`|${blockShapeSignature}`)
     .update(`|${blockColorSignature}`)
     .digest("hex");
+}
+
+async function buildHaloColumnSignature(
+  savePath: string,
+  lod: number,
+  regionX: number,
+  regionY: number,
+): Promise<string> {
+  const hash = createHash("sha1");
+  const columnWorldSpan = VOXEL_REGION_SIZE * lod;
+  const radius = EMITTED_LIGHT_RADIUS_CELLS * lod;
+  const minX = regionX - radius;
+  const maxX = regionX + columnWorldSpan - 1 + radius;
+  const minY = regionY - radius;
+  const maxY = regionY + columnWorldSpan - 1 + radius;
+  const startX = Math.floor(minX / columnWorldSpan) * columnWorldSpan;
+  const endX = Math.floor(maxX / columnWorldSpan) * columnWorldSpan;
+  const startY = Math.floor(minY / columnWorldSpan) * columnWorldSpan;
+  const endY = Math.floor(maxY / columnWorldSpan) * columnWorldSpan;
+
+  for (let x = startX; x <= endX; x += columnWorldSpan) {
+    for (let y = startY; y <= endY; y += columnWorldSpan) {
+      if (x === regionX && y === regionY) continue;
+      const path = join(savePath, "chunks", String(lod), String(x), String(y));
+      if (!existsSync(path)) continue;
+      const signature = await buildColumnSignature(path);
+      hash.update(`${x}/${y}:${signature.signature}|`);
+    }
+  }
+
+  return hash.digest("hex");
 }

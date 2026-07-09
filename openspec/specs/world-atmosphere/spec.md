@@ -24,11 +24,11 @@ The viewer SHALL render a stylized sky treatment that reflects the active atmosp
 
 #### Scenario: Sky reflects low-light state
 - **WHEN** the active atmosphere state represents sunrise, sunset, or night
-- **THEN** the sky presentation changes color and brightness without obscuring terrain silhouettes, voxel faces, labels, markers, controls, or available block-emissive lighting cues
+- **THEN** the sky presentation changes color and brightness while preserving a low-intensity ambient or skylight floor so terrain silhouettes, vegetation, voxel faces, labels, markers, controls, and available block-emissive lighting cues remain readable
 
 #### Scenario: Low-light scene contains block emitters
 - **WHEN** the active atmosphere state represents night and loaded voxel regions contain available block-emissive lighting metadata
-- **THEN** the atmosphere preserves the usefulness of local emitter cues without requiring global ambient light to be raised to daytime readability
+- **THEN** the atmosphere preserves local emitter contrast while avoiding near-black global crushing that makes non-emissive terrain and voxel context unreadable
 
 ### Requirement: Subtle Terrain And Voxel Depth Enhancement
 The viewer SHALL provide a subtle depth enhancement for terrain and voxels that improves shape separation without overpowering existing vertex colors, face shading, transparency, labels, or markers.

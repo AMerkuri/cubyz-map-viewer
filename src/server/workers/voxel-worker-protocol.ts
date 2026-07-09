@@ -29,6 +29,8 @@ export interface VoxelGenerationStats {
   greedyRecordBytes: number;
   modelRecordBytes: number;
   emitterRecords: number;
+  ownEmitterRecords?: number;
+  haloEmitterRecords?: number;
   emitterRecordBytes: number;
   chunkColumns: number;
   regionsParsed: number;

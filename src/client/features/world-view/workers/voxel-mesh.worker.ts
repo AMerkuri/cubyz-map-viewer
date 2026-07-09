@@ -9,13 +9,27 @@ import type { WorkerIn, WorkerOut } from "../lib/types.js";
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 const VOXEL_POSITION_FIXED_SCALE = 4096;
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
-const VOXEL_BINARY_MAGIC = 0x344d5856;
+const VOXEL_BINARY_MAGIC = 0x354d5856;
+const UINT16_EMITTER_VOXEL_BINARY_MAGIC = 0x344d5856;
 const PRE_EMITTER_VOXEL_BINARY_MAGIC = 0x334d5856;
 const LEGACY_VOXEL_BINARY_MAGIC = 0x324d5856;
 const POSITION_KIND_INTEGER = 1;
 const GREEDY_RECORD_BYTES = 12;
 const MODEL_RECORD_BYTES = 48;
-const EMITTER_RECORD_BYTES = 14;
+const EMITTER_RECORD_BYTES = 16;
+const UINT16_EMITTER_RECORD_BYTES = 14;
+const EMITTER_OPEN_FACE_ALL = 0b11_1111;
+const EMITTER_OPEN_FACE_X_POS = 1 << 0;
+const EMITTER_OPEN_FACE_X_NEG = 1 << 1;
+const EMITTER_OPEN_FACE_Y_POS = 1 << 2;
+const EMITTER_OPEN_FACE_Y_NEG = 1 << 3;
+const EMITTER_OPEN_FACE_Z_POS = 1 << 4;
+const EMITTER_OPEN_FACE_Z_NEG = 1 << 5;
+const EMITTER_BLOCKED_HORIZONTAL_TRANSMISSION = 0.22;
+const EMITTER_BLOCKED_UP_TRANSMISSION = 0.03;
+const EMITTER_BLOCKED_DOWN_TRANSMISSION = 0.12;
+const MODEL_EMISSIVE_MULTIPLIER = 0.28;
+const EMISSIVE_SURFACE_HUE_STRENGTH = 0.42;
 
 type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
 
@@ -26,6 +40,7 @@ interface DecodedQuad {
   packedAo: number;
   paletteIndex: number;
   renderKind: 1 | 2;
+  sourceKind: "greedy" | "model";
 }
 
 interface QuadrantCounts {
@@ -35,7 +50,7 @@ interface QuadrantCounts {
 }
 
 /**
- * Spatial hash of same-tile plus loaded-neighbor emitter records used to bake
+ * Spatial hash of payload-owned own-region plus halo emitter records used to bake
  * bounded mesh-local emitted-light contribution into per-vertex emissive colors.
  * Cell size is the emitted-light radius so a 3x3x3 neighborhood covers every candidate.
  */
@@ -48,6 +63,7 @@ interface EmitterLightGrid {
   r: Float32Array;
   g: Float32Array;
   b: Float32Array;
+  openFaces: Uint8Array;
 }
 
 /**
@@ -80,23 +96,14 @@ interface EmitterLightGrid {
  */
 
 self.onmessage = (e: MessageEvent<WorkerIn>) => {
-  const {
-    buffer,
-    lod,
-    regionX,
-    regionY,
-    haloEmitterRecords = [],
-    haloEmitterSourceKeys = [],
-    version,
-    benchmark,
-  } = e.data;
+  const { buffer, lod, regionX, regionY, version, benchmark } = e.data;
   const workerGlobal = globalThis as unknown as {
     postMessage(message: WorkerOut, transfer?: Transferable[]): void;
   };
   const startedAt = performance.now();
 
   try {
-    const result = buildMeshArrays(buffer, haloEmitterRecords);
+    const result = buildMeshArrays(buffer);
     const transferables: Transferable[] = [result.chunkTopHeights.buffer];
     for (const quadrant of result.quadrantMeshes) {
       transferables.push(
@@ -127,7 +134,7 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
       regionY,
       version,
       ...result,
-      haloEmitterSourceKeys,
+      haloEmitterSourceKeys: [],
       benchmark: benchmark
         ? {
             fetchMs: benchmark.fetchMs,
@@ -187,10 +194,7 @@ function getWorkerOutputBytes(
   return bytes;
 }
 
-function buildMeshArrays(
-  buf: ArrayBuffer,
-  haloEmitterRecords: WorkerIn["haloEmitterRecords"] = [],
-): {
+function buildMeshArrays(buf: ArrayBuffer): {
   quadrantMeshes: {
     quadrantIndex: number;
     positions: Float32Array;
@@ -223,17 +227,21 @@ function buildMeshArrays(
     r: number;
     g: number;
     b: number;
+    halo?: boolean;
+    openFaces?: number;
   }[];
 } {
   if (buf.byteLength < 20) throw new Error("buffer too small for header");
 
   const view = new DataView(buf);
   if (
-    (buf.byteLength >= 36 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) ||
+    (buf.byteLength >= 36 &&
+      (view.getUint32(0, true) === VOXEL_BINARY_MAGIC ||
+        view.getUint32(0, true) === UINT16_EMITTER_VOXEL_BINARY_MAGIC)) ||
     (buf.byteLength >= 32 &&
       view.getUint32(0, true) === PRE_EMITTER_VOXEL_BINARY_MAGIC)
   ) {
-    return buildOptimizedMeshArrays(view, buf.byteLength, haloEmitterRecords);
+    return buildOptimizedMeshArrays(view, buf.byteLength);
   }
   const hasVersionedHeader =
     buf.byteLength >= 24 &&
@@ -660,7 +668,6 @@ function buildMeshArrays(
 function buildOptimizedMeshArrays(
   view: DataView,
   byteLength: number,
-  haloEmitterRecords: WorkerIn["haloEmitterRecords"] = [],
 ): ReturnType<typeof buildMeshArrays> {
   const worldX = view.getInt32(4, true);
   const worldY = view.getInt32(8, true);
@@ -669,7 +676,13 @@ function buildOptimizedMeshArrays(
   const voxelSize = view.getUint32(20, true) || 1;
   const greedyRecordCount = view.getUint32(24, true);
   const modelRecordCount = view.getUint32(28, true);
-  const hasEmitterHeader = view.getUint32(0, true) === VOXEL_BINARY_MAGIC;
+  const magic = view.getUint32(0, true);
+  const hasEmitterHeader =
+    magic === VOXEL_BINARY_MAGIC || magic === UINT16_EMITTER_VOXEL_BINARY_MAGIC;
+  const emitterRecordBytes =
+    magic === UINT16_EMITTER_VOXEL_BINARY_MAGIC
+      ? UINT16_EMITTER_RECORD_BYTES
+      : EMITTER_RECORD_BYTES;
   const emitterRecordCount = hasEmitterHeader ? view.getUint32(32, true) : 0;
   if (greedyRecordCount + modelRecordCount !== quadCount) {
     throw new Error("voxel payload record counts do not match quad count");
@@ -691,7 +704,7 @@ function buildOptimizedMeshArrays(
   const emitterRecordOffset =
     modelRecordOffset + modelRecordCount * MODEL_RECORD_BYTES;
   const expectedSize =
-    emitterRecordOffset + emitterRecordCount * EMITTER_RECORD_BYTES;
+    emitterRecordOffset + emitterRecordCount * emitterRecordBytes;
   if (byteLength < expectedSize) {
     throw new Error("buffer truncated before optimized voxel records");
   }
@@ -708,6 +721,7 @@ function buildOptimizedMeshArrays(
     worldY,
     worldZ,
     voxelSize,
+    emitterRecordBytes,
   );
   const regionWorldSize = 128 * voxelSize;
   const chunkWorldSize = 32 * voxelSize;
@@ -768,12 +782,8 @@ function buildOptimizedMeshArrays(
   // Mesh-local emitted light stays a bounded client-side approximation:
   // transparent quads keep their existing presentation so glass/water
   // readability is unaffected, and opaque quads accumulate deterministic
-  // per-vertex contribution from same-region payload records plus filtered
-  // loaded-neighbor LOD 1 halo records.
-  const meshEmitterRecords =
-    haloEmitterRecords.length > 0
-      ? [...emitterRecords, ...haloEmitterRecords]
-      : emitterRecords;
+  // per-vertex contribution from payload-owned own-region and halo records.
+  const meshEmitterRecords = emitterRecords;
   const emitterGrid =
     meshEmitterRecords.length > 0
       ? buildEmitterLightGrid(meshEmitterRecords)
@@ -817,7 +827,7 @@ function buildOptimizedMeshArrays(
     voxelSize,
     minZ,
     maxZ,
-    emitterRecords,
+    emitterRecords: emitterRecords.filter((record) => !record.halo),
   };
 }
 
@@ -829,20 +839,31 @@ function readEmitterRecords(
   worldY: number,
   worldZ: number,
   voxelSize: number,
+  recordBytes: number,
 ): ReturnType<typeof buildMeshArrays>["emitterRecords"] {
   const records: ReturnType<typeof buildMeshArrays>["emitterRecords"] = [];
   let off = offset;
   for (let i = 0; i < count; i++) {
-    const x = view.getUint16(off, true);
-    off += 2;
-    const y = view.getUint16(off, true);
-    off += 2;
-    const z = view.getUint16(off, true);
-    off += 2;
+    const x =
+      recordBytes === UINT16_EMITTER_RECORD_BYTES
+        ? view.getUint16(off, true)
+        : view.getInt32(off, true);
+    off += recordBytes === UINT16_EMITTER_RECORD_BYTES ? 2 : 4;
+    const y =
+      recordBytes === UINT16_EMITTER_RECORD_BYTES
+        ? view.getUint16(off, true)
+        : view.getInt32(off, true);
+    off += recordBytes === UINT16_EMITTER_RECORD_BYTES ? 2 : 4;
+    const z =
+      recordBytes === UINT16_EMITTER_RECORD_BYTES
+        ? view.getUint16(off, true)
+        : view.getInt32(off, true);
+    off += recordBytes === UINT16_EMITTER_RECORD_BYTES ? 2 : 4;
     const r = view.getUint8(off++);
     const g = view.getUint8(off++);
     const b = view.getUint8(off++);
-    off += 5;
+    const flags = view.getUint8(off++);
+    off += recordBytes === UINT16_EMITTER_RECORD_BYTES ? 4 : 0;
     records.push({
       x: worldX + (x + 0.5) * voxelSize,
       y: worldY + (y + 0.5) * voxelSize,
@@ -850,6 +871,8 @@ function readEmitterRecords(
       r,
       g,
       b,
+      halo: (flags & 1) !== 0,
+      openFaces: flags >> 1 || EMITTER_OPEN_FACE_ALL,
     });
   }
   return records;
@@ -870,6 +893,7 @@ function buildEmitterLightGrid(
     r: new Float32Array(count),
     g: new Float32Array(count),
     b: new Float32Array(count),
+    openFaces: new Uint8Array(count),
   };
   for (let i = 0; i < count; i++) {
     const record = emitterRecords[i];
@@ -880,6 +904,7 @@ function buildEmitterLightGrid(
     grid.r[i] = record.r / 255;
     grid.g[i] = record.g / 255;
     grid.b[i] = record.b / 255;
+    grid.openFaces[i] = record.openFaces ?? EMITTER_OPEN_FACE_ALL;
     const key = emitterCellKey(
       Math.floor(record.x / grid.cellSize),
       Math.floor(record.y / grid.cellSize),
@@ -935,6 +960,13 @@ function accumulateEmitterLight(
           const dx = grid.x[emitterIndex] - x;
           const dy = grid.y[emitterIndex] - y;
           const dz = grid.z[emitterIndex] - z;
+          const occlusionTransmission = getEmitterDirectionTransmission(
+            grid.openFaces[emitterIndex],
+            -dx,
+            -dy,
+            -dz,
+          );
+          if (occlusionTransmission <= 0) continue;
           const distSq = dx * dx + dy * dy + dz * dz;
           if (distSq >= radiusSq) continue;
           const dist = Math.sqrt(distSq);
@@ -950,6 +982,7 @@ function accumulateEmitterLight(
           const weight =
             falloff *
             (wrap + (1 - wrap) * lambert) *
+            occlusionTransmission *
             VOXEL_EMITTED_LIGHT.intensity;
           out[0] += grid.r[emitterIndex] * weight;
           out[1] += grid.g[emitterIndex] * weight;
@@ -961,6 +994,49 @@ function accumulateEmitterLight(
   out[0] = Math.min(out[0], VOXEL_EMITTED_LIGHT.maxContribution);
   out[1] = Math.min(out[1], VOXEL_EMITTED_LIGHT.maxContribution);
   out[2] = Math.min(out[2], VOXEL_EMITTED_LIGHT.maxContribution);
+}
+
+function getEmitterDirectionTransmission(
+  openFaces: number,
+  dx: number,
+  dy: number,
+  dz: number,
+): number {
+  const ax = Math.abs(dx);
+  const ay = Math.abs(dy);
+  const az = Math.abs(dz);
+  const total = ax + ay + az;
+  if (total <= 1e-6) return 1;
+  return (
+    (ax / total) *
+      getAxisTransmission(
+        openFaces,
+        dx >= 0 ? EMITTER_OPEN_FACE_X_POS : EMITTER_OPEN_FACE_X_NEG,
+        EMITTER_BLOCKED_HORIZONTAL_TRANSMISSION,
+      ) +
+    (ay / total) *
+      getAxisTransmission(
+        openFaces,
+        dy >= 0 ? EMITTER_OPEN_FACE_Y_POS : EMITTER_OPEN_FACE_Y_NEG,
+        EMITTER_BLOCKED_HORIZONTAL_TRANSMISSION,
+      ) +
+    (az / total) *
+      getAxisTransmission(
+        openFaces,
+        dz >= 0 ? EMITTER_OPEN_FACE_Z_POS : EMITTER_OPEN_FACE_Z_NEG,
+        dz >= 0
+          ? EMITTER_BLOCKED_UP_TRANSMISSION
+          : EMITTER_BLOCKED_DOWN_TRANSMISSION,
+      )
+  );
+}
+
+function getAxisTransmission(
+  openFaces: number,
+  faceMask: number,
+  blockedTransmission: number,
+): number {
+  return (openFaces & faceMask) !== 0 ? 1 : blockedTransmission;
 }
 
 function forEachOptimizedQuad(
@@ -1014,6 +1090,7 @@ function forEachOptimizedQuad(
           ? Number.MAX_SAFE_INTEGER
           : paletteIndex,
       renderKind: view.getUint8(renderKindOffset + qi) === 2 ? 2 : 1,
+      sourceKind: qi < greedyRecordCount ? "greedy" : "model",
     };
     visit(quad);
   }
@@ -1167,6 +1244,8 @@ function writeQuadToQuadrant(
   const normal = computeQuadNormal(quad.positions, quad.dir);
   const tint = getVoxelFaceTint(normal[0], normal[1], normal[2]);
   const baseVertex = writer.vertexOffset;
+  const emissiveMultiplier =
+    quad.sourceKind === "model" ? MODEL_EMISSIVE_MULTIPLIER : 1;
   for (let v = 0; v < 4; v++) {
     const src = v * 3;
     const dst = (baseVertex + v) * 3;
@@ -1195,16 +1274,32 @@ function writeQuadToQuadrant(
         EMITTER_LIGHT_SCRATCH[1] > 0 ||
         EMITTER_LIGHT_SCRATCH[2] > 0
       ) {
-        // Multiply by the baked base color so emitted light brightens the
-        // block's own hue instead of washing surfaces toward white.
+        // Bias the emitted radiance toward the receiving block's own hue so
+        // local light brightens terrain without washing surfaces toward white.
+        const baseR = writer.baseColors[dst];
+        const baseG = writer.baseColors[dst + 1];
+        const baseB = writer.baseColors[dst + 2];
+        const baseMax = Math.max(baseR, baseG, baseB, 1e-6);
+        const hueR =
+          1 -
+          EMISSIVE_SURFACE_HUE_STRENGTH +
+          EMISSIVE_SURFACE_HUE_STRENGTH * (baseR / baseMax);
+        const hueG =
+          1 -
+          EMISSIVE_SURFACE_HUE_STRENGTH +
+          EMISSIVE_SURFACE_HUE_STRENGTH * (baseG / baseMax);
+        const hueB =
+          1 -
+          EMISSIVE_SURFACE_HUE_STRENGTH +
+          EMISSIVE_SURFACE_HUE_STRENGTH * (baseB / baseMax);
         writer.emissiveColors[dst] = clamp01(
-          writer.baseColors[dst] * EMITTER_LIGHT_SCRATCH[0],
+          baseR * EMITTER_LIGHT_SCRATCH[0] * hueR * emissiveMultiplier,
         );
         writer.emissiveColors[dst + 1] = clamp01(
-          writer.baseColors[dst + 1] * EMITTER_LIGHT_SCRATCH[1],
+          baseG * EMITTER_LIGHT_SCRATCH[1] * hueG * emissiveMultiplier,
         );
         writer.emissiveColors[dst + 2] = clamp01(
-          writer.baseColors[dst + 2] * EMITTER_LIGHT_SCRATCH[2],
+          baseB * EMITTER_LIGHT_SCRATCH[2] * hueB * emissiveMultiplier,
         );
         writer.hasEmissive = true;
       }

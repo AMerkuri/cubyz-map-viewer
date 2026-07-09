@@ -123,7 +123,6 @@ import {
   clearVoxelTiles as clearVoxelTilesManaged,
   drainVoxelFetchQueue as drainVoxelFetchQueueManaged,
   handleVoxelWorkerMessage,
-  refreshLoadedVoxelHaloNeighbors,
   requestDirectVoxelRefresh as requestDirectVoxelRefreshManaged,
   requestVoxelRegion as requestVoxelRegionManaged,
   updateVoxelLod as updateVoxelLodManaged,
@@ -1289,16 +1288,6 @@ export function World3DView({
           voxelGroupRef.current,
           chunkBorderGroupRef.current,
         );
-      },
-      onVoxelTileLoaded: (tile) => {
-        refreshLoadedVoxelHaloNeighbors({
-          sourceTile: tile,
-          loadedVoxels: loadedVoxelsRef.current,
-          loadingVoxels: loadingVoxelsRef.current,
-          isVoxelTileStale,
-          markVoxelTileStale,
-          requestDirectVoxelRefresh,
-        });
       },
     });
   }

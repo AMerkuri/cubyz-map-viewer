@@ -45,6 +45,14 @@ const COLUMN_VOXELS = VOXEL_REGION_SIZE;
 const CHUNK_COLUMNS_PER_AXIS = COLUMN_VOXELS / CHUNK_SIZE;
 const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
+const EMITTED_LIGHT_RADIUS_CELLS = 12;
+const MAX_EMITTER_RECORDS_PER_PAYLOAD = 8192;
+const EMITTER_OPEN_FACE_X_POS = 1 << 0;
+const EMITTER_OPEN_FACE_X_NEG = 1 << 1;
+const EMITTER_OPEN_FACE_Y_POS = 1 << 2;
+const EMITTER_OPEN_FACE_Y_NEG = 1 << 3;
+const EMITTER_OPEN_FACE_Z_POS = 1 << 4;
+const EMITTER_OPEN_FACE_Z_NEG = 1 << 5;
 // Safety ceiling that bounds pathological model/semantic geometry without
 // dropping ordinary dense decorative regions (spawn areas, sign-heavy plots,
 // forests). Sampled dense regions emit on the order of tens of thousands of
@@ -171,9 +179,13 @@ export async function generateVoxelMesh(
     String(regionX),
   );
   const persistentCachePath = join(persistentCacheDir, `${regionY}.bin`);
+  const haloColumnSignature =
+    lod === 1
+      ? await buildHaloColumnSignature(savePath, lod, regionX, regionY)
+      : "";
   const cacheKey = createHash("sha1")
     .update(
-      `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}|${blockShapes.signature}`,
+      `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${haloColumnSignature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}|${blockShapes.signature}`,
     )
     .update(`|${blockColors.signature}`)
     .digest("hex");
@@ -181,11 +193,12 @@ export async function generateVoxelMesh(
   if (cached) {
     const view = new DataView(cached);
     const header = readBinaryHeader(view, cached.byteLength);
+    const metrics = readBinaryQuadMetrics(cached);
     return {
       buffer: cached,
       stats: {
         cacheTier: "disk",
-        ...readBinaryQuadMetrics(cached),
+        ...metrics,
         droppedModelQuads: 0,
         modelQuadBudget: LOD1_MODEL_QUAD_BUDGET,
         chunkColumns: countChunkColumns(view, cached.byteLength),
@@ -364,6 +377,7 @@ export async function generateVoxelMesh(
   const mergedQuads = buildMergedQuads(faces);
   const quads = [...mergedQuads, ...modelQuads];
   let minFaceZ = Number.POSITIVE_INFINITY;
+  let maxFaceZ = Number.NEGATIVE_INFINITY;
   for (const [key, typ] of faces) {
     const [xStr, yStr, _zStr, face] = key.split("/") as [
       string,
@@ -381,6 +395,7 @@ export async function generateVoxelMesh(
   }
   for (const quad of quads) {
     minFaceZ = Math.min(minFaceZ, quad.v0z, quad.v1z, quad.v2z, quad.v3z);
+    maxFaceZ = Math.max(maxFaceZ, quad.v0z, quad.v1z, quad.v2z, quad.v3z);
   }
 
   if (!Number.isFinite(minFaceZ)) return { buffer: null };
@@ -402,10 +417,26 @@ export async function generateVoxelMesh(
       }
     }
   }
-  const rebasedEmitterRecords = emitterRecords.map((record) => ({
-    ...record,
-    z: record.z - baseCellZ,
-  }));
+  const rebasedEmitterRecords = (
+    await Promise.all(
+      emitterRecords.map(async (record) => ({
+        ...record,
+        z: record.z - baseCellZ,
+        openFaces: await getEmitterOpenFaces(record.x, record.y, record.z),
+      })),
+    )
+  ).filter((record) => record.openFaces !== 0);
+  const haloEmitterRecords =
+    lod === 1
+      ? await collectHaloEmitterRecords(baseCellZ, Math.ceil(maxFaceZ))
+      : [];
+  const allEmitterRecords = capEmitterRecords([
+    ...rebasedEmitterRecords,
+    ...haloEmitterRecords,
+  ]);
+  const ownEmitterRecordCount = allEmitterRecords.filter(
+    (record) => !record.halo,
+  ).length;
 
   let chunkCoverage = 0;
   for (const idx of visibleChunkColumns) {
@@ -420,7 +451,7 @@ export async function generateVoxelMesh(
     lod,
     blockColors,
     chunkCoverage,
-    lod === 1 ? rebasedEmitterRecords : [],
+    lod === 1 ? allEmitterRecords : [],
   );
   const mesh = encodedMesh.buffer;
   const view = new DataView(mesh);
@@ -435,6 +466,11 @@ export async function generateVoxelMesh(
     stats: {
       cacheTier: "worker",
       ...encodedMesh.metrics,
+      ownEmitterRecords: ownEmitterRecordCount,
+      haloEmitterRecords: Math.max(
+        0,
+        encodedMesh.metrics.emitterRecords - ownEmitterRecordCount,
+      ),
       droppedModelQuads,
       modelQuadBudget: LOD1_MODEL_QUAD_BUDGET,
       chunkColumns: visibleChunkColumns.size,
@@ -1071,6 +1107,88 @@ export async function generateVoxelMesh(
     }
   }
 
+  async function collectHaloEmitterRecords(
+    baseCellZ: number,
+    maxFaceZ: number,
+  ): Promise<BinaryEmitterRecord[]> {
+    const records: BinaryEmitterRecord[] = [];
+    const chunkCache = new Map<string, Promise<ChunkData | null>>();
+    const radius = EMITTED_LIGHT_RADIUS_CELLS;
+    const minZ = Math.floor(baseCellZ - radius);
+    const maxZ = Math.ceil(maxFaceZ + radius);
+
+    for (let x = -radius; x < COLUMN_VOXELS + radius; x++) {
+      for (let y = -radius; y < COLUMN_VOXELS + radius; y++) {
+        if (x >= 0 && x < COLUMN_VOXELS && y >= 0 && y < COLUMN_VOXELS) {
+          continue;
+        }
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkY = Math.floor(y / CHUNK_SIZE);
+        const localX = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        const localY = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        for (let z = minZ; z <= maxZ; z++) {
+          const chunkZ = Math.floor(z / CHUNK_SIZE);
+          const localZ = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+          const chunkKey = `${chunkX}/${chunkY}/${chunkZ}`;
+          let pendingChunk = chunkCache.get(chunkKey);
+          if (!pendingChunk) {
+            pendingChunk = loadExternalChunk(chunkX, chunkY, chunkZ);
+            chunkCache.set(chunkKey, pendingChunk);
+          }
+          const chunk = await pendingChunk;
+          if (!chunk) continue;
+          const blockValue =
+            chunk.blocks[localIndex(localX, localY, localZ)] ?? 0;
+          const paletteIndex = getPaletteIndex(blockValue);
+          if (isAirType(paletteIndex)) continue;
+          const light = getEmittedLight(paletteIndex);
+          if (!light) continue;
+          const openFaces = await getEmitterOpenFaces(x, y, z);
+          if (openFaces === 0) continue;
+          records.push({
+            x,
+            y,
+            z: z - baseCellZ,
+            r: light.r,
+            g: light.g,
+            b: light.b,
+            halo: true,
+            openFaces,
+          });
+        }
+      }
+    }
+
+    return records.sort(compareEmitterRecords);
+  }
+
+  async function getEmitterOpenFaces(
+    x: number,
+    y: number,
+    z: number,
+  ): Promise<number> {
+    let mask = 0;
+    if (await isTraversableCellWorld(x + 1, y, z)) {
+      mask |= EMITTER_OPEN_FACE_X_POS;
+    }
+    if (await isTraversableCellWorld(x - 1, y, z)) {
+      mask |= EMITTER_OPEN_FACE_X_NEG;
+    }
+    if (await isTraversableCellWorld(x, y + 1, z)) {
+      mask |= EMITTER_OPEN_FACE_Y_POS;
+    }
+    if (await isTraversableCellWorld(x, y - 1, z)) {
+      mask |= EMITTER_OPEN_FACE_Y_NEG;
+    }
+    if (await isTraversableCellWorld(x, y, z + 1)) {
+      mask |= EMITTER_OPEN_FACE_Z_POS;
+    }
+    if (await isTraversableCellWorld(x, y, z - 1)) {
+      mask |= EMITTER_OPEN_FACE_Z_NEG;
+    }
+    return mask;
+  }
+
   async function getPackedFaceAo(
     face: Direction,
     x: number,
@@ -1255,6 +1373,35 @@ export async function generateVoxelMesh(
 
     occupancyCache.set(cacheKey, pending);
     return pending;
+  }
+
+  async function isTraversableCellWorld(
+    x: number,
+    y: number,
+    z: number,
+  ): Promise<boolean> {
+    if (z < minChunkZ * CHUNK_SIZE || z > (maxChunkZ + 1) * CHUNK_SIZE - 1) {
+      return true;
+    }
+
+    const chunkX = Math.floor(x / CHUNK_SIZE);
+    const chunkY = Math.floor(y / CHUNK_SIZE);
+    const chunkZ = Math.floor(z / CHUNK_SIZE);
+    const localX = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localY = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const chunk =
+      chunkX >= 0 &&
+      chunkX < CHUNK_COLUMNS_PER_AXIS &&
+      chunkY >= 0 &&
+      chunkY < CHUNK_COLUMNS_PER_AXIS
+        ? await loadChunk(chunkX, chunkY, chunkZ)
+        : await loadExternalChunk(chunkX, chunkY, chunkZ);
+
+    if (!chunk) return true;
+    return isTraversableBlockValue(
+      chunk.blocks[localIndex(localX, localY, localZ)] ?? 0,
+    );
   }
 
   function emitModelBlock(
@@ -1925,6 +2072,58 @@ async function buildColumnSignature(colDir: string): Promise<ColumnSignature> {
     hash.update(`${worldZ}:${Math.trunc(stats.mtimeMs)}:${stats.size}|`);
   }
   return { signature: hash.digest("hex"), zValues };
+}
+
+async function buildHaloColumnSignature(
+  savePath: string,
+  lod: number,
+  regionX: number,
+  regionY: number,
+): Promise<string> {
+  const hash = createHash("sha1");
+  const columnWorldSpan = COLUMN_VOXELS * lod;
+  const radius = EMITTED_LIGHT_RADIUS_CELLS * lod;
+  const startX =
+    Math.floor((regionX - radius) / columnWorldSpan) * columnWorldSpan;
+  const endX =
+    Math.floor((regionX + columnWorldSpan - 1 + radius) / columnWorldSpan) *
+    columnWorldSpan;
+  const startY =
+    Math.floor((regionY - radius) / columnWorldSpan) * columnWorldSpan;
+  const endY =
+    Math.floor((regionY + columnWorldSpan - 1 + radius) / columnWorldSpan) *
+    columnWorldSpan;
+
+  for (let x = startX; x <= endX; x += columnWorldSpan) {
+    for (let y = startY; y <= endY; y += columnWorldSpan) {
+      if (x === regionX && y === regionY) continue;
+      const path = join(savePath, "chunks", String(lod), String(x), String(y));
+      if (!existsSync(path)) continue;
+      const signature = await buildColumnSignature(path);
+      hash.update(`${x}/${y}:${signature.signature}|`);
+    }
+  }
+
+  return hash.digest("hex");
+}
+
+function capEmitterRecords(
+  records: BinaryEmitterRecord[],
+): BinaryEmitterRecord[] {
+  return records
+    .sort(compareEmitterRecords)
+    .slice(0, MAX_EMITTER_RECORDS_PER_PAYLOAD);
+}
+
+function compareEmitterRecords(
+  a: BinaryEmitterRecord,
+  b: BinaryEmitterRecord,
+): number {
+  const sourceOrder = Number(a.halo === true) - Number(b.halo === true);
+  if (sourceOrder !== 0) return sourceOrder;
+  return (
+    a.x - b.x || a.y - b.y || a.z - b.z || a.r - b.r || a.g - b.g || a.b - b.b
+  );
 }
 
 async function computeSurfaceHeightsWithSignature(

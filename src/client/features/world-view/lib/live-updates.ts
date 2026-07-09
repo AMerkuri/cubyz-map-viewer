@@ -9,7 +9,10 @@ import type {
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
 } from "./types.js";
+import { regionWorldSize } from "./utils.js";
 import { voxelTileKey } from "./voxel-index.js";
+
+const EMITTED_LIGHT_RADIUS_WORLD = 12;
 
 export function handleTerrainTileUpdate(args: {
   lod: number;
@@ -126,25 +129,54 @@ export function handleVoxelRegionUpdate(args: {
     biomeLabelsDirtyRef,
   } = args;
 
-  const key = voxelTileKey(lod, regionX, regionY);
-  const version = markVoxelTileStale(key);
-  missingVoxels.delete(key);
-  failedVoxels.delete(key);
-  evictWarmCachedVoxelTile(key);
-  voxelFetchControllers.get(key)?.abort();
-  pendingVoxelFetchQueueRef.current = pendingVoxelFetchQueueRef.current.filter(
-    (item) => item.key !== key,
-  );
-  pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter(
-    (item) => item.key !== key || item.version >= getVoxelRefreshVersion(key),
-  );
-  loadingVoxels.delete(key);
+  const affectedRegions = getHaloAffectedVoxelRegions(lod, regionX, regionY);
+  for (const region of affectedRegions) {
+    const key = voxelTileKey(region.lod, region.regionX, region.regionY);
+    const version = markVoxelTileStale(key);
+    missingVoxels.delete(key);
+    failedVoxels.delete(key);
+    evictWarmCachedVoxelTile(key);
+    voxelFetchControllers.get(key)?.abort();
+    pendingVoxelFetchQueueRef.current =
+      pendingVoxelFetchQueueRef.current.filter((item) => item.key !== key);
+    pendingVoxelMeshQueueRef.current = pendingVoxelMeshQueueRef.current.filter(
+      (item) => item.key !== key || item.version >= getVoxelRefreshVersion(key),
+    );
+    loadingVoxels.delete(key);
+    if (loadedVoxels.has(key) || availableVoxelKeys.has(key)) {
+      requestDirectVoxelRefresh(
+        region.lod,
+        region.regionX,
+        region.regionY,
+        version,
+      );
+    }
+  }
   if (scene) {
     checkAndUpdateLOD(scene.camera, scene.controls);
   }
-  if (loadedVoxels.has(key) || availableVoxelKeys.has(key)) {
-    requestDirectVoxelRefresh(lod, regionX, regionY, version);
-  }
   debugLabelsDirtyRef.current = true;
   biomeLabelsDirtyRef.current = true;
+}
+
+function getHaloAffectedVoxelRegions(
+  lod: number,
+  regionX: number,
+  regionY: number,
+): Array<{ lod: number; regionX: number; regionY: number }> {
+  const span = regionWorldSize(lod);
+  const radius = lod === 1 ? EMITTED_LIGHT_RADIUS_WORLD : 0;
+  const startX = Math.floor((regionX - radius) / span) * span;
+  const endX = Math.floor((regionX + span - 1 + radius) / span) * span;
+  const startY = Math.floor((regionY - radius) / span) * span;
+  const endY = Math.floor((regionY + span - 1 + radius) / span) * span;
+  const regions: Array<{ lod: number; regionX: number; regionY: number }> = [];
+
+  for (let x = startX; x <= endX; x += span) {
+    for (let y = startY; y <= endY; y += span) {
+      regions.push({ lod, regionX: x, regionY: y });
+    }
+  }
+
+  return regions;
 }

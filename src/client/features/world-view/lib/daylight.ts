@@ -47,7 +47,7 @@ export const VOXEL_WALL_AO = {
 } as const;
 
 // Mesh-local emitted-light contribution baked by the voxel worker from
-// same-tile plus loaded LOD 1 neighbor emitter records. The values are
+// payload-owned own-region plus halo LOD 1 emitter records. The values are
 // stylized for Cubyz-like voxel readability, not physical falloff: light
 // spreads over a bounded radius, wraps softly around faces, and is clamped per
 // channel so nearby surfaces keep their block hue instead of washing to white.
@@ -56,10 +56,10 @@ export const VOXEL_EMITTED_LIGHT = {
   // nothing. Also the spatial-grid cell size used to prefilter emitters.
   radius: 12,
   // Overall multiplier applied to each emitter's normalized RGB contribution.
-  intensity: 0.55,
+  intensity: 0.5,
   // Per-channel clamp for the accumulated light factor so stacked emitters
   // brighten deterministically without unbounded additive blowout.
-  maxContribution: 0.72,
+  maxContribution: 0.66,
   // 0..1 directional wrap: 1 ignores face orientation entirely, 0 is a pure
   // lambert term. High wrap keeps emitter-adjacent faces readable.
   directionalWrap: 0.5,

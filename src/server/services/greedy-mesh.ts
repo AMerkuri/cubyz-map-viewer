@@ -37,9 +37,9 @@
  * Model/fractional records (48 × modelRecordCount bytes)
  *   four vertices as u32 x/y/z relative to worldX/Y/ZBase in 1/4096-cell fixed-point units
  *
- * Emitter records (14 × emitterRecordCount bytes)
- *   u16 x, u16 y, u16 z relative to worldX/Y/ZBase in voxel cells
- *   u8 r, u8 g, u8 b, u8 reserved, u32 reserved
+ * Emitter records (16 × emitterRecordCount bytes)
+ *   i32 x, i32 y, i32 z relative to worldX/Y/ZBase in voxel cells
+ *   u8 r, u8 g, u8 b, u8 flags (bit 0 halo, bits 1-6 open face mask)
  *
  * Trailer (4 bytes)
  *   u32 chunkCoverage  — 16-bit bitmask, bit (cx*4+cy) set when the 32×32
@@ -57,12 +57,13 @@ const reportedFallbackPaletteIndices = new Set<number>();
 const reportedOutOfRangePaletteIndices = new Set<number>();
 const AIR_LIKE_COLOR = { r: 0, g: 0, b: 0 };
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
-const VOXEL_BINARY_MAGIC = 0x344d5856;
+const VOXEL_BINARY_MAGIC = 0x354d5856;
+const UINT16_EMITTER_VOXEL_BINARY_MAGIC = 0x344d5856;
 const PRE_EMITTER_VOXEL_BINARY_MAGIC = 0x334d5856;
 const LEGACY_VOXEL_BINARY_MAGIC = 0x324d5856;
 export const GREEDY_RECORD_BYTES = 12;
 const MODEL_RECORD_BYTES = 48;
-const EMITTER_RECORD_BYTES = 14;
+const EMITTER_RECORD_BYTES = 16;
 
 export type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
 
@@ -99,6 +100,8 @@ export interface BinaryEmitterRecord {
   r: number;
   g: number;
   b: number;
+  halo?: boolean;
+  openFaces?: number;
 }
 
 interface BinaryQuadMetrics {
@@ -131,7 +134,7 @@ export function encodeBinaryQuads(
     const bModel = b.sourceKind === "model" ? 1 : 0;
     return aModel - bModel;
   });
-  const validEmitterRecords = emitterRecords.filter(isUint16CellEmitter);
+  const validEmitterRecords = emitterRecords.filter(isInt32CellEmitter);
   if (validEmitterRecords.length !== emitterRecords.length) {
     logger.warn("Dropped out-of-range voxel emitter records", {
       dropped: emitterRecords.length - validEmitterRecords.length,
@@ -355,18 +358,19 @@ export function encodeBinaryQuads(
   }
 
   for (const emitter of validEmitterRecords) {
-    view.setUint16(off, toUint16Cell(emitter.x, "emitter x"), true);
-    off += 2;
-    view.setUint16(off, toUint16Cell(emitter.y, "emitter y"), true);
-    off += 2;
-    view.setUint16(off, toUint16Cell(emitter.z, "emitter z"), true);
-    off += 2;
+    view.setInt32(off, toInt32Cell(emitter.x, "emitter x"), true);
+    off += 4;
+    view.setInt32(off, toInt32Cell(emitter.y, "emitter y"), true);
+    off += 4;
+    view.setInt32(off, toInt32Cell(emitter.z, "emitter z"), true);
+    off += 4;
     view.setUint8(off++, clampByte(emitter.r));
     view.setUint8(off++, clampByte(emitter.g));
     view.setUint8(off++, clampByte(emitter.b));
-    view.setUint8(off++, 0);
-    view.setUint32(off, 0, true);
-    off += 4;
+    view.setUint8(
+      off++,
+      (emitter.halo ? 1 : 0) | ((emitter.openFaces ?? 0) << 1),
+    );
   }
 
   view.setUint32(off, chunkCoverage, true);
@@ -457,7 +461,11 @@ export function readBinaryHeader(
   emitterRecordCount?: number;
 } {
   if (byteLength < 20) throw new Error("buffer too small for voxel header");
-  if (byteLength >= 36 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) {
+  if (
+    byteLength >= 36 &&
+    (view.getUint32(0, true) === VOXEL_BINARY_MAGIC ||
+      view.getUint32(0, true) === UINT16_EMITTER_VOXEL_BINARY_MAGIC)
+  ) {
     return {
       worldX: view.getInt32(4, true),
       worldY: view.getInt32(8, true),
@@ -584,18 +592,25 @@ function toUint16Cell(value: number, field: string): number {
   throw new Error(`greedy voxel ${field} out of u16 range: ${value}`);
 }
 
-function isUint16CellEmitter(record: BinaryEmitterRecord): boolean {
+function isInt32CellEmitter(record: BinaryEmitterRecord): boolean {
   return (
     Number.isInteger(record.x) &&
-    record.x >= 0 &&
-    record.x <= 0xffff &&
+    record.x >= -0x80000000 &&
+    record.x <= 0x7fffffff &&
     Number.isInteger(record.y) &&
-    record.y >= 0 &&
-    record.y <= 0xffff &&
+    record.y >= -0x80000000 &&
+    record.y <= 0x7fffffff &&
     Number.isInteger(record.z) &&
-    record.z >= 0 &&
-    record.z <= 0xffff
+    record.z >= -0x80000000 &&
+    record.z <= 0x7fffffff
   );
+}
+
+function toInt32Cell(value: number, label: string): number {
+  if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7fffffff) {
+    throw new Error(`${label} out of int32 range: ${value}`);
+  }
+  return value;
 }
 
 function toFixedPosition(value: number): number {

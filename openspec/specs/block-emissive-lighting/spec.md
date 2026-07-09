@@ -34,16 +34,35 @@ The `/api/voxels` binary payload SHALL include compact block-light emitter recor
 - **WHEN** the server generates a voxel mesh for a region with no non-zero emitted-light blocks
 - **THEN** the encoded payload represents an empty emitter set without requiring a separate request
 
+### Requirement: Voxel payload includes emitted-light halo records
+The `/api/voxels` binary payload SHALL include enough emitted-light records for a region to bake mesh-local light from emitters within the configured light radius, including emitters owned by neighboring voxel regions when they can affect visible surfaces in the requested region.
+
+#### Scenario: Neighbor emitter is within halo radius
+- **WHEN** the server generates a voxel payload for a region and a neighboring-region emitter is within the emitted-light radius of the requested region's visible geometry
+- **THEN** the encoded payload includes that emitter as halo data for mesh-local light baking
+
+#### Scenario: Neighbor emitter is outside halo radius
+- **WHEN** the server generates a voxel payload and a neighboring-region emitter cannot affect any visible geometry in the requested region under the configured emitted-light radius
+- **THEN** the encoded payload MAY omit that emitter from the requested region's halo data
+
+#### Scenario: Emitter payload format changes for halo support
+- **WHEN** halo support requires signed relative coordinates, absolute coordinates, or any other binary emitter layout change
+- **THEN** voxel payload decoding and persistent voxel mesh cache validity MUST distinguish the new format from older payloads
+
 ### Requirement: Emitter metadata participates in voxel cache validity
-Voxel mesh cache keys SHALL distinguish emitted-light metadata and emitter payload format so stale geometry-only or stale-color payloads are not reused after emitter-relevant changes.
+Voxel mesh cache keys SHALL distinguish emitted-light metadata and emitted-light rendering semantics so stale geometry-only, stale-color, stale-emitter, or stale-local-light payloads are not reused after emitter-relevant changes.
 
 #### Scenario: Emitted-light metadata changes
 - **WHEN** layered block assets change the `.emittedLight` value for a palette entry
-- **THEN** generated voxel payloads reflect the current emitted-light color rather than a stale cached value
+- **THEN** generated voxel payloads and any derived local-light presentation reflect the current emitted-light color rather than a stale cached value
 
 #### Scenario: Emitter payload format changes
 - **WHEN** the binary emitter record layout or interpretation changes
 - **THEN** previously persisted voxel mesh cache entries generated with the old layout are not reused
+
+#### Scenario: Local-light rendering semantics change
+- **WHEN** server-generated or client-decoded voxel payload semantics change for baked or mesh-local emitted-light contribution
+- **THEN** previously persisted voxel mesh cache entries generated with the old lighting semantics are not reused
 
 ### Requirement: Client decodes and owns emitter lifecycle per voxel region
 The client voxel worker SHALL decode emitter records from voxel payloads and the world-view runtime SHALL reconcile rendered emitter effects with loaded LOD 1 voxel regions.
@@ -57,31 +76,42 @@ The client voxel worker SHALL decode emitter records from voxel payloads and the
 - **THEN** the client removes or replaces the emitter effects owned by that region without leaving stale scene objects
 
 ### Requirement: Viewer renders bounded block-emissive lighting
-The viewer SHALL render block-emissive lighting as a bounded visual approximation that improves low-light readability without requiring exact Cubyz light propagation.
+The viewer SHALL render block-emissive lighting as a bounded Cubyz-like local illumination approximation where emitted blocks affect nearby voxel surfaces through baked or mesh-local light contribution, while dynamic point lights and glow sprites remain optional accents rather than the primary lighting model.
 
 #### Scenario: Nighttime scene contains emitting blocks
 - **WHEN** the active atmosphere is in a low-light state and loaded LOD 1 regions contain emitter records
-- **THEN** emitting blocks remain visibly self-lit or glow-tinted and nearby terrain or voxel surfaces receive a bounded local-light impression
+- **THEN** emitting blocks remain visibly self-lit or glow-tinted and nearby terrain or voxel surfaces receive local emitted-light color that is integrated into their rendered face colors or equivalent mesh-local lighting
+
+#### Scenario: Multiple emitters illuminate nearby surfaces
+- **WHEN** nearby loaded LOD 1 emitters contribute to the same visible voxel surface
+- **THEN** the viewer combines their bounded local-light contributions without requiring an unbounded number of Three.js point lights
 
 #### Scenario: Loaded emitters exceed rendering budget
 - **WHEN** the number of loaded emitter records exceeds the active block-light rendering budget
-- **THEN** the viewer prioritizes a bounded subset or cheaper representation while preserving scene responsiveness
+- **THEN** the viewer preserves bounded local surface illumination for loaded voxel geometry and limits only optional runtime accents such as point lights, glow sprites, or other nonessential effects to preserve scene responsiveness
 
 #### Scenario: Block-emissive lighting is disabled or unavailable
 - **WHEN** block-emissive lighting is disabled by quality settings or unsupported by the decoded payload
 - **THEN** voxel rendering continues using existing atmosphere, vertex colors, AO, and scene lighting without failing
 
-### Requirement: Client prototype blends loaded neighbor emitter halos
-The client SHALL be able to prototype mesh-local emitted-light baking with emitter records from nearby loaded voxel regions when those emitters fall within the configured emitted-light radius of the region being built.
+### Requirement: Runtime block-light accents preserve emitter color
+Runtime block-light glow sprites and point-light accents SHALL remain secondary to mesh-local emitted-light illumination and SHALL preserve emitter color without introducing white-hot centers, hard white lines, or additive blowout that overpowers nearby voxel surfaces.
 
-#### Scenario: Neighbor emitter affects border surface
-- **WHEN** two adjacent LOD 1 voxel regions are loaded and an emitter in one region is within emitted-light radius of visible opaque surfaces in the other region
-- **THEN** the client prototype includes that emitter in the affected region's mesh-local light contribution so the light does not stop at the region border
+#### Scenario: Colored emitter source is highlighted
+- **WHEN** a loaded emitting block receives a runtime source accent
+- **THEN** the accent color remains visually derived from the emitter RGB color rather than a white sprite core
 
-#### Scenario: Neighbor region is not loaded
-- **WHEN** a region is built before an adjacent emitter-owning region is loaded
-- **THEN** the client MUST render the region with available same-region emitter data and MUST NOT fail because neighbor halo data is unavailable
+#### Scenario: Clustered emitters are visible
+- **WHEN** several nearby emitters are active in a low-light scene
+- **THEN** their runtime accents combine softly without producing hard white seams or lines that dominate the mesh-local light spread
 
-#### Scenario: Neighbor halo arrives later
-- **WHEN** a newly loaded neighboring region contains emitters that can affect an already loaded region
-- **THEN** the client SHALL refresh or rebuild the affected region's mesh-local light contribution without requiring a server payload format change
+#### Scenario: Lower quality settings are active
+- **WHEN** block-light quality settings reduce runtime accent budgets
+- **THEN** the viewer preserves mesh-local emitted-light illumination before optional point-light or glow-sprite accents
+
+### Requirement: Mesh-local emitted light is continuous across payload borders
+The viewer SHALL bake mesh-local emitted light from payload-owned own-region and halo emitter records so adjacent loaded voxel regions do not show hard emitted-light discontinuities solely because an emitter is owned by one side of a region boundary.
+
+#### Scenario: Adjacent regions contain nearby emitters
+- **WHEN** adjacent loaded voxel regions contain emitters whose light radii overlap visible surfaces across their shared boundary
+- **THEN** the rendered mesh-local emitted-light contribution remains visually continuous across the boundary apart from normal geometry, material, and occlusion differences

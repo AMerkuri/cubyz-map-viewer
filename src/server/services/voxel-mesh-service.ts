@@ -47,6 +47,8 @@ interface VoxelMeshBenchmark {
     | "greedyRecordBytes"
     | "modelRecordBytes"
     | "emitterRecords"
+    | "ownEmitterRecords"
+    | "haloEmitterRecords"
     | "emitterRecordBytes"
     | "cacheTier"
   >;
@@ -105,6 +107,8 @@ interface VoxelRequestMetrics {
   greedyRecordBytes?: number;
   modelRecordBytes?: number;
   emitterRecords?: number;
+  ownEmitterRecords?: number;
+  haloEmitterRecords?: number;
   emitterRecordBytes?: number;
   chunkColumns?: number;
   regionsParsed?: number;
@@ -297,6 +301,8 @@ export class VoxelMeshService {
           greedyRecordBytes: cached.stats?.greedyRecordBytes,
           modelRecordBytes: cached.stats?.modelRecordBytes,
           emitterRecords: cached.stats?.emitterRecords,
+          ownEmitterRecords: cached.stats?.ownEmitterRecords,
+          haloEmitterRecords: cached.stats?.haloEmitterRecords,
           emitterRecordBytes: cached.stats?.emitterRecordBytes,
           chunkColumns: cached.stats?.chunkColumns,
           minWorldZ: cached.stats?.minWorldZ,
@@ -350,6 +356,8 @@ export class VoxelMeshService {
       greedyRecordBytes: result.stats?.greedyRecordBytes,
       modelRecordBytes: result.stats?.modelRecordBytes,
       emitterRecords: result.stats?.emitterRecords,
+      ownEmitterRecords: result.stats?.ownEmitterRecords,
+      haloEmitterRecords: result.stats?.haloEmitterRecords,
       emitterRecordBytes: result.stats?.emitterRecordBytes,
       chunkColumns: result.stats?.chunkColumns,
       regionsParsed: result.stats?.regionsParsed,
@@ -504,6 +512,8 @@ export class VoxelMeshService {
             greedyRecordBytes: cached.stats.greedyRecordBytes,
             modelRecordBytes: cached.stats.modelRecordBytes,
             emitterRecords: cached.stats.emitterRecords,
+            ownEmitterRecords: cached.stats.ownEmitterRecords,
+            haloEmitterRecords: cached.stats.haloEmitterRecords,
             emitterRecordBytes: cached.stats.emitterRecordBytes,
           }
         : undefined,

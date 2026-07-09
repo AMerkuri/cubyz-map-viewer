@@ -96,6 +96,8 @@ const PLAYER_RETENTION_MS = parseInt(
 const VOXEL_PREGENERATE_ON_STARTUP = parseBooleanEnv(
   process.env.VOXEL_PREGENERATE_ON_STARTUP,
 );
+const VOXEL_REGION_SIZE = 128;
+const EMITTED_LIGHT_RADIUS_WORLD = 12;
 
 interface TerrainUpdatesBatchData {
   tiles: { lod: number; tileX: number; tileY: number }[];
@@ -661,7 +663,7 @@ async function main() {
         }
       }
 
-      for (const region of regions) {
+      for (const region of expandHaloAffectedVoxelRegions(regions)) {
         voxelMeshService.clear(
           `${region.lod}/${region.regionX}/${region.regionY}`,
         );
@@ -739,6 +741,31 @@ async function main() {
       });
     }
   });
+}
+
+function expandHaloAffectedVoxelRegions(
+  regions: TerrainUpdatesBatchData["regions"],
+): TerrainUpdatesBatchData["regions"] {
+  const affected = new Map<
+    string,
+    TerrainUpdatesBatchData["regions"][number]
+  >();
+  for (const region of regions) {
+    const span = VOXEL_REGION_SIZE * region.lod;
+    const radius = region.lod === 1 ? EMITTED_LIGHT_RADIUS_WORLD : 0;
+    const startX = Math.floor((region.regionX - radius) / span) * span;
+    const endX = Math.floor((region.regionX + span - 1 + radius) / span) * span;
+    const startY = Math.floor((region.regionY - radius) / span) * span;
+    const endY = Math.floor((region.regionY + span - 1 + radius) / span) * span;
+
+    for (let x = startX; x <= endX; x += span) {
+      for (let y = startY; y <= endY; y += span) {
+        const key = `${region.lod}/${x}/${y}`;
+        affected.set(key, { lod: region.lod, regionX: x, regionY: y });
+      }
+    }
+  }
+  return [...affected.values()];
 }
 
 main().catch((err) => {
