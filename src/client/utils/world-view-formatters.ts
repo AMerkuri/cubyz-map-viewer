@@ -11,6 +11,16 @@ export function formatNullableBytes(bytes: number | null): string {
   return formatMemoryBytes(Math.round(bytes));
 }
 
+export function formatNullableMs(value: number | null): string {
+  if (value === null) return "n/a";
+  return `${value.toFixed(1)} ms`;
+}
+
+export function formatNullableCount(value: number | null): string {
+  if (value === null) return "n/a";
+  return Math.round(value).toString();
+}
+
 export function isLoadingBreakdownActive(
   loadingBreakdown: LoadingBreakdown,
 ): boolean {

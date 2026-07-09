@@ -55,6 +55,10 @@ export type ChunkStats = {
     avgRawBufferBytes: number | null;
     avgWorkerOutputBytes: number | null;
     avgEmissiveBytes: number | null;
+    avgEmissiveGridBuildMs: number | null;
+    avgEmissiveBakeMs: number | null;
+    avgEmissiveQuadsEvaluated: number | null;
+    avgEmissiveQuadsCulled: number | null;
     avgServerRunMs: number | null;
     avgServerHaloMs: number | null;
     cacheHitSamples: number;
@@ -200,6 +204,10 @@ export function createEmptyChunkStats(): ChunkStats {
       avgRawBufferBytes: null,
       avgWorkerOutputBytes: null,
       avgEmissiveBytes: null,
+      avgEmissiveGridBuildMs: null,
+      avgEmissiveBakeMs: null,
+      avgEmissiveQuadsEvaluated: null,
+      avgEmissiveQuadsCulled: null,
       avgServerRunMs: null,
       avgServerHaloMs: null,
       cacheHitSamples: 0,

@@ -1269,6 +1269,30 @@ export function World3DView({
             sample.emissiveBytes,
             nextSamples,
           ),
+          avgEmissiveGridBuildMs: averageNullableMetric(
+            current.avgEmissiveGridBuildMs,
+            current.samples,
+            sample.emissiveGridBuildMs,
+            nextSamples,
+          ),
+          avgEmissiveBakeMs: averageNullableMetric(
+            current.avgEmissiveBakeMs,
+            current.samples,
+            sample.emissiveBakeMs,
+            nextSamples,
+          ),
+          avgEmissiveQuadsEvaluated: averageNullableMetric(
+            current.avgEmissiveQuadsEvaluated,
+            current.samples,
+            sample.emissiveQuadsEvaluated,
+            nextSamples,
+          ),
+          avgEmissiveQuadsCulled: averageNullableMetric(
+            current.avgEmissiveQuadsCulled,
+            current.samples,
+            sample.emissiveQuadsCulled,
+            nextSamples,
+          ),
           avgServerRunMs: averageNullableMetric(
             current.avgServerRunMs,
             current.samples,

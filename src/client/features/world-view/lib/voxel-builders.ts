@@ -116,11 +116,13 @@ export function buildVoxelQuadrantSubMeshes(
       );
       // Worker-baked mesh-local emitted light. Only opaque quadrants near
       // emitters carry the attribute; other meshes read the WebGL default
-      // of (0,0,0) through the patched voxel material.
+      // of (0,0,0) through the patched voxel material. The worker emits a
+      // compact normalized integer array, so upload it with the normalized
+      // flag to keep the shader reading vec3 values in the 0..1 range.
       if (quadrant.emissiveColors) {
         geom.setAttribute(
           VOXEL_EMISSIVE_ATTRIBUTE,
-          new THREE.BufferAttribute(quadrant.emissiveColors, 3),
+          new THREE.BufferAttribute(quadrant.emissiveColors, 3, true),
         );
       }
       geom.setIndex(new THREE.BufferAttribute(quadrant.indices, 1));

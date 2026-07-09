@@ -4,7 +4,7 @@ import {
   VOXEL_EMITTED_LIGHT,
   VOXEL_FACE_SHADING,
 } from "../lib/daylight.js";
-import type { WorkerIn, WorkerOut } from "../lib/types.js";
+import type { EmissiveColorArray, WorkerIn, WorkerOut } from "../lib/types.js";
 
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 const VOXEL_POSITION_FIXED_SCALE = 4096;
@@ -31,6 +31,21 @@ const EMITTER_BLOCKED_DOWN_TRANSMISSION = 0.12;
 const MODEL_EMISSIVE_MULTIPLIER = 0.28;
 const EMISSIVE_SURFACE_HUE_STRENGTH = 0.42;
 
+// Emissive light values are clamped to 0..1, so they can upload as normalized
+// integer attributes. Uint8 quarters the emissive byte cost versus Float32 and
+// is the default; set EMISSIVE_ATTRIBUTE_USE_UINT16 to true for finer gradients
+// (2x bytes) if visual comparison shows objectionable banding.
+const EMISSIVE_ATTRIBUTE_USE_UINT16 = false;
+const EMISSIVE_ATTRIBUTE_MAX = EMISSIVE_ATTRIBUTE_USE_UINT16 ? 65535 : 255;
+
+// Cap dense emitter-grid allocation so pathological emitter extents fall back to
+// a sparse numeric map instead of allocating an unbounded cell array.
+const EMITTER_DENSE_GRID_MAX_CELLS = 1 << 20;
+
+// Above this many overlapped cells, quad culling assumes the quad may receive
+// light (false positive) instead of scanning a huge cell volume.
+const EMITTER_QUAD_CULL_MAX_CELLS = 4096;
+
 type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
 
 interface DecodedQuad {
@@ -50,13 +65,47 @@ interface QuadrantCounts {
 }
 
 /**
- * Spatial hash of payload-owned own-region plus halo emitter records used to bake
- * bounded mesh-local emitted-light contribution into per-vertex emissive colors.
- * Cell size is the emitted-light radius so a 3x3x3 neighborhood covers every candidate.
+ * Debug/benchmark-only phase metrics for the client emissive bake. These
+ * isolate emitter grid construction cost, per-vertex bake cost, and conservative
+ * quad culling effectiveness so before/after comparisons can distinguish lookup
+ * CPU, culling wins, and transfer-size wins from general decode cost.
+ */
+interface EmissivePhaseMetrics {
+  gridBuildMs: number;
+  bakeMs: number;
+  quadsEvaluated: number;
+  quadsCulled: number;
+}
+
+function createEmptyEmissivePhaseMetrics(): EmissivePhaseMetrics {
+  return { gridBuildMs: 0, bakeMs: 0, quadsEvaluated: 0, quadsCulled: 0 };
+}
+
+/**
+ * Spatial index of payload-owned own-region plus halo emitter records used to
+ * bake bounded mesh-local emitted-light contribution into per-vertex emissive
+ * colors. Cell size is the emitted-light radius so a 3x3x3 neighborhood covers
+ * every candidate.
+ *
+ * The per-vertex hot path avoids string allocation by mapping numeric cell
+ * coordinates `(ix, iy, iz)` to emitter buckets. A dense local cell array is
+ * used when the emitter extent is bounded; a sparse numeric `Map<number,...>`
+ * fallback keeps allocation bounded when extents are pathological.
  */
 interface EmitterLightGrid {
   cellSize: number;
-  cells: Map<string, number[]>;
+  /** Minimum grid cell coordinate along each axis (dense-mode origin). */
+  minCellX: number;
+  minCellY: number;
+  minCellZ: number;
+  /** Dense-mode cell counts along each axis (0 when using the sparse map). */
+  cellsX: number;
+  cellsY: number;
+  cellsZ: number;
+  /** Dense bucket per cell index, or null when the sparse fallback is active. */
+  denseCells: (number[] | undefined)[] | null;
+  /** Sparse bucket map keyed by packed numeric cell index, or null in dense mode. */
+  sparseCells: Map<number, number[]> | null;
   x: Float64Array;
   y: Float64Array;
   z: Float64Array;
@@ -154,6 +203,10 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             rawBufferBytes: benchmark.rawBufferBytes,
             workerOutputBytes: getWorkerOutputBytes(result),
             emissiveBytes: getEmissiveOutputBytes(result),
+            emissiveGridBuildMs: result.emissivePhase.gridBuildMs,
+            emissiveBakeMs: result.emissivePhase.bakeMs,
+            emissiveQuadsEvaluated: result.emissivePhase.quadsEvaluated,
+            emissiveQuadsCulled: result.emissivePhase.quadsCulled,
             contentEncoding: benchmark.contentEncoding,
             serverRunMs: benchmark.serverRunMs,
             serverHaloMs: benchmark.serverHaloMs,
@@ -179,6 +232,10 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             rawBufferBytes: benchmark.rawBufferBytes,
             workerOutputBytes: 0,
             emissiveBytes: 0,
+            emissiveGridBuildMs: 0,
+            emissiveBakeMs: 0,
+            emissiveQuadsEvaluated: 0,
+            emissiveQuadsCulled: 0,
             contentEncoding: benchmark.contentEncoding,
             serverRunMs: benchmark.serverRunMs,
             serverHaloMs: benchmark.serverHaloMs,
@@ -232,7 +289,7 @@ function buildMeshArrays(
     positions: Float32Array;
     normals: Float32Array;
     baseColors: Float32Array;
-    emissiveColors: Float32Array | null;
+    emissiveColors: EmissiveColorArray | null;
     faceAo: Uint8Array;
     trianglePaletteIndices: Uint32Array;
     indices: Uint32Array;
@@ -242,7 +299,7 @@ function buildMeshArrays(
     positions: Float32Array;
     normals: Float32Array;
     baseColors: Float32Array;
-    emissiveColors: Float32Array | null;
+    emissiveColors: EmissiveColorArray | null;
     faceAo: Uint8Array;
     trianglePaletteIndices: Uint32Array;
     indices: Uint32Array;
@@ -262,6 +319,7 @@ function buildMeshArrays(
     halo?: boolean;
     openFaces?: number;
   }[];
+  emissivePhase: EmissivePhaseMetrics;
 } {
   if (buf.byteLength < 20) throw new Error("buffer too small for header");
 
@@ -698,6 +756,7 @@ function buildMeshArrays(
     minZ,
     maxZ,
     emitterRecords: [],
+    emissivePhase: createEmptyEmissivePhaseMetrics(),
   };
 }
 
@@ -824,14 +883,20 @@ function buildOptimizedMeshArrays(
   // disabled, skip grid construction so no mesh-local emissive attribute is
   // allocated, baked, transferred, or uploaded. Emitter records are still
   // decoded above for lifecycle/runtime stats.
+  const emissivePhase = createEmptyEmissivePhaseMetrics();
   const meshEmitterRecords = emitterRecords;
+  const gridBuildStart = performance.now();
   const emitterGrid =
     bakeEmissiveAttributes && meshEmitterRecords.length > 0
       ? buildEmitterLightGrid(meshEmitterRecords)
       : null;
+  if (emitterGrid) {
+    emissivePhase.gridBuildMs = performance.now() - gridBuildStart;
+  }
   const opaqueWriters = createQuadrantWriters(opaqueCounts, emitterGrid);
   const transparentWriters = createQuadrantWriters(transparentCounts, null);
   const depthCueRange = Math.max(maxZ - minZ, voxelSize);
+  const bakeStart = emitterGrid ? performance.now() : 0;
   forEachOptimizedQuad(
     view,
     quadCount,
@@ -856,9 +921,33 @@ function buildOptimizedMeshArrays(
       );
       const writers =
         quad.renderKind === 2 ? transparentWriters : opaqueWriters;
-      writeQuadToQuadrant(writers[quadrant], quad, minZ, depthCueRange);
+      // Conservative quad-level culling: opaque quads that cannot intersect any
+      // emitter radius skip per-vertex accumulation entirely. Transparent quads
+      // never carry emissive attributes, so they are unaffected.
+      let bakeEmissiveForQuad = false;
+      if (emitterGrid !== null && quad.renderKind !== 2) {
+        bakeEmissiveForQuad = quadCanReceiveEmitterLight(
+          emitterGrid,
+          quad.positions,
+        );
+        if (bakeEmissiveForQuad) {
+          emissivePhase.quadsEvaluated++;
+        } else {
+          emissivePhase.quadsCulled++;
+        }
+      }
+      writeQuadToQuadrant(
+        writers[quadrant],
+        quad,
+        minZ,
+        depthCueRange,
+        bakeEmissiveForQuad,
+      );
     },
   );
+  if (emitterGrid) {
+    emissivePhase.bakeMs = performance.now() - bakeStart;
+  }
 
   return {
     quadrantMeshes: opaqueWriters.map(toQuadrantMesh),
@@ -869,6 +958,7 @@ function buildOptimizedMeshArrays(
     minZ,
     maxZ,
     emitterRecords: emitterRecords.filter((record) => !record.halo),
+    emissivePhase,
   };
 }
 
@@ -925,9 +1015,61 @@ function buildEmitterLightGrid(
   emitterRecords: ReturnType<typeof buildMeshArrays>["emitterRecords"],
 ): EmitterLightGrid {
   const count = emitterRecords.length;
+  const cellSize = VOXEL_EMITTED_LIGHT.radius;
+
+  // Compute the numeric cell extent so dense allocation can be bounded and the
+  // hot path can map (ix, iy, iz) to a local array index without string keys.
+  let minCellX = Number.POSITIVE_INFINITY;
+  let minCellY = Number.POSITIVE_INFINITY;
+  let minCellZ = Number.POSITIVE_INFINITY;
+  let maxCellX = Number.NEGATIVE_INFINITY;
+  let maxCellY = Number.NEGATIVE_INFINITY;
+  let maxCellZ = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < count; i++) {
+    const record = emitterRecords[i];
+    if (!record) continue;
+    const ix = Math.floor(record.x / cellSize);
+    const iy = Math.floor(record.y / cellSize);
+    const iz = Math.floor(record.z / cellSize);
+    if (ix < minCellX) minCellX = ix;
+    if (iy < minCellY) minCellY = iy;
+    if (iz < minCellZ) minCellZ = iz;
+    if (ix > maxCellX) maxCellX = ix;
+    if (iy > maxCellY) maxCellY = iy;
+    if (iz > maxCellZ) maxCellZ = iz;
+  }
+  if (!Number.isFinite(minCellX)) {
+    minCellX = 0;
+    minCellY = 0;
+    minCellZ = 0;
+    maxCellX = -1;
+    maxCellY = -1;
+    maxCellZ = -1;
+  }
+  // Pad by one cell on each side so 3x3x3 neighborhood probes stay in bounds.
+  const cellsX = Math.max(0, maxCellX - minCellX + 1) + 2;
+  const cellsY = Math.max(0, maxCellY - minCellY + 1) + 2;
+  const cellsZ = Math.max(0, maxCellZ - minCellZ + 1) + 2;
+  const denseCellCount = cellsX * cellsY * cellsZ;
+  // Guard against pathological emitter extents: fall back to a sparse numeric
+  // map when the dense grid would exceed the bounded cell budget.
+  const useDense =
+    count > 0 &&
+    denseCellCount > 0 &&
+    denseCellCount <= EMITTER_DENSE_GRID_MAX_CELLS;
+
   const grid: EmitterLightGrid = {
-    cellSize: VOXEL_EMITTED_LIGHT.radius,
-    cells: new Map(),
+    cellSize,
+    minCellX: useDense ? minCellX - 1 : 0,
+    minCellY: useDense ? minCellY - 1 : 0,
+    minCellZ: useDense ? minCellZ - 1 : 0,
+    cellsX: useDense ? cellsX : 0,
+    cellsY: useDense ? cellsY : 0,
+    cellsZ: useDense ? cellsZ : 0,
+    denseCells: useDense
+      ? new Array<number[] | undefined>(denseCellCount)
+      : null,
+    sparseCells: useDense ? null : new Map<number, number[]>(),
     x: new Float64Array(count),
     y: new Float64Array(count),
     z: new Float64Array(count),
@@ -946,23 +1088,147 @@ function buildEmitterLightGrid(
     grid.g[i] = record.g / 255;
     grid.b[i] = record.b / 255;
     grid.openFaces[i] = record.openFaces ?? EMITTER_OPEN_FACE_ALL;
-    const key = emitterCellKey(
-      Math.floor(record.x / grid.cellSize),
-      Math.floor(record.y / grid.cellSize),
-      Math.floor(record.z / grid.cellSize),
+    addEmitterToGridCell(
+      grid,
+      Math.floor(record.x / cellSize),
+      Math.floor(record.y / cellSize),
+      Math.floor(record.z / cellSize),
+      i,
     );
-    const cell = grid.cells.get(key);
-    if (cell) {
-      cell.push(i);
-    } else {
-      grid.cells.set(key, [i]);
-    }
   }
   return grid;
 }
 
-function emitterCellKey(ix: number, iy: number, iz: number): string {
-  return `${ix},${iy},${iz}`;
+/**
+ * Returns the local dense array index for a numeric cell coordinate, or -1 when
+ * the coordinate lies outside the dense grid bounds. Callers must have a dense
+ * grid (`denseCells !== null`).
+ */
+function denseCellIndex(
+  grid: EmitterLightGrid,
+  ix: number,
+  iy: number,
+  iz: number,
+): number {
+  const lx = ix - grid.minCellX;
+  const ly = iy - grid.minCellY;
+  const lz = iz - grid.minCellZ;
+  if (
+    lx < 0 ||
+    ly < 0 ||
+    lz < 0 ||
+    lx >= grid.cellsX ||
+    ly >= grid.cellsY ||
+    lz >= grid.cellsZ
+  ) {
+    return -1;
+  }
+  return (lx * grid.cellsY + ly) * grid.cellsZ + lz;
+}
+
+function sparseCellKey(ix: number, iy: number, iz: number): number {
+  // Pack signed cell coordinates into a single numeric key using a bounded
+  // offset so the sparse fallback avoids string allocation. The offset covers a
+  // very large emitter range; collisions across it are not a correctness risk.
+  const OFFSET = 1 << 20;
+  return (
+    (ix + OFFSET) * 4_398_046_511_104 +
+    (iy + OFFSET) * 2_097_152 +
+    (iz + OFFSET)
+  );
+}
+
+function addEmitterToGridCell(
+  grid: EmitterLightGrid,
+  ix: number,
+  iy: number,
+  iz: number,
+  emitterIndex: number,
+): void {
+  if (grid.denseCells) {
+    const index = denseCellIndex(grid, ix, iy, iz);
+    if (index < 0) return;
+    const cell = grid.denseCells[index];
+    if (cell) {
+      cell.push(emitterIndex);
+    } else {
+      grid.denseCells[index] = [emitterIndex];
+    }
+    return;
+  }
+  const sparse = grid.sparseCells;
+  if (!sparse) return;
+  const key = sparseCellKey(ix, iy, iz);
+  const cell = sparse.get(key);
+  if (cell) {
+    cell.push(emitterIndex);
+  } else {
+    sparse.set(key, [emitterIndex]);
+  }
+}
+
+function getEmitterGridCell(
+  grid: EmitterLightGrid,
+  ix: number,
+  iy: number,
+  iz: number,
+): number[] | undefined {
+  if (grid.denseCells) {
+    const index = denseCellIndex(grid, ix, iy, iz);
+    return index < 0 ? undefined : grid.denseCells[index];
+  }
+  return grid.sparseCells?.get(sparseCellKey(ix, iy, iz));
+}
+
+/**
+ * Conservative test: can any emitter influence this quad? Uses the quad axis-
+ * aligned bounding box expanded by the emitted-light radius and probes the
+ * emitter-grid cells overlapping that expanded box. Prefers false positives
+ * (keeps existing work) over false negatives (would drop visible light).
+ */
+function quadCanReceiveEmitterLight(
+  grid: EmitterLightGrid,
+  positions: number[],
+): boolean {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < positions.length; i += 3) {
+    const px = positions[i] ?? 0;
+    const py = positions[i + 1] ?? 0;
+    const pz = positions[i + 2] ?? 0;
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (pz < minZ) minZ = pz;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+    if (pz > maxZ) maxZ = pz;
+  }
+  const radius = VOXEL_EMITTED_LIGHT.radius;
+  const cellSize = grid.cellSize;
+  // Expand the quad bounds by the emitted-light radius, then convert to grid
+  // cells. Any emitter within radius of the quad lives in one of these cells.
+  const cx0 = Math.floor((minX - radius) / cellSize);
+  const cy0 = Math.floor((minY - radius) / cellSize);
+  const cz0 = Math.floor((minZ - radius) / cellSize);
+  const cx1 = Math.floor((maxX + radius) / cellSize);
+  const cy1 = Math.floor((maxY + radius) / cellSize);
+  const cz1 = Math.floor((maxZ + radius) / cellSize);
+  // Very large greedy quads can span many cells; iterating a huge volume would
+  // cost more than baking. Prefer a false positive (keep baking) in that case.
+  const spanCells = (cx1 - cx0 + 1) * (cy1 - cy0 + 1) * (cz1 - cz0 + 1);
+  if (spanCells > EMITTER_QUAD_CULL_MAX_CELLS) return true;
+  for (let ix = cx0; ix <= cx1; ix++) {
+    for (let iy = cy0; iy <= cy1; iy++) {
+      for (let iz = cz0; iz <= cz1; iz++) {
+        if (getEmitterGridCell(grid, ix, iy, iz)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -993,7 +1259,7 @@ function accumulateEmitterLight(
   for (let ix = cx - 1; ix <= cx + 1; ix++) {
     for (let iy = cy - 1; iy <= cy + 1; iy++) {
       for (let iz = cz - 1; iz <= cz + 1; iz++) {
-        const cell = grid.cells.get(emitterCellKey(ix, iy, iz));
+        const cell = getEmitterGridCell(grid, ix, iy, iz);
         if (!cell) continue;
         for (const emitterIndex of cell) {
           if (candidates >= VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex) break;
@@ -1240,6 +1506,12 @@ function createQuadrantCounts(): QuadrantCounts[] {
   }));
 }
 
+function createEmissiveColorArray(vertexCount: number): EmissiveColorArray {
+  return EMISSIVE_ATTRIBUTE_USE_UINT16
+    ? new Uint16Array(vertexCount * 3)
+    : new Uint8Array(vertexCount * 3);
+}
+
 function createQuadrantWriters(
   counts: QuadrantCounts[],
   emitterGrid: EmitterLightGrid | null,
@@ -1249,8 +1521,11 @@ function createQuadrantWriters(
     positions: new Float32Array(count.vertices * 3),
     normals: new Float32Array(count.vertices * 3),
     baseColors: new Float32Array(count.vertices * 3),
-    emissiveColors: emitterGrid ? new Float32Array(count.vertices * 3) : null,
+    // Emissive output is allocated lazily only after a vertex in this quadrant
+    // receives a non-zero contribution, so unlit quadrants transfer no attribute.
+    emissiveColors: null as EmissiveColorArray | null,
     emitterGrid,
+    vertexCount: count.vertices,
     hasEmissive: false,
     faceAo: new Uint8Array(count.vertices),
     trianglePaletteIndices: new Uint32Array(count.triangles),
@@ -1281,6 +1556,7 @@ function writeQuadToQuadrant(
   quad: DecodedQuad,
   minZ: number,
   depthCueRange: number,
+  bakeEmissive: boolean,
 ): void {
   const normal = computeQuadNormal(quad.positions, quad.dir);
   const tint = getVoxelFaceTint(normal[0], normal[1], normal[2]);
@@ -1301,7 +1577,7 @@ function writeQuadToQuadrant(
     writer.baseColors[dst] = clamp01(quad.color[0] * tint.r * depthCue);
     writer.baseColors[dst + 1] = clamp01(quad.color[1] * tint.g * depthCue);
     writer.baseColors[dst + 2] = clamp01(quad.color[2] * tint.b * depthCue);
-    if (writer.emissiveColors && writer.emitterGrid) {
+    if (bakeEmissive && writer.emitterGrid) {
       accumulateEmitterLight(
         writer.emitterGrid,
         quad.positions[src] ?? 0,
@@ -1333,16 +1609,23 @@ function writeQuadToQuadrant(
           1 -
           EMISSIVE_SURFACE_HUE_STRENGTH +
           EMISSIVE_SURFACE_HUE_STRENGTH * (baseB / baseMax);
-        writer.emissiveColors[dst] = clamp01(
+        // Lazily allocate the emissive output only once a vertex is actually
+        // lit, then encode the clamped 0..1 value as a normalized integer.
+        let emissiveColors = writer.emissiveColors;
+        if (!emissiveColors) {
+          emissiveColors = createEmissiveColorArray(writer.vertexCount);
+          writer.emissiveColors = emissiveColors;
+          writer.hasEmissive = true;
+        }
+        emissiveColors[dst] = encodeEmissiveChannel(
           baseR * EMITTER_LIGHT_SCRATCH[0] * hueR * emissiveMultiplier,
         );
-        writer.emissiveColors[dst + 1] = clamp01(
+        emissiveColors[dst + 1] = encodeEmissiveChannel(
           baseG * EMITTER_LIGHT_SCRATCH[1] * hueG * emissiveMultiplier,
         );
-        writer.emissiveColors[dst + 2] = clamp01(
+        emissiveColors[dst + 2] = encodeEmissiveChannel(
           baseB * EMITTER_LIGHT_SCRATCH[2] * hueB * emissiveMultiplier,
         );
-        writer.hasEmissive = true;
       }
     }
     writer.faceAo[baseVertex + v] = Math.min(
@@ -1535,6 +1818,14 @@ function normalizeDirection(vector: { x: number; y: number; z: number }): {
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * Encodes a clamped 0..1 emissive channel into a normalized integer sample that
+ * uploads as a normalized `BufferAttribute` (so the shader still reads 0..1).
+ */
+function encodeEmissiveChannel(value: number): number {
+  return Math.round(clamp01(value) * EMISSIVE_ATTRIBUTE_MAX);
 }
 
 function lerp(start: number, end: number, t: number): number {

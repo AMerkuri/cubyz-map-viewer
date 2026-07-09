@@ -14,6 +14,14 @@ import type { useWorldData } from "../hooks/useWorldData.js";
 
 export type VoxelBenchmarkCacheOutcome = "hit" | "miss" | "unknown";
 
+/**
+ * Compact worker-baked emissive attribute storage. Emissive light values are
+ * clamped to `0..1`, so the worker emits them as a normalized integer typed
+ * array (`Uint8Array` by default, `Uint16Array` fallback) that the main thread
+ * uploads as a normalized `BufferAttribute` preserving `0..1` shader input.
+ */
+export type EmissiveColorArray = Uint8Array | Uint16Array;
+
 export interface TerrainMeshData {
   meshWidth: number;
   meshHeight: number;
@@ -68,8 +76,10 @@ export interface WorkerQuadrantMesh {
   /**
    * Per-vertex mesh-local emitted-light color baked from payload-owned own-region
    * and halo LOD 1 emitter records, or null when no emitter reaches this quadrant.
+   * Stored as a compact normalized integer typed array uploaded with the
+   * `normalized` flag so the shader continues receiving `vec3` values in `0..1`.
    */
-  emissiveColors: Float32Array | null;
+  emissiveColors: EmissiveColorArray | null;
   faceAo: Uint8Array;
   trianglePaletteIndices: Uint32Array;
   indices: Uint32Array;
@@ -159,6 +169,26 @@ export interface WorkerOut {
     rawBufferBytes: number;
     workerOutputBytes: number;
     emissiveBytes: number;
+    /**
+     * Time spent building the emitter-light lookup grid, in milliseconds.
+     * `0` when emissive attributes are disabled or no emitters are present.
+     */
+    emissiveGridBuildMs: number;
+    /**
+     * Time spent baking per-vertex emitted light into quadrant writers, in
+     * milliseconds. `0` when emissive attributes are disabled.
+     */
+    emissiveBakeMs: number;
+    /**
+     * Number of opaque quads whose emissive accumulation ran because the quad
+     * could intersect at least one emitter radius.
+     */
+    emissiveQuadsEvaluated: number;
+    /**
+     * Number of opaque quads conservatively skipped because their expanded
+     * bounds could not intersect any emitter radius.
+     */
+    emissiveQuadsCulled: number;
     contentEncoding: string | null;
     serverRunMs: number | null;
     serverHaloMs: number | null;

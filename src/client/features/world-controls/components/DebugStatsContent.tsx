@@ -3,6 +3,8 @@ import type { ChunkStats } from "../../../lib/world-view-debug.js";
 import {
   formatMemoryBytes,
   formatNullableBytes,
+  formatNullableCount,
+  formatNullableMs,
 } from "../../../utils/world-view-formatters.js";
 
 function StatsSectionTitle({ children }: { children: React.ReactNode }) {
@@ -142,6 +144,22 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       <div>
         Avg emissive bytes:{" "}
         {formatNullableBytes(chunkStats.voxelBenchmark.avgEmissiveBytes)}
+      </div>
+      <div>
+        Avg emissive grid:{" "}
+        {formatNullableMs(chunkStats.voxelBenchmark.avgEmissiveGridBuildMs)}
+      </div>
+      <div>
+        Avg emissive bake:{" "}
+        {formatNullableMs(chunkStats.voxelBenchmark.avgEmissiveBakeMs)}
+      </div>
+      <div>
+        Avg emissive quads: eval{" "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveQuadsEvaluated,
+        )}{" "}
+        / culled{" "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmissiveQuadsCulled)}
       </div>
       <div>
         Avg server run:{" "}
