@@ -28,6 +28,8 @@ export interface VoxelGenerationStats {
   rawPayloadBytes: number;
   greedyRecordBytes: number;
   modelRecordBytes: number;
+  emitterRecords: number;
+  emitterRecordBytes: number;
   chunkColumns: number;
   regionsParsed: number;
   chunksMeshed: number;

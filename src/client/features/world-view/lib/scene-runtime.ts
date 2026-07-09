@@ -6,6 +6,10 @@ import type { PlayerData } from "../hooks/usePlayers.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 import { createAtmosphereRuntime } from "./atmosphere.js";
 import {
+  BlockLightRuntimeManager,
+  type BlockLightRuntimeStats,
+} from "./block-light-runtime.js";
+import {
   focusCameraOnVisibleSurfacePosition,
   updateKeyboardCameraMotion,
 } from "./camera.js";
@@ -59,6 +63,7 @@ export function initializeSceneRuntime(args: {
     current: ReturnType<typeof useWorldData>;
   };
   loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  blockLightStatsRef: { current: BlockLightRuntimeStats };
   onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };
   terrainVisibilityDirtyRef: { current: boolean };
@@ -120,6 +125,7 @@ export function initializeSceneRuntime(args: {
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,
@@ -188,6 +194,7 @@ export function initializeSceneRuntime(args: {
     quality: debugSettingsRef.current.atmosphereQuality,
     timeOfDay: debugSettingsRef.current.atmosphereTimeOfDay,
   });
+  const blockLightRuntime = new BlockLightRuntimeManager(scene);
 
   const terrainGroup = new THREE.Group();
   const voxelGroup = new THREE.Group();
@@ -447,6 +454,15 @@ export function initializeSceneRuntime(args: {
         timeOfDay: atmosphereTimeOfDay,
       });
     }
+    blockLightRuntime.syncRegions(loadedVoxelsRef.current.values());
+    blockLightStatsRef.current = blockLightRuntime.update({
+      enabled:
+        debugSettingsRef.current.atmosphereQuality > 0 &&
+        debugSettingsRef.current.blockLightQuality > 0,
+      quality: debugSettingsRef.current.blockLightQuality,
+      timeOfDay: atmosphereTimeOfDay,
+      cameraPosition: camera.position,
+    });
 
     const frameIntervalMs = effectiveCap <= 0 ? 0 : 1000 / effectiveCap;
     if (frameIntervalMs > 0) {
@@ -724,6 +740,7 @@ export function initializeSceneRuntime(args: {
     controls.dispose();
     preUploadTarget.dispose();
     atmosphereRuntime.dispose();
+    blockLightRuntime.dispose();
     renderer.dispose();
     if (container.contains(renderer.domElement)) {
       container.removeChild(renderer.domElement);

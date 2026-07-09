@@ -63,9 +63,23 @@ export interface WorkerQuadrantMesh {
   positions: Float32Array;
   normals: Float32Array;
   baseColors: Float32Array;
+  /**
+   * Per-vertex mesh-local emitted-light color baked from same-tile and loaded
+   * LOD 1 neighbor emitter records, or null when no emitter reaches this quadrant.
+   */
+  emissiveColors: Float32Array | null;
   faceAo: Uint8Array;
   trianglePaletteIndices: Uint32Array;
   indices: Uint32Array;
+}
+
+export interface VoxelEmitterRecord {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  g: number;
+  b: number;
 }
 
 export interface PendingVoxelMeshItem {
@@ -81,6 +95,8 @@ export interface PendingVoxelMeshItem {
   voxelSize: number;
   minZ: number;
   maxZ: number;
+  emitterRecords: VoxelEmitterRecord[];
+  haloEmitterSourceKeys: string[];
 }
 
 export interface PendingVoxelFetchRequest {
@@ -98,6 +114,8 @@ export interface WorkerIn {
   lod: number;
   regionX: number;
   regionY: number;
+  haloEmitterRecords?: VoxelEmitterRecord[];
+  haloEmitterSourceKeys?: string[];
   version?: number;
   benchmark?: {
     fetchCompletedAt: number;
@@ -122,6 +140,8 @@ export interface WorkerOut {
   voxelSize?: number;
   minZ?: number;
   maxZ?: number;
+  emitterRecords?: VoxelEmitterRecord[];
+  haloEmitterSourceKeys?: string[];
   benchmark?: {
     fetchMs: number;
     decodeMs: number;
@@ -179,6 +199,8 @@ export interface LoadedVoxelTile {
   maxZ: number;
   chunkCoverage: number;
   chunkTopHeights: Float32Array;
+  emitterRecords: VoxelEmitterRecord[];
+  haloEmitterSourceKeys: string[];
   borderLines: THREE.LineSegments;
 }
 

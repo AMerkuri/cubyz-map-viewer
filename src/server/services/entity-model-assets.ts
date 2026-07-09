@@ -128,7 +128,16 @@ export class EntityModelAssetService {
   }
 
   async getEntityModelAssetFile(token: string): Promise<string | null> {
-    return this.assetFiles.get(token) ?? null;
+    const filePath = this.assetFiles.get(token);
+    if (!filePath) return null;
+
+    try {
+      await stat(filePath);
+      return filePath;
+    } catch {
+      this.assetFiles.delete(token);
+      return null;
+    }
   }
 
   private getPlayerModelDescriptors(): Promise<

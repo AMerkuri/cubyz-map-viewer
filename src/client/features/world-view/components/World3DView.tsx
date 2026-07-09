@@ -23,6 +23,8 @@ import {
   ensureAvatarAssets,
 } from "../lib/avatar-assets.js";
 import { refreshBiomeLabels as refreshBiomeLabelsManaged } from "../lib/biome-labels.js";
+import { patchVoxelMaterialWithBlockLight } from "../lib/block-light-mesh.js";
+import type { BlockLightRuntimeStats } from "../lib/block-light-runtime.js";
 import { retargetCameraStateToVisibleSurface } from "../lib/camera.js";
 import { MAX_VOXEL_RETRIES, VOXEL_CHUNK_CELLS } from "../lib/constants.js";
 import {
@@ -121,6 +123,7 @@ import {
   clearVoxelTiles as clearVoxelTilesManaged,
   drainVoxelFetchQueue as drainVoxelFetchQueueManaged,
   handleVoxelWorkerMessage,
+  refreshLoadedVoxelHaloNeighbors,
   requestDirectVoxelRefresh as requestDirectVoxelRefreshManaged,
   requestVoxelRegion as requestVoxelRegionManaged,
   updateVoxelLod as updateVoxelLodManaged,
@@ -180,6 +183,7 @@ export function World3DView({
       vertexColors: true,
       side: THREE.FrontSide,
     });
+    patchVoxelMaterialWithBlockLight(voxelMaterialRef.current);
   }
   const transparentVoxelMaterialRef = useRef<THREE.MeshLambertMaterial | null>(
     null,
@@ -340,6 +344,14 @@ export function World3DView({
     avgDecodedBodyBytes: null,
     avgRawBufferBytes: null,
     avgWorkerOutputBytes: null,
+  });
+  const blockLightStatsRef = useRef<BlockLightRuntimeStats>({
+    decodedEmitters: 0,
+    activeEmitters: 0,
+    budget: 0,
+    glowBudget: 0,
+    pointLightBudget: 0,
+    degraded: false,
   });
   const avatarAssetCacheRef = useRef<AvatarAssetCache>(new Map());
   const avatarAssetsLoadGenerationRef = useRef(0);
@@ -1278,6 +1290,16 @@ export function World3DView({
           chunkBorderGroupRef.current,
         );
       },
+      onVoxelTileLoaded: (tile) => {
+        refreshLoadedVoxelHaloNeighbors({
+          sourceTile: tile,
+          loadedVoxels: loadedVoxelsRef.current,
+          loadingVoxels: loadingVoxelsRef.current,
+          isVoxelTileStale,
+          markVoxelTileStale,
+          requestDirectVoxelRefresh,
+        });
+      },
     });
   }
 
@@ -1296,6 +1318,7 @@ export function World3DView({
       warmCachedTerrain: warmCachedTerrainRef.current,
       warmCachedVoxels: warmCachedVoxelsRef.current,
       voxelBenchmark: voxelBenchmarkRef.current,
+      blockLightStats: blockLightStatsRef.current,
       lastChunkStatsRef,
       onChunkStatsChange: (stats) => {
         onChunkStatsChangeRef.current(stats);
@@ -1359,6 +1382,7 @@ export function World3DView({
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,

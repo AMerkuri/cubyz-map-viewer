@@ -37,6 +37,16 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
       <div>Failed regions: {chunkStats.voxelHealth.failed}</div>
 
+      <StatsSectionTitle>Block lights</StatsSectionTitle>
+      <div>Decoded emitters: {chunkStats.blockLight.decodedEmitters}</div>
+      <div>Active accent emitters: {chunkStats.blockLight.activeEmitters}</div>
+      <div>Accent budget: {chunkStats.blockLight.budget}</div>
+      <div>Glow budget: {chunkStats.blockLight.glowBudget}</div>
+      <div>Point-light budget: {chunkStats.blockLight.pointLightBudget}</div>
+      <div>
+        Accents degraded: {chunkStats.blockLight.degraded ? "yes" : "no"}
+      </div>
+
       <StatsSectionTitle>Loaded by LOD</StatsSectionTitle>
       <div>
         {([1, 2, 4, 8, 16, 32] as const)

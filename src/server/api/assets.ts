@@ -1,4 +1,9 @@
-import { type Request, type Response, Router } from "express";
+import {
+  type NextFunction,
+  type Request,
+  type Response,
+  Router,
+} from "express";
 import type { EntityModelAssetService } from "../services/entity-model-assets.js";
 import { BadRequestError, NotFoundError } from "./errors.js";
 
@@ -31,7 +36,7 @@ export function createAssetsRouter(
 
   router.get(
     "/entity-models/files/:token",
-    async (req: Request, res: Response) => {
+    async (req: Request, res: Response, next: NextFunction) => {
       const token = Array.isArray(req.params.token)
         ? req.params.token[0]
         : req.params.token;
@@ -44,7 +49,9 @@ export function createAssetsRouter(
         throw new NotFoundError("Entity model asset not found");
       }
 
-      res.sendFile(filePath);
+      res.sendFile(filePath, { dotfiles: "allow" }, (error) => {
+        if (error) next(error);
+      });
     },
   );
 

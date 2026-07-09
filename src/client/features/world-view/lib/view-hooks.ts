@@ -14,6 +14,7 @@ import type {
   SurfaceIndexEntry,
   useWorldData,
 } from "../hooks/useWorldData.js";
+import type { BlockLightRuntimeStats } from "./block-light-runtime.js";
 import {
   applyInitialCameraState,
   focusCameraOnWorldPosition,
@@ -60,6 +61,7 @@ export function useWorld3DSceneRuntime(args: {
     current: ReturnType<typeof useWorldData>;
   };
   loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  blockLightStatsRef: { current: BlockLightRuntimeStats };
   onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };
   terrainVisibilityDirtyRef: { current: boolean };
@@ -121,6 +123,7 @@ export function useWorld3DSceneRuntime(args: {
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,
@@ -191,6 +194,7 @@ export function useWorld3DSceneRuntime(args: {
       terrainLoadGenerationRef,
       worldDataRef,
       loadedVoxelsRef,
+      blockLightStatsRef,
       onCursorMoveRef,
       onPlayerClickRef,
       terrainVisibilityDirtyRef,
@@ -239,6 +243,7 @@ export function useWorld3DSceneRuntime(args: {
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,
     terrainVisibilityDirtyRef,

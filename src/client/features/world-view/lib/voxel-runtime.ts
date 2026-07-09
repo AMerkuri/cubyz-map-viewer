@@ -14,7 +14,10 @@ import {
 } from "./voxel-builders.js";
 import { voxelTileKey } from "./voxel-index.js";
 import { runVoxelLodSelection } from "./voxel-lod.js";
-import { compareVoxelFetchRequests } from "./voxel-requests.js";
+import {
+  collectLoadedNeighborHaloEmitters,
+  compareVoxelFetchRequests,
+} from "./voxel-requests.js";
 
 export function clearVoxelTiles(args: {
   preserveWarmCache?: boolean;
@@ -444,6 +447,8 @@ export function handleVoxelWorkerMessage(args: {
     voxelSize,
     minZ,
     maxZ,
+    emitterRecords,
+    haloEmitterSourceKeys,
     benchmark,
     error,
   } = data;
@@ -511,8 +516,63 @@ export function handleVoxelWorkerMessage(args: {
     voxelSize: voxelSize ?? resolvedLod,
     minZ: resolvedMinZ,
     maxZ: resolvedMaxZ,
+    emitterRecords: emitterRecords ?? [],
+    haloEmitterSourceKeys: haloEmitterSourceKeys ?? [],
     version: resolvedVersion,
   });
+}
+
+export function refreshLoadedVoxelHaloNeighbors(args: {
+  sourceTile: LoadedVoxelTile;
+  loadedVoxels: Map<string, LoadedVoxelTile>;
+  loadingVoxels: Set<string>;
+  isVoxelTileStale: (key: string) => boolean;
+  markVoxelTileStale: (key: string) => number;
+  requestDirectVoxelRefresh: (
+    lod: number,
+    regionX: number,
+    regionY: number,
+    version: number,
+  ) => void;
+}): void {
+  const {
+    sourceTile,
+    loadedVoxels,
+    loadingVoxels,
+    isVoxelTileStale,
+    markVoxelTileStale,
+    requestDirectVoxelRefresh,
+  } = args;
+  if (sourceTile.lod !== 1 || sourceTile.emitterRecords.length === 0) return;
+
+  for (const targetTile of loadedVoxels.values()) {
+    if (
+      targetTile.key === sourceTile.key ||
+      targetTile.lod !== 1 ||
+      loadingVoxels.has(targetTile.key) ||
+      isVoxelTileStale(targetTile.key) ||
+      targetTile.haloEmitterSourceKeys.includes(sourceTile.key)
+    ) {
+      continue;
+    }
+
+    const haloEmitters = collectLoadedNeighborHaloEmitters({
+      lod: targetTile.lod,
+      regionX: targetTile.regionX,
+      regionY: targetTile.regionY,
+      key: targetTile.key,
+      loadedVoxels,
+    });
+    if (!haloEmitters.sourceKeys.includes(sourceTile.key)) continue;
+
+    const version = markVoxelTileStale(targetTile.key);
+    requestDirectVoxelRefresh(
+      targetTile.lod,
+      targetTile.regionX,
+      targetTile.regionY,
+      version,
+    );
+  }
 }
 
 export function buildQueuedVoxelMeshes(args: {
@@ -538,6 +598,7 @@ export function buildQueuedVoxelMeshes(args: {
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
   disposeVoxelTileResources: (tile: LoadedVoxelTile) => void;
+  onVoxelTileLoaded?: (tile: LoadedVoxelTile) => void;
 }): boolean {
   const {
     pendingVoxelMeshQueueRef,
@@ -562,6 +623,7 @@ export function buildQueuedVoxelMeshes(args: {
     debugLabelsDirtyRef,
     biomeLabelsDirtyRef,
     disposeVoxelTileResources,
+    onVoxelTileLoaded,
   } = args;
 
   let builtVoxelTile = false;
@@ -638,6 +700,8 @@ export function buildQueuedVoxelMeshes(args: {
           maxZ: built.maxZ,
           chunkCoverage: item.chunkCoverage,
           chunkTopHeights: item.chunkTopHeights,
+          emitterRecords: item.emitterRecords,
+          haloEmitterSourceKeys: item.haloEmitterSourceKeys,
           borderLines,
         };
         loadedVoxels.set(item.key, nextTile);
@@ -648,6 +712,7 @@ export function buildQueuedVoxelMeshes(args: {
         failedVoxels.delete(item.key);
         debugLabelsDirtyRef.current = true;
         biomeLabelsDirtyRef.current = true;
+        onVoxelTileLoaded?.(nextTile);
         builtVoxelTile = true;
       } else {
         missingVoxels.add(item.key);

@@ -1,5 +1,5 @@
 import type { ChunkStats } from "../../../lib/world-view-debug.js";
-
+import type { BlockLightRuntimeStats } from "./block-light-runtime.js";
 import {
   addMemoryToLod,
   estimateLoadedTerrainTileBytes,
@@ -42,6 +42,7 @@ export function publishChunkStats(args: {
   warmCachedTerrain: Map<string, WarmCachedTerrainTile>;
   warmCachedVoxels: Map<string, WarmCachedVoxelTile>;
   voxelBenchmark: RollingVoxelBenchmarkStats;
+  blockLightStats: BlockLightRuntimeStats;
   lastChunkStatsRef: { current: string };
   onChunkStatsChange: (stats: ChunkStats) => void;
 }): void {
@@ -59,6 +60,7 @@ export function publishChunkStats(args: {
     warmCachedTerrain,
     warmCachedVoxels,
     voxelBenchmark,
+    blockLightStats,
     lastChunkStatsRef,
     onChunkStatsChange,
   } = args;
@@ -172,6 +174,7 @@ export function publishChunkStats(args: {
       voxels: warmCachedVoxels.size,
     },
     voxelBenchmark,
+    blockLight: blockLightStats,
   };
   const statsKey = JSON.stringify(statsPayload);
   if (lastChunkStatsRef.current !== statsKey) {

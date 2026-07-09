@@ -55,11 +55,20 @@ export type ChunkStats = {
     avgRawBufferBytes: number | null;
     avgWorkerOutputBytes: number | null;
   };
+  blockLight: {
+    decodedEmitters: number;
+    activeEmitters: number;
+    budget: number;
+    glowBudget: number;
+    pointLightBudget: number;
+    degraded: boolean;
+  };
 };
 
 export interface MapDebugSettings {
   atmosphereTimeOfDay: number;
   atmosphereQuality: number;
+  blockLightQuality: number;
   frameRateCapFps: number;
   idleFrameRateCapFps: number;
   lodUnloadHysteresis: number;
@@ -105,6 +114,7 @@ const MB = 1024 * 1024;
 export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   atmosphereTimeOfDay: 12,
   atmosphereQuality: 1,
+  blockLightQuality: 1,
   frameRateCapFps: 60,
   idleFrameRateCapFps: 15,
   maxConcurrentTerrainFetches: 4,
@@ -172,6 +182,14 @@ export function createEmptyChunkStats(): ChunkStats {
       avgRawBufferBytes: null,
       avgWorkerOutputBytes: null,
     },
+    blockLight: {
+      decodedEmitters: 0,
+      activeEmitters: 0,
+      budget: 0,
+      glowBudget: 0,
+      pointLightBudget: 0,
+      degraded: false,
+    },
   };
 }
 
@@ -199,6 +217,19 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     max: 2,
     step: 1,
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.atmosphereQuality,
+    formatDisplay: (value) =>
+      value <= 0 ? "Off" : value >= 2 ? "High" : "Balanced",
+  },
+  {
+    key: "blockLightQuality",
+    section: "Atmosphere",
+    label: "Block Lights",
+    description:
+      "Controls decoded Cubyz .emittedLight presentation. 0 disables mesh-local emitted light, glow sprites, and point lights; Balanced keeps subtle colored sprite accents over mesh lighting, while High adds a small point-light sparkle budget.",
+    min: 0,
+    max: 2,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.blockLightQuality,
     formatDisplay: (value) =>
       value <= 0 ? "Off" : value >= 2 ? "High" : "Balanced",
   },

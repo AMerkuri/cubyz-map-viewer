@@ -16,7 +16,7 @@ The viewer SHALL support a client-side atmospheric time-of-day state that contro
 - **THEN** no server route payload, WebSocket event, voxel worker protocol, or Cubyz file parsing behavior is changed
 
 ### Requirement: Cubyz-Stylized Sky Rendering
-The viewer SHALL render a stylized sky treatment that reflects the active atmospheric time of day and preserves the block-readable Cubyz visual style.
+The viewer SHALL render a stylized sky treatment that reflects the active atmospheric time of day and preserves the block-readable Cubyz visual style, including compatibility with available block-emissive lighting in low-light scenes.
 
 #### Scenario: Sky reflects daytime state
 - **WHEN** the active atmosphere state represents daytime
@@ -24,7 +24,11 @@ The viewer SHALL render a stylized sky treatment that reflects the active atmosp
 
 #### Scenario: Sky reflects low-light state
 - **WHEN** the active atmosphere state represents sunrise, sunset, or night
-- **THEN** the sky presentation changes color and brightness without obscuring terrain silhouettes, voxel faces, labels, markers, or controls
+- **THEN** the sky presentation changes color and brightness without obscuring terrain silhouettes, voxel faces, labels, markers, controls, or available block-emissive lighting cues
+
+#### Scenario: Low-light scene contains block emitters
+- **WHEN** the active atmosphere state represents night and loaded voxel regions contain available block-emissive lighting metadata
+- **THEN** the atmosphere preserves the usefulness of local emitter cues without requiring global ambient light to be raised to daytime readability
 
 ### Requirement: Subtle Terrain And Voxel Depth Enhancement
 The viewer SHALL provide a subtle depth enhancement for terrain and voxels that improves shape separation without overpowering existing vertex colors, face shading, transparency, labels, or markers.

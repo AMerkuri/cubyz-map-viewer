@@ -108,15 +108,18 @@ function resolveAtmosphereState(settings: AtmosphereSettings): AtmosphereState {
     Math.max(-0.18, sunHeight),
   ).normalize();
 
-  const skyTopColor = mixColors(0x081021, 0x4fa7df, dayAmount).lerp(
+  // Night endpoints keep a low-intensity ambient/skylight floor so terrain,
+  // vegetation, and voxel silhouettes stay readable against local emitters
+  // instead of crushing toward black; day endpoints are unchanged.
+  const skyTopColor = mixColors(0x0c1530, 0x4fa7df, dayAmount).lerp(
     TEMP_COLOR_ALT.setHex(0x3a1f50),
     duskAmount * 0.42,
   );
-  const skyHorizonColor = mixColors(0x172040, 0xbddfff, dayAmount).lerp(
+  const skyHorizonColor = mixColors(0x1e2b55, 0xbddfff, dayAmount).lerp(
     TEMP_COLOR_ALT.setHex(0xff9b58),
     duskAmount * 0.58,
   );
-  const fogColor = mixColors(0x101526, 0x8fb8d5, dayAmount).lerp(
+  const fogColor = mixColors(0x161d33, 0x8fb8d5, dayAmount).lerp(
     TEMP_COLOR_ALT.setHex(0x4d3152),
     duskAmount * 0.35,
   );
@@ -130,20 +133,20 @@ function resolveAtmosphereState(settings: AtmosphereSettings): AtmosphereState {
     fogColor,
     fogNear: quality >= 2 ? 11_000 : 15_000,
     fogFar: quality >= 2 ? 42_000 : 50_000,
-    ambientColor: mixColors(0x1d243c, 0x4e5566, dayAmount),
+    ambientColor: mixColors(0x27304d, 0x4e5566, dayAmount),
     ambientIntensity: THREE.MathUtils.lerp(0.34, 0.72, dayAmount),
-    hemisphereSkyColor: mixColors(0x253562, 0xd7e7ff, dayAmount).lerp(
+    hemisphereSkyColor: mixColors(0x2c3f6e, 0xd7e7ff, dayAmount).lerp(
       TEMP_COLOR_ALT.setHex(0xffc18a),
       duskAmount * 0.22,
     ),
-    hemisphereGroundColor: mixColors(0x273027, 0x66704f, dayAmount),
+    hemisphereGroundColor: mixColors(0x2c352c, 0x66704f, dayAmount),
     hemisphereIntensity: THREE.MathUtils.lerp(0.3, 0.62, dayAmount),
     sunColor: mixColors(0x9fb6ff, 0xffffff, dayAmount).lerp(
       TEMP_COLOR_ALT.setHex(0xffb06a),
       duskAmount * 0.46,
     ),
     sunIntensity:
-      THREE.MathUtils.lerp(0.35, 1.85, dayAmount) + duskAmount * 0.24,
+      THREE.MathUtils.lerp(0.42, 1.85, dayAmount) + duskAmount * 0.24,
     fillColor: mixColors(0x596580, 0xbec8d8, dayAmount),
     fillIntensity: THREE.MathUtils.lerp(0.1, 0.2, dayAmount),
     depthEnhancementEnabled: quality >= 1,

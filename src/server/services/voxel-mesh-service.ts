@@ -46,6 +46,8 @@ interface VoxelMeshBenchmark {
     | "rawPayloadBytes"
     | "greedyRecordBytes"
     | "modelRecordBytes"
+    | "emitterRecords"
+    | "emitterRecordBytes"
     | "cacheTier"
   >;
   variants: VoxelEncodingBenchmark[];
@@ -102,6 +104,8 @@ interface VoxelRequestMetrics {
   rawPayloadBytes?: number;
   greedyRecordBytes?: number;
   modelRecordBytes?: number;
+  emitterRecords?: number;
+  emitterRecordBytes?: number;
   chunkColumns?: number;
   regionsParsed?: number;
   chunksMeshed?: number;
@@ -139,6 +143,7 @@ export class VoxelMeshService {
   private readonly compressionConfig: VoxelCompressionConfig;
   private readonly blockShapes: BlockShapeTable;
   private readonly blockShapeSignature: string;
+  private readonly blockColorSignature: string;
   private readonly inFlight = new Map<string, InFlightJob>();
   private globalEpoch = 0;
   private nextJobId = 1;
@@ -168,6 +173,7 @@ export class VoxelMeshService {
     this.savePath = savePath;
     this.blockShapes = blockShapes;
     this.blockShapeSignature = blockShapes.signature;
+    this.blockColorSignature = blockColors.signature;
     this.pool = new VoxelWorkerPool(
       savePath,
       blockColors,
@@ -238,6 +244,7 @@ export class VoxelMeshService {
     const sourceSignature = await computeVoxelSourceSignature({
       savePath: this.savePath,
       blockShapeSignature: this.blockShapeSignature,
+      blockColorSignature: this.blockColorSignature,
       lod,
       regionX,
       regionY,
@@ -289,6 +296,8 @@ export class VoxelMeshService {
           rawPayloadBytes: cached.stats?.rawPayloadBytes,
           greedyRecordBytes: cached.stats?.greedyRecordBytes,
           modelRecordBytes: cached.stats?.modelRecordBytes,
+          emitterRecords: cached.stats?.emitterRecords,
+          emitterRecordBytes: cached.stats?.emitterRecordBytes,
           chunkColumns: cached.stats?.chunkColumns,
           minWorldZ: cached.stats?.minWorldZ,
           maxWorldZ: cached.stats?.maxWorldZ,
@@ -340,6 +349,8 @@ export class VoxelMeshService {
       rawPayloadBytes: result.stats?.rawPayloadBytes,
       greedyRecordBytes: result.stats?.greedyRecordBytes,
       modelRecordBytes: result.stats?.modelRecordBytes,
+      emitterRecords: result.stats?.emitterRecords,
+      emitterRecordBytes: result.stats?.emitterRecordBytes,
       chunkColumns: result.stats?.chunkColumns,
       regionsParsed: result.stats?.regionsParsed,
       chunksMeshed: result.stats?.chunksMeshed,
@@ -366,6 +377,7 @@ export class VoxelMeshService {
     const sourceSignature = await computeVoxelSourceSignature({
       savePath: this.savePath,
       blockShapeSignature: this.blockShapeSignature,
+      blockColorSignature: this.blockColorSignature,
       lod,
       regionX,
       regionY,
@@ -491,6 +503,8 @@ export class VoxelMeshService {
             rawPayloadBytes: cached.stats.rawPayloadBytes,
             greedyRecordBytes: cached.stats.greedyRecordBytes,
             modelRecordBytes: cached.stats.modelRecordBytes,
+            emitterRecords: cached.stats.emitterRecords,
+            emitterRecordBytes: cached.stats.emitterRecordBytes,
           }
         : undefined,
       variants,

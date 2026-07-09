@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { VOXEL_EMISSIVE_ATTRIBUTE } from "./block-light-mesh.js";
 import { getLodBorderColor } from "./primitives.js";
 import type { PendingVoxelMeshItem } from "./types.js";
 import { chunkWorldSize, regionWorldSize } from "./utils.js";
@@ -113,6 +114,15 @@ export function buildVoxelQuadrantSubMeshes(
         "color",
         new THREE.BufferAttribute(colorAttributeArray, 3),
       );
+      // Worker-baked mesh-local emitted light. Only opaque quadrants near
+      // emitters carry the attribute; other meshes read the WebGL default
+      // of (0,0,0) through the patched voxel material.
+      if (quadrant.emissiveColors) {
+        geom.setAttribute(
+          VOXEL_EMISSIVE_ATTRIBUTE,
+          new THREE.BufferAttribute(quadrant.emissiveColors, 3),
+        );
+      }
       geom.setIndex(new THREE.BufferAttribute(quadrant.indices, 1));
       geom.computeBoundingBox();
       geom.computeBoundingSphere();

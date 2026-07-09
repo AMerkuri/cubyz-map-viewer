@@ -23,6 +23,7 @@ export type GraphicsPreset = {
       | "idleFrameRateCapFps"
       | "atmosphereTimeOfDay"
       | "atmosphereQuality"
+      | "blockLightQuality"
       | "maxConcurrentTerrainFetches"
       | "terrainMeshBuildBudgetMs"
       | "maxTerrainMeshesPerFrame"
@@ -57,6 +58,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     debugSettings: {
       atmosphereTimeOfDay: 12,
       atmosphereQuality: 2,
+      blockLightQuality: 2,
       frameRateCapFps: 0,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 6,
@@ -89,6 +91,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     debugSettings: {
       atmosphereTimeOfDay: 12,
       atmosphereQuality: 2,
+      blockLightQuality: 2,
       frameRateCapFps: 120,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 5,
@@ -121,6 +124,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     debugSettings: {
       atmosphereTimeOfDay: 12,
       atmosphereQuality: 1,
+      blockLightQuality: 1,
       frameRateCapFps: 60,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 4,
@@ -154,6 +158,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     debugSettings: {
       atmosphereTimeOfDay: 12,
       atmosphereQuality: 1,
+      blockLightQuality: 1,
       frameRateCapFps: 40,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 3,
@@ -186,6 +191,7 @@ export const GRAPHICS_PRESETS: readonly GraphicsPreset[] = [
     debugSettings: {
       atmosphereTimeOfDay: 12,
       atmosphereQuality: 0,
+      blockLightQuality: 0,
       frameRateCapFps: 40,
       idleFrameRateCapFps: 15,
       maxConcurrentTerrainFetches: 2,

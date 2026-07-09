@@ -70,6 +70,8 @@ export class ColorMapService {
   private blockTopTextures = new Map<string, string[]>();
   /** block string ID -> fallback tint derived from absorbedLight */
   private blockAbsorptionColors = new Map<string, RGB>();
+  /** block string ID -> emitted block-light RGB */
+  private blockEmittedLightColors = new Map<string, RGB>();
   /** blocks that should be treated like air */
   private airLikeBlocks = new Set<string>();
   /** block string ID -> visible transparent render metadata */
@@ -88,6 +90,8 @@ export class ColorMapService {
   private paletteTransparentBackfaces: boolean[] = [];
   /** block palette index -> same-block transparent connection group */
   private paletteTransparentGroups: number[] = [];
+  /** block palette index -> emitted block-light RGB */
+  private paletteEmittedLightColors: RGB[] = [];
   /** biome palette index -> RGB */
   private biomePaletteColors: RGB[] = [];
   /** biome palette index -> ocean flag */
@@ -126,6 +130,7 @@ export class ColorMapService {
     this.blockTextures.clear();
     this.blockTopTextures.clear();
     this.blockAbsorptionColors.clear();
+    this.blockEmittedLightColors.clear();
     this.airLikeBlocks.clear();
     this.transparentBlocks.clear();
     this.reportedFallbackBlocks.clear();
@@ -135,6 +140,7 @@ export class ColorMapService {
     this.paletteRenderKinds = [];
     this.paletteTransparentBackfaces = [];
     this.paletteTransparentGroups = [];
+    this.paletteEmittedLightColors = [];
     this.biomePaletteColors = [];
     this.biomePaletteIsOcean = [];
   }
@@ -254,6 +260,10 @@ export class ColorMapService {
             typeof parsed.absorbedLight === "number"
               ? this.absorptionToColor(parsed.absorbedLight)
               : null;
+          const emittedLightColor =
+            typeof parsed.emittedLight === "number"
+              ? this.lightToColor(parsed.emittedLight)
+              : null;
           const isAirLike = this.isInherentAirLikeBlock(blockId);
           const isTransparent = parsed.transparent === true;
           const hasBackFace = parsed.hasBackFace === true;
@@ -279,6 +289,10 @@ export class ColorMapService {
 
           if (absorptionColor) {
             this.blockAbsorptionColors.set(blockId, absorptionColor);
+          }
+
+          if (emittedLightColor) {
+            this.blockEmittedLightColors.set(blockId, emittedLightColor);
           }
         } catch {
           // Skip unparseable block definitions
@@ -418,6 +432,7 @@ export class ColorMapService {
     this.paletteRenderKinds = new Array(palette.entries.length);
     this.paletteTransparentBackfaces = new Array(palette.entries.length);
     this.paletteTransparentGroups = new Array(palette.entries.length);
+    this.paletteEmittedLightColors = new Array(palette.entries.length);
     const transparentGroupIds = new Map<string, number>();
     for (let i = 0; i < palette.entries.length; i++) {
       const blockId = palette.entries[i];
@@ -433,6 +448,8 @@ export class ColorMapService {
       this.paletteTransparentGroups[i] = transparent
         ? getOrCreateTransparentGroup(transparentGroupIds, blockId)
         : 0;
+      this.paletteEmittedLightColors[i] =
+        this.blockEmittedLightColors.get(blockId) ?? AIR_LIKE_BLOCK_COLOR;
       if (isAirLike) {
         this.paletteColors[i] = AIR_LIKE_BLOCK_COLOR;
         continue;
@@ -499,6 +516,10 @@ export class ColorMapService {
     return this.paletteTransparentGroups[paletteIndex] ?? 0;
   }
 
+  getBlockPaletteEmittedLight(paletteIndex: number): RGB {
+    return this.paletteEmittedLightColors[paletteIndex] ?? AIR_LIKE_BLOCK_COLOR;
+  }
+
   /** Get color for a biome palette index */
   getBiomeColor(biomeIndex: number): RGB {
     return this.biomePaletteColors[biomeIndex] ?? { r: 100, g: 140, b: 80 };
@@ -555,6 +576,7 @@ export class ColorMapService {
     this.blockTextures.delete(blockId);
     this.blockTopTextures.delete(blockId);
     this.blockAbsorptionColors.delete(blockId);
+    this.blockEmittedLightColors.delete(blockId);
     this.airLikeBlocks.delete(blockId);
     this.transparentBlocks.delete(blockId);
   }
@@ -680,6 +702,14 @@ export class ColorMapService {
       g: 255 - ((absorbedLight >> 8) & 0xff),
       b: 255 - (absorbedLight & 0xff),
     };
+  }
+
+  private lightToColor(light: number): RGB | null {
+    const r = (light >> 16) & 0xff;
+    const g = (light >> 8) & 0xff;
+    const b = light & 0xff;
+    if (r === 0 && g === 0 && b === 0) return null;
+    return { r, g, b };
   }
 
   private async resolveBlockColor(

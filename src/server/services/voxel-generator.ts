@@ -26,6 +26,7 @@ import {
   VOXEL_POSITION_FIXED_SCALE,
 } from "./block-shape-table.js";
 import {
+  type BinaryEmitterRecord,
   type BinaryQuad,
   encodeBinaryQuads,
   GREEDY_RECORD_BYTES,
@@ -174,6 +175,7 @@ export async function generateVoxelMesh(
     .update(
       `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}|${blockShapes.signature}`,
     )
+    .update(`|${blockColors.signature}`)
     .digest("hex");
   const cached = await readPersistentMesh(persistentCachePath, cacheKey);
   if (cached) {
@@ -212,7 +214,9 @@ export async function generateVoxelMesh(
   const faces = new Map<string, FaceEntry>();
   const transparentFaceCells = new Set<string>();
   const modelBlocks = new Set<string>();
+  const emitterBlocks = new Set<string>();
   const modelQuads: BinaryQuad[] = [];
+  const emitterRecords: BinaryEmitterRecord[] = [];
   let droppedModelQuads = 0;
   const visibleChunkColumns = new Set<number>();
   let regionsParsed = 0;
@@ -297,6 +301,34 @@ export async function generateVoxelMesh(
       : paletteIndex;
   }
 
+  function getEmittedLight(
+    paletteIndex: number,
+  ): { r: number; g: number; b: number } | null {
+    const off = paletteIndex * 3;
+    if (off + 2 >= blockColors.emittedLightRgb.length) return null;
+    const r = blockColors.emittedLightRgb[off] ?? 0;
+    const g = blockColors.emittedLightRgb[off + 1] ?? 0;
+    const b = blockColors.emittedLightRgb[off + 2] ?? 0;
+    return r === 0 && g === 0 && b === 0 ? null : { r, g, b };
+  }
+
+  function emitBlockEmitter(
+    blockValue: number,
+    x: number,
+    y: number,
+    z: number,
+  ): void {
+    if (lod !== 1) return;
+    const paletteIndex = getPaletteIndex(blockValue);
+    if (isAirType(paletteIndex)) return;
+    const light = getEmittedLight(paletteIndex);
+    if (!light) return;
+    const key = `${x}/${y}/${z}`;
+    if (emitterBlocks.has(key)) return;
+    emitterBlocks.add(key);
+    emitterRecords.push({ x, y, z, r: light.r, g: light.g, b: light.b });
+  }
+
   function addVisibleFace(
     x: number,
     y: number,
@@ -370,6 +402,10 @@ export async function generateVoxelMesh(
       }
     }
   }
+  const rebasedEmitterRecords = emitterRecords.map((record) => ({
+    ...record,
+    z: record.z - baseCellZ,
+  }));
 
   let chunkCoverage = 0;
   for (const idx of visibleChunkColumns) {
@@ -384,6 +420,7 @@ export async function generateVoxelMesh(
     lod,
     blockColors,
     chunkCoverage,
+    lod === 1 ? rebasedEmitterRecords : [],
   );
   const mesh = encodedMesh.buffer;
   const view = new DataView(mesh);
@@ -552,6 +589,7 @@ export async function generateVoxelMesh(
       const gz = state.chunkZ * CHUNK_SIZE + lz;
       const currentBlockValue = chunk.blocks[idx] ?? 0;
       const currentPaletteIndex = getPaletteIndex(currentBlockValue);
+      emitBlockEmitter(currentBlockValue, gx, gy, gz);
       emitModelBlock(currentBlockValue, gx, gy, gz);
 
       for (const step of FACE_STEPS) {
@@ -569,6 +607,12 @@ export async function generateVoxelMesh(
         ) {
           const neighborIdx = localIndex(nlx, nly, nlz);
           const neighborBlockValue = chunk.blocks[neighborIdx] ?? 0;
+          emitBlockEmitter(
+            neighborBlockValue,
+            gx + step.dx,
+            gy + step.dy,
+            gz + step.dz,
+          );
           if (isTraversableBlockValue(neighborBlockValue)) {
             if (
               shouldEmitTransparentBoundary(
@@ -691,6 +735,12 @@ export async function generateVoxelMesh(
         }
         const wrappedIdx = localIndex(wrappedLx, wrappedLy, wrappedLz);
         const neighborBlockValue = neighborChunk.blocks[wrappedIdx] ?? 0;
+        emitBlockEmitter(
+          neighborBlockValue,
+          gx + step.dx,
+          gy + step.dy,
+          gz + step.dz,
+        );
         if (isTraversableBlockValue(neighborBlockValue)) {
           if (
             shouldEmitTransparentBoundary(

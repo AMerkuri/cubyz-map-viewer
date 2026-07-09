@@ -1,6 +1,7 @@
 import {
   DAYLIGHT_MAIN_SUN_POSITION,
   VOXEL_DEPTH_CUE,
+  VOXEL_EMITTED_LIGHT,
   VOXEL_FACE_SHADING,
 } from "../lib/daylight.js";
 import type { WorkerIn, WorkerOut } from "../lib/types.js";
@@ -8,11 +9,13 @@ import type { WorkerIn, WorkerOut } from "../lib/types.js";
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 const VOXEL_POSITION_FIXED_SCALE = 4096;
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
-const VOXEL_BINARY_MAGIC = 0x334d5856;
+const VOXEL_BINARY_MAGIC = 0x344d5856;
+const PRE_EMITTER_VOXEL_BINARY_MAGIC = 0x334d5856;
 const LEGACY_VOXEL_BINARY_MAGIC = 0x324d5856;
 const POSITION_KIND_INTEGER = 1;
 const GREEDY_RECORD_BYTES = 12;
 const MODEL_RECORD_BYTES = 48;
+const EMITTER_RECORD_BYTES = 14;
 
 type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
 
@@ -29,6 +32,22 @@ interface QuadrantCounts {
   vertices: number;
   indices: number;
   triangles: number;
+}
+
+/**
+ * Spatial hash of same-tile plus loaded-neighbor emitter records used to bake
+ * bounded mesh-local emitted-light contribution into per-vertex emissive colors.
+ * Cell size is the emitted-light radius so a 3x3x3 neighborhood covers every candidate.
+ */
+interface EmitterLightGrid {
+  cellSize: number;
+  cells: Map<string, number[]>;
+  x: Float64Array;
+  y: Float64Array;
+  z: Float64Array;
+  r: Float32Array;
+  g: Float32Array;
+  b: Float32Array;
 }
 
 /**
@@ -61,14 +80,23 @@ interface QuadrantCounts {
  */
 
 self.onmessage = (e: MessageEvent<WorkerIn>) => {
-  const { buffer, lod, regionX, regionY, version, benchmark } = e.data;
+  const {
+    buffer,
+    lod,
+    regionX,
+    regionY,
+    haloEmitterRecords = [],
+    haloEmitterSourceKeys = [],
+    version,
+    benchmark,
+  } = e.data;
   const workerGlobal = globalThis as unknown as {
     postMessage(message: WorkerOut, transfer?: Transferable[]): void;
   };
   const startedAt = performance.now();
 
   try {
-    const result = buildMeshArrays(buffer);
+    const result = buildMeshArrays(buffer, haloEmitterRecords);
     const transferables: Transferable[] = [result.chunkTopHeights.buffer];
     for (const quadrant of result.quadrantMeshes) {
       transferables.push(
@@ -79,6 +107,9 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
         quadrant.trianglePaletteIndices.buffer,
         quadrant.indices.buffer,
       );
+      if (quadrant.emissiveColors) {
+        transferables.push(quadrant.emissiveColors.buffer);
+      }
     }
     for (const quadrant of result.transparentQuadrantMeshes) {
       transferables.push(
@@ -96,6 +127,7 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
       regionY,
       version,
       ...result,
+      haloEmitterSourceKeys,
       benchmark: benchmark
         ? {
             fetchMs: benchmark.fetchMs,
@@ -147,6 +179,7 @@ function getWorkerOutputBytes(
     bytes += quadrant.positions.byteLength;
     bytes += quadrant.normals.byteLength;
     bytes += quadrant.baseColors.byteLength;
+    bytes += quadrant.emissiveColors?.byteLength ?? 0;
     bytes += quadrant.faceAo.byteLength;
     bytes += quadrant.trianglePaletteIndices.byteLength;
     bytes += quadrant.indices.byteLength;
@@ -154,12 +187,16 @@ function getWorkerOutputBytes(
   return bytes;
 }
 
-function buildMeshArrays(buf: ArrayBuffer): {
+function buildMeshArrays(
+  buf: ArrayBuffer,
+  haloEmitterRecords: WorkerIn["haloEmitterRecords"] = [],
+): {
   quadrantMeshes: {
     quadrantIndex: number;
     positions: Float32Array;
     normals: Float32Array;
     baseColors: Float32Array;
+    emissiveColors: Float32Array | null;
     faceAo: Uint8Array;
     trianglePaletteIndices: Uint32Array;
     indices: Uint32Array;
@@ -169,6 +206,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
     positions: Float32Array;
     normals: Float32Array;
     baseColors: Float32Array;
+    emissiveColors: Float32Array | null;
     faceAo: Uint8Array;
     trianglePaletteIndices: Uint32Array;
     indices: Uint32Array;
@@ -178,12 +216,24 @@ function buildMeshArrays(buf: ArrayBuffer): {
   voxelSize: number;
   minZ: number;
   maxZ: number;
+  emitterRecords: {
+    x: number;
+    y: number;
+    z: number;
+    r: number;
+    g: number;
+    b: number;
+  }[];
 } {
   if (buf.byteLength < 20) throw new Error("buffer too small for header");
 
   const view = new DataView(buf);
-  if (buf.byteLength >= 32 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) {
-    return buildOptimizedMeshArrays(view, buf.byteLength);
+  if (
+    (buf.byteLength >= 36 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) ||
+    (buf.byteLength >= 32 &&
+      view.getUint32(0, true) === PRE_EMITTER_VOXEL_BINARY_MAGIC)
+  ) {
+    return buildOptimizedMeshArrays(view, buf.byteLength, haloEmitterRecords);
   }
   const hasVersionedHeader =
     buf.byteLength >= 24 &&
@@ -582,6 +632,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
         positions: new Float32Array(localPos),
         normals: new Float32Array(localNorm),
         baseColors: new Float32Array(localBaseCol),
+        emissiveColors: null,
         faceAo: new Uint8Array(localFaceAo),
         trianglePaletteIndices: localTrianglePaletteIndices,
         indices: new Uint32Array(localIdx),
@@ -602,12 +653,14 @@ function buildMeshArrays(buf: ArrayBuffer): {
     voxelSize,
     minZ,
     maxZ,
+    emitterRecords: [],
   };
 }
 
 function buildOptimizedMeshArrays(
   view: DataView,
   byteLength: number,
+  haloEmitterRecords: WorkerIn["haloEmitterRecords"] = [],
 ): ReturnType<typeof buildMeshArrays> {
   const worldX = view.getInt32(4, true);
   const worldY = view.getInt32(8, true);
@@ -616,6 +669,8 @@ function buildOptimizedMeshArrays(
   const voxelSize = view.getUint32(20, true) || 1;
   const greedyRecordCount = view.getUint32(24, true);
   const modelRecordCount = view.getUint32(28, true);
+  const hasEmitterHeader = view.getUint32(0, true) === VOXEL_BINARY_MAGIC;
+  const emitterRecordCount = hasEmitterHeader ? view.getUint32(32, true) : 0;
   if (greedyRecordCount + modelRecordCount !== quadCount) {
     throw new Error("voxel payload record counts do not match quad count");
   }
@@ -625,7 +680,7 @@ function buildOptimizedMeshArrays(
   const directionPadded = (quadCount + 3) & ~3;
   const palettePadded = (quadCount * 2 + 3) & ~3;
   const renderKindPadded = (quadCount + 3) & ~3;
-  const colorOffset = 32;
+  const colorOffset = hasEmitterHeader ? 36 : 32;
   const aoOffset = colorOffset + colorPadded;
   const directionOffset = aoOffset + aoPadded;
   const paletteOffset = directionOffset + directionPadded;
@@ -633,8 +688,10 @@ function buildOptimizedMeshArrays(
   const greedyRecordOffset = renderKindOffset + renderKindPadded;
   const modelRecordOffset =
     greedyRecordOffset + greedyRecordCount * GREEDY_RECORD_BYTES;
-  const expectedSize =
+  const emitterRecordOffset =
     modelRecordOffset + modelRecordCount * MODEL_RECORD_BYTES;
+  const expectedSize =
+    emitterRecordOffset + emitterRecordCount * EMITTER_RECORD_BYTES;
   if (byteLength < expectedSize) {
     throw new Error("buffer truncated before optimized voxel records");
   }
@@ -643,6 +700,15 @@ function buildOptimizedMeshArrays(
     byteLength >= expectedSize + 4
       ? view.getUint32(expectedSize, true)
       : 0xffff;
+  const emitterRecords = readEmitterRecords(
+    view,
+    emitterRecordOffset,
+    emitterRecordCount,
+    worldX,
+    worldY,
+    worldZ,
+    voxelSize,
+  );
   const regionWorldSize = 128 * voxelSize;
   const chunkWorldSize = 32 * voxelSize;
   const chunkTopHeights = new Float32Array(16);
@@ -699,8 +765,21 @@ function buildOptimizedMeshArrays(
   if (!Number.isFinite(minZ)) minZ = 0;
   if (!Number.isFinite(maxZ)) maxZ = 0;
 
-  const opaqueWriters = createQuadrantWriters(opaqueCounts);
-  const transparentWriters = createQuadrantWriters(transparentCounts);
+  // Mesh-local emitted light stays a bounded client-side approximation:
+  // transparent quads keep their existing presentation so glass/water
+  // readability is unaffected, and opaque quads accumulate deterministic
+  // per-vertex contribution from same-region payload records plus filtered
+  // loaded-neighbor LOD 1 halo records.
+  const meshEmitterRecords =
+    haloEmitterRecords.length > 0
+      ? [...emitterRecords, ...haloEmitterRecords]
+      : emitterRecords;
+  const emitterGrid =
+    meshEmitterRecords.length > 0
+      ? buildEmitterLightGrid(meshEmitterRecords)
+      : null;
+  const opaqueWriters = createQuadrantWriters(opaqueCounts, emitterGrid);
+  const transparentWriters = createQuadrantWriters(transparentCounts, null);
   const depthCueRange = Math.max(maxZ - minZ, voxelSize);
   forEachOptimizedQuad(
     view,
@@ -738,7 +817,150 @@ function buildOptimizedMeshArrays(
     voxelSize,
     minZ,
     maxZ,
+    emitterRecords,
   };
+}
+
+function readEmitterRecords(
+  view: DataView,
+  offset: number,
+  count: number,
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  voxelSize: number,
+): ReturnType<typeof buildMeshArrays>["emitterRecords"] {
+  const records: ReturnType<typeof buildMeshArrays>["emitterRecords"] = [];
+  let off = offset;
+  for (let i = 0; i < count; i++) {
+    const x = view.getUint16(off, true);
+    off += 2;
+    const y = view.getUint16(off, true);
+    off += 2;
+    const z = view.getUint16(off, true);
+    off += 2;
+    const r = view.getUint8(off++);
+    const g = view.getUint8(off++);
+    const b = view.getUint8(off++);
+    off += 5;
+    records.push({
+      x: worldX + (x + 0.5) * voxelSize,
+      y: worldY + (y + 0.5) * voxelSize,
+      z: worldZ + (z + 0.5) * voxelSize,
+      r,
+      g,
+      b,
+    });
+  }
+  return records;
+}
+
+const EMITTER_LIGHT_SCRATCH = new Float32Array(3);
+
+function buildEmitterLightGrid(
+  emitterRecords: ReturnType<typeof buildMeshArrays>["emitterRecords"],
+): EmitterLightGrid {
+  const count = emitterRecords.length;
+  const grid: EmitterLightGrid = {
+    cellSize: VOXEL_EMITTED_LIGHT.radius,
+    cells: new Map(),
+    x: new Float64Array(count),
+    y: new Float64Array(count),
+    z: new Float64Array(count),
+    r: new Float32Array(count),
+    g: new Float32Array(count),
+    b: new Float32Array(count),
+  };
+  for (let i = 0; i < count; i++) {
+    const record = emitterRecords[i];
+    if (!record) continue;
+    grid.x[i] = record.x;
+    grid.y[i] = record.y;
+    grid.z[i] = record.z;
+    grid.r[i] = record.r / 255;
+    grid.g[i] = record.g / 255;
+    grid.b[i] = record.b / 255;
+    const key = emitterCellKey(
+      Math.floor(record.x / grid.cellSize),
+      Math.floor(record.y / grid.cellSize),
+      Math.floor(record.z / grid.cellSize),
+    );
+    const cell = grid.cells.get(key);
+    if (cell) {
+      cell.push(i);
+    } else {
+      grid.cells.set(key, [i]);
+    }
+  }
+  return grid;
+}
+
+function emitterCellKey(ix: number, iy: number, iz: number): string {
+  return `${ix},${iy},${iz}`;
+}
+
+/**
+ * Accumulates bounded emitted-light contribution at a vertex into `out`
+ * (r/g/b light factors). Iterates the 3x3x3 grid neighborhood in
+ * deterministic payload order, applies a smoothstep falloff with a wrapped
+ * lambert term, and clamps per channel so any number of emitters combines
+ * without depending on runtime light budgets.
+ */
+function accumulateEmitterLight(
+  grid: EmitterLightGrid,
+  x: number,
+  y: number,
+  z: number,
+  normal: [number, number, number],
+  out: Float32Array,
+): void {
+  out[0] = 0;
+  out[1] = 0;
+  out[2] = 0;
+  const radius = VOXEL_EMITTED_LIGHT.radius;
+  const radiusSq = radius * radius;
+  const wrap = VOXEL_EMITTED_LIGHT.directionalWrap;
+  const cx = Math.floor(x / grid.cellSize);
+  const cy = Math.floor(y / grid.cellSize);
+  const cz = Math.floor(z / grid.cellSize);
+  let candidates = 0;
+  for (let ix = cx - 1; ix <= cx + 1; ix++) {
+    for (let iy = cy - 1; iy <= cy + 1; iy++) {
+      for (let iz = cz - 1; iz <= cz + 1; iz++) {
+        const cell = grid.cells.get(emitterCellKey(ix, iy, iz));
+        if (!cell) continue;
+        for (const emitterIndex of cell) {
+          if (candidates >= VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex) break;
+          candidates++;
+          const dx = grid.x[emitterIndex] - x;
+          const dy = grid.y[emitterIndex] - y;
+          const dz = grid.z[emitterIndex] - z;
+          const distSq = dx * dx + dy * dy + dz * dz;
+          if (distSq >= radiusSq) continue;
+          const dist = Math.sqrt(distSq);
+          const t = 1 - dist / radius;
+          const falloff = t * t * (3 - 2 * t);
+          const lambert =
+            dist > 0
+              ? Math.max(
+                  0,
+                  (dx * normal[0] + dy * normal[1] + dz * normal[2]) / dist,
+                )
+              : 1;
+          const weight =
+            falloff *
+            (wrap + (1 - wrap) * lambert) *
+            VOXEL_EMITTED_LIGHT.intensity;
+          out[0] += grid.r[emitterIndex] * weight;
+          out[1] += grid.g[emitterIndex] * weight;
+          out[2] += grid.b[emitterIndex] * weight;
+        }
+      }
+    }
+  }
+  out[0] = Math.min(out[0], VOXEL_EMITTED_LIGHT.maxContribution);
+  out[1] = Math.min(out[1], VOXEL_EMITTED_LIGHT.maxContribution);
+  out[2] = Math.min(out[2], VOXEL_EMITTED_LIGHT.maxContribution);
 }
 
 function forEachOptimizedQuad(
@@ -900,12 +1122,18 @@ function createQuadrantCounts(): QuadrantCounts[] {
   }));
 }
 
-function createQuadrantWriters(counts: QuadrantCounts[]) {
+function createQuadrantWriters(
+  counts: QuadrantCounts[],
+  emitterGrid: EmitterLightGrid | null,
+) {
   return counts.map((count, quadrantIndex) => ({
     quadrantIndex,
     positions: new Float32Array(count.vertices * 3),
     normals: new Float32Array(count.vertices * 3),
     baseColors: new Float32Array(count.vertices * 3),
+    emissiveColors: emitterGrid ? new Float32Array(count.vertices * 3) : null,
+    emitterGrid,
+    hasEmissive: false,
     faceAo: new Uint8Array(count.vertices),
     trianglePaletteIndices: new Uint32Array(count.triangles),
     indices: new Uint32Array(count.indices),
@@ -923,6 +1151,7 @@ function toQuadrantMesh(
     positions: writer.positions,
     normals: writer.normals,
     baseColors: writer.baseColors,
+    emissiveColors: writer.hasEmissive ? writer.emissiveColors : null,
     faceAo: writer.faceAo,
     trianglePaletteIndices: writer.trianglePaletteIndices,
     indices: writer.indices,
@@ -952,6 +1181,34 @@ function writeQuadToQuadrant(
     writer.baseColors[dst] = clamp01(quad.color[0] * tint.r * depthCue);
     writer.baseColors[dst + 1] = clamp01(quad.color[1] * tint.g * depthCue);
     writer.baseColors[dst + 2] = clamp01(quad.color[2] * tint.b * depthCue);
+    if (writer.emissiveColors && writer.emitterGrid) {
+      accumulateEmitterLight(
+        writer.emitterGrid,
+        quad.positions[src] ?? 0,
+        quad.positions[src + 1] ?? 0,
+        vertexZ,
+        normal,
+        EMITTER_LIGHT_SCRATCH,
+      );
+      if (
+        EMITTER_LIGHT_SCRATCH[0] > 0 ||
+        EMITTER_LIGHT_SCRATCH[1] > 0 ||
+        EMITTER_LIGHT_SCRATCH[2] > 0
+      ) {
+        // Multiply by the baked base color so emitted light brightens the
+        // block's own hue instead of washing surfaces toward white.
+        writer.emissiveColors[dst] = clamp01(
+          writer.baseColors[dst] * EMITTER_LIGHT_SCRATCH[0],
+        );
+        writer.emissiveColors[dst + 1] = clamp01(
+          writer.baseColors[dst + 1] * EMITTER_LIGHT_SCRATCH[1],
+        );
+        writer.emissiveColors[dst + 2] = clamp01(
+          writer.baseColors[dst + 2] * EMITTER_LIGHT_SCRATCH[2],
+        );
+        writer.hasEmissive = true;
+      }
+    }
     writer.faceAo[baseVertex + v] = Math.min(
       3,
       (quad.packedAo >> (v * 2)) & 0b11,
