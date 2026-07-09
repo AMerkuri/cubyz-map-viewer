@@ -26,6 +26,40 @@ export interface RollingVoxelBenchmarkStats {
   avgDecodedBodyBytes: number | null;
   avgRawBufferBytes: number | null;
   avgWorkerOutputBytes: number | null;
+  avgEmissiveBytes: number | null;
+  avgServerRunMs: number | null;
+  avgServerHaloMs: number | null;
+  cacheHitSamples: number;
+  cacheMissSamples: number;
+  cacheUnknownSamples: number;
+  haloEmittersEnabled: boolean;
+  emissiveAttributesEnabled: boolean;
+}
+
+export function createEmptyVoxelBenchmarkStats(
+  haloEmittersEnabled: boolean,
+  emissiveAttributesEnabled: boolean,
+): RollingVoxelBenchmarkStats {
+  return {
+    samples: 0,
+    contentEncoding: null,
+    avgFetchMs: 0,
+    avgDecodeMs: 0,
+    avgTotalMs: 0,
+    avgTransferBytes: null,
+    avgEncodedBodyBytes: null,
+    avgDecodedBodyBytes: null,
+    avgRawBufferBytes: null,
+    avgWorkerOutputBytes: null,
+    avgEmissiveBytes: null,
+    avgServerRunMs: null,
+    avgServerHaloMs: null,
+    cacheHitSamples: 0,
+    cacheMissSamples: 0,
+    cacheUnknownSamples: 0,
+    haloEmittersEnabled,
+    emissiveAttributesEnabled,
+  };
 }
 
 export function publishChunkStats(args: {

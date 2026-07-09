@@ -15,6 +15,12 @@ export interface VoxelJob {
   regionY: number;
   globalEpoch: number;
   keyEpoch: number;
+  /**
+   * Debug-only voxel-lighting diagnostic. When false, LOD 1 payload
+   * generation omits neighboring-region halo emitter collection and bypasses
+   * the persistent voxel cache. Defaults to true (normal behavior).
+   */
+  includeHaloEmitters?: boolean;
 }
 
 export interface VoxelGenerationStats {
@@ -31,12 +37,27 @@ export interface VoxelGenerationStats {
   emitterRecords: number;
   ownEmitterRecords?: number;
   haloEmitterRecords?: number;
+  /** Time spent collecting neighboring-region halo emitter records, in ms. */
+  haloMs?: number;
   emitterRecordBytes: number;
   chunkColumns: number;
   regionsParsed: number;
   chunksMeshed: number;
   visitedAirCells: number;
   facesBeforeMerge: number;
+  /**
+   * Aggregate external (neighboring-column) region cache behavior for a single
+   * generation job. `externalRegionParses` counts distinct `.region` files
+   * parsed for external chunk access, `externalRegionCacheHits` counts reuse of
+   * an already-loading/loaded external region, `externalRegionMisses` counts
+   * external region files that did not exist, and `externalRegionParseErrors`
+   * counts external region parse failures. Disk-cache-tier results report 0
+   * because no worker generation runs.
+   */
+  externalRegionParses?: number;
+  externalRegionCacheHits?: number;
+  externalRegionMisses?: number;
+  externalRegionParseErrors?: number;
   minWorldZ: number;
   maxWorldZ: number;
 }

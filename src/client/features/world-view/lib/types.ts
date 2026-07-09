@@ -12,6 +12,8 @@ import type { PlayerData } from "../hooks/usePlayers.js";
 import type { WatchEvent, WatchEventType } from "../hooks/useWebSocket.js";
 import type { useWorldData } from "../hooks/useWorldData.js";
 
+export type VoxelBenchmarkCacheOutcome = "hit" | "miss" | "unknown";
+
 export interface TerrainMeshData {
   meshWidth: number;
   meshHeight: number;
@@ -118,6 +120,7 @@ export interface WorkerIn {
   haloEmitterRecords?: VoxelEmitterRecord[];
   haloEmitterSourceKeys?: string[];
   version?: number;
+  bakeEmissiveAttributes?: boolean;
   benchmark?: {
     fetchCompletedAt: number;
     fetchMs: number;
@@ -126,6 +129,9 @@ export interface WorkerIn {
     decodedBodyBytes: number | null;
     rawBufferBytes: number;
     contentEncoding: string | null;
+    serverRunMs: number | null;
+    serverHaloMs: number | null;
+    cacheOutcome?: VoxelBenchmarkCacheOutcome;
   };
 }
 
@@ -152,7 +158,11 @@ export interface WorkerOut {
     decodedBodyBytes: number | null;
     rawBufferBytes: number;
     workerOutputBytes: number;
+    emissiveBytes: number;
     contentEncoding: string | null;
+    serverRunMs: number | null;
+    serverHaloMs: number | null;
+    cacheOutcome?: VoxelBenchmarkCacheOutcome;
   };
   error?: string;
 }

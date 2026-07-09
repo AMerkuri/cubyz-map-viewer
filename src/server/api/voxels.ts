@@ -147,7 +147,13 @@ export function createVoxelsRouter(
     const { lod, regionX, regionY } = parseRegionParams(req.params);
     assertAlignedRegion(lod, regionX, regionY);
 
-    const key = `${lod}/${regionX}/${regionY}`;
+    // Debug-only voxel-lighting diagnostic: `halo=0` omits neighboring-region
+    // halo emitter records. Diagnostic payloads use a distinct cache key so
+    // they are never confused with normal cached payloads.
+    const includeHaloEmitters = req.query.halo !== "0";
+    const key = includeHaloEmitters
+      ? `${lod}/${regionX}/${regionY}`
+      : `${lod}/${regionX}/${regionY}#nohalo`;
     const contentEncoding = pickVoxelEncoding(
       req.get("accept-encoding"),
       preferredEncoding,
@@ -185,14 +191,61 @@ export function createVoxelsRouter(
       regionX,
       regionY,
       contentEncoding,
+      includeHaloEmitters,
     );
     res.set("X-Voxel-Source", response.metrics.source);
+    res.set("X-Voxel-Cache", response.metrics.cacheOutcome);
     res.set("X-Voxel-Queue-Ms", response.metrics.queueMs.toFixed(1));
     res.set("X-Voxel-Run-Ms", response.metrics.runMs.toFixed(1));
     res.set("X-Voxel-Total-Ms", response.metrics.totalMs.toFixed(1));
     res.set("X-Voxel-Queue-Depth", String(response.metrics.queueDepth));
     res.set("X-Voxel-Running", String(response.metrics.runningJobs));
     res.set("X-Voxel-In-Flight", String(response.metrics.inFlightJobs));
+    if (response.metrics.haloMs !== undefined) {
+      res.set("X-Voxel-Halo-Ms", response.metrics.haloMs.toFixed(1));
+    }
+    if (response.metrics.cachedHaloMs !== undefined) {
+      res.set(
+        "X-Voxel-Cached-Halo-Ms",
+        response.metrics.cachedHaloMs.toFixed(1),
+      );
+    }
+    if (response.metrics.ownEmitterRecords !== undefined) {
+      res.set(
+        "X-Voxel-Own-Emitters",
+        String(response.metrics.ownEmitterRecords),
+      );
+    }
+    if (response.metrics.haloEmitterRecords !== undefined) {
+      res.set(
+        "X-Voxel-Halo-Emitters",
+        String(response.metrics.haloEmitterRecords),
+      );
+    }
+    if (response.metrics.externalRegionParses !== undefined) {
+      res.set(
+        "X-Voxel-Ext-Region-Parses",
+        String(response.metrics.externalRegionParses),
+      );
+    }
+    if (response.metrics.externalRegionCacheHits !== undefined) {
+      res.set(
+        "X-Voxel-Ext-Region-Cache-Hits",
+        String(response.metrics.externalRegionCacheHits),
+      );
+    }
+    if (response.metrics.externalRegionMisses !== undefined) {
+      res.set(
+        "X-Voxel-Ext-Region-Misses",
+        String(response.metrics.externalRegionMisses),
+      );
+    }
+    if (response.metrics.externalRegionParseErrors !== undefined) {
+      res.set(
+        "X-Voxel-Ext-Region-Parse-Errors",
+        String(response.metrics.externalRegionParseErrors),
+      );
+    }
 
     logger.http("voxel request completed", {
       requestId: req.requestId,
@@ -200,9 +253,15 @@ export function createVoxelsRouter(
       lod,
       regionX,
       regionY,
+      includeHaloEmitters,
       source: response.metrics.source,
+      cacheOutcome: response.metrics.cacheOutcome,
       queueMs: response.metrics.queueMs,
       runMs: response.metrics.runMs,
+      haloMs: response.metrics.haloMs,
+      cachedHaloMs: response.metrics.cachedHaloMs,
+      ownEmitterRecords: response.metrics.ownEmitterRecords,
+      haloEmitterRecords: response.metrics.haloEmitterRecords,
       totalMs: response.metrics.totalMs,
       queueDepth: response.metrics.queueDepth,
       runningJobs: response.metrics.runningJobs,
@@ -223,6 +282,10 @@ export function createVoxelsRouter(
       chunksMeshed: response.metrics.chunksMeshed,
       visitedAirCells: response.metrics.visitedAirCells,
       facesBeforeMerge: response.metrics.facesBeforeMerge,
+      externalRegionParses: response.metrics.externalRegionParses,
+      externalRegionCacheHits: response.metrics.externalRegionCacheHits,
+      externalRegionMisses: response.metrics.externalRegionMisses,
+      externalRegionParseErrors: response.metrics.externalRegionParseErrors,
       minWorldZ: response.metrics.minWorldZ,
       maxWorldZ: response.metrics.maxWorldZ,
       status: response.status === "empty" ? 204 : 200,

@@ -2,6 +2,7 @@ import type {
   LoadedVoxelTile,
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
+  VoxelBenchmarkCacheOutcome,
   VoxelRefreshState,
   WorkerIn,
 } from "./types.js";
@@ -151,6 +152,18 @@ export function finishVoxelFetch(
   drainVoxelFetchQueue();
 }
 
+function readNullableHeaderMs(res: Response, header: string): number | null {
+  const raw = res.headers.get(header);
+  if (raw === null) return null;
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function readCacheOutcome(res: Response): VoxelBenchmarkCacheOutcome {
+  const raw = res.headers.get("x-voxel-cache");
+  return raw === "hit" || raw === "miss" ? raw : "unknown";
+}
+
 export async function fetchVoxelRegion(args: {
   request: PendingVoxelFetchRequest;
   controller: AbortController;
@@ -162,6 +175,8 @@ export async function fetchVoxelRegion(args: {
   failedVoxelsRef: { current: Map<string, number> };
   isVoxelTileStale: (key: string) => boolean;
   onFinally: (key: string) => void;
+  includeHaloEmitters?: boolean;
+  bakeEmissiveAttributes?: boolean;
 }): Promise<void> {
   const {
     request,
@@ -174,14 +189,22 @@ export async function fetchVoxelRegion(args: {
     failedVoxelsRef,
     isVoxelTileStale,
     onFinally,
+    includeHaloEmitters = true,
+    bakeEmissiveAttributes = true,
   } = args;
   const { key, lod, regionX, regionY, version } = request;
 
   try {
     const requestStartedAt = performance.now();
-    const res = await fetch(`/api/voxels/${lod}/${regionX}/${regionY}`, {
-      signal: controller.signal,
-    });
+    // Debug-only voxel-lighting diagnostic: `halo=0` asks the server to omit
+    // neighboring-region halo emitter records so halo cost can be isolated.
+    const diagnosticQuery = includeHaloEmitters ? "" : "?halo=0";
+    const res = await fetch(
+      `/api/voxels/${lod}/${regionX}/${regionY}${diagnosticQuery}`,
+      {
+        signal: controller.signal,
+      },
+    );
     if (
       !activeVoxelRequestKeysRef.current.has(key) &&
       !(loadedVoxelsRef.current.has(key) && isVoxelTileStale(key))
@@ -230,6 +253,7 @@ export async function fetchVoxelRegion(args: {
         regionX,
         regionY,
         version,
+        bakeEmissiveAttributes,
         benchmark: {
           fetchCompletedAt: performance.now(),
           fetchMs,
@@ -238,6 +262,9 @@ export async function fetchVoxelRegion(args: {
           decodedBodyBytes: resourceTiming?.decodedBodySize ?? null,
           rawBufferBytes: buffer.byteLength,
           contentEncoding: res.headers.get("content-encoding"),
+          serverRunMs: readNullableHeaderMs(res, "x-voxel-run-ms"),
+          serverHaloMs: readNullableHeaderMs(res, "x-voxel-halo-ms"),
+          cacheOutcome: readCacheOutcome(res),
         },
       } satisfies WorkerIn,
       [buffer],

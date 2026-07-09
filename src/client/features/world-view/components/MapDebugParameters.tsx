@@ -29,6 +29,7 @@ const SECTION_ORDER = [
   "LOD",
   "Focus",
   "Memory",
+  "Diagnostics",
 ] as const;
 const RESET_GLYPH_SIZE = 12;
 

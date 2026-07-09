@@ -50,6 +50,10 @@ interface VoxelMeshBenchmark {
     | "ownEmitterRecords"
     | "haloEmitterRecords"
     | "emitterRecordBytes"
+    | "externalRegionParses"
+    | "externalRegionCacheHits"
+    | "externalRegionMisses"
+    | "externalRegionParseErrors"
     | "cacheTier"
   >;
   variants: VoxelEncodingBenchmark[];
@@ -89,6 +93,7 @@ interface VoxelCompressionConfig {
 
 interface VoxelRequestMetrics {
   source: "cache" | "worker";
+  cacheOutcome: "hit" | "miss" | "unknown";
   queueMs: number;
   runMs: number;
   totalMs: number;
@@ -109,12 +114,18 @@ interface VoxelRequestMetrics {
   emitterRecords?: number;
   ownEmitterRecords?: number;
   haloEmitterRecords?: number;
+  haloMs?: number;
+  cachedHaloMs?: number;
   emitterRecordBytes?: number;
   chunkColumns?: number;
   regionsParsed?: number;
   chunksMeshed?: number;
   visitedAirCells?: number;
   facesBeforeMerge?: number;
+  externalRegionParses?: number;
+  externalRegionCacheHits?: number;
+  externalRegionMisses?: number;
+  externalRegionParseErrors?: number;
   minWorldZ?: number;
   maxWorldZ?: number;
 }
@@ -266,6 +277,7 @@ export class VoxelMeshService {
     regionX: number,
     regionY: number,
     contentEncoding: VoxelContentEncoding,
+    includeHaloEmitters = true,
   ): Promise<VoxelMeshResponse> {
     this.requests++;
     const startedAt = performance.now();
@@ -283,6 +295,7 @@ export class VoxelMeshService {
           contentEncoding === "identity" ? undefined : contentEncoding,
         metrics: {
           source: "cache",
+          cacheOutcome: "hit",
           queueMs: 0,
           runMs: 0,
           totalMs,
@@ -303,8 +316,13 @@ export class VoxelMeshService {
           emitterRecords: cached.stats?.emitterRecords,
           ownEmitterRecords: cached.stats?.ownEmitterRecords,
           haloEmitterRecords: cached.stats?.haloEmitterRecords,
+          cachedHaloMs: cached.stats?.haloMs,
           emitterRecordBytes: cached.stats?.emitterRecordBytes,
           chunkColumns: cached.stats?.chunkColumns,
+          externalRegionParses: cached.stats?.externalRegionParses,
+          externalRegionCacheHits: cached.stats?.externalRegionCacheHits,
+          externalRegionMisses: cached.stats?.externalRegionMisses,
+          externalRegionParseErrors: cached.stats?.externalRegionParseErrors,
           minWorldZ: cached.stats?.minWorldZ,
           maxWorldZ: cached.stats?.maxWorldZ,
         },
@@ -326,6 +344,7 @@ export class VoxelMeshService {
             globalEpoch,
             keyEpoch,
             versionedKey,
+            includeHaloEmitters,
           );
 
     const { result, queueMs, runMs } = await promise;
@@ -338,6 +357,11 @@ export class VoxelMeshService {
     this.recordMetric(this.totalMetric, totalMs);
     const metrics: VoxelRequestMetrics = {
       source: "worker",
+      cacheOutcome: result.stats
+        ? result.stats.cacheTier === "worker"
+          ? "miss"
+          : "hit"
+        : "unknown",
       queueMs: safeQueueMs,
       runMs: safeRunMs,
       totalMs,
@@ -358,12 +382,20 @@ export class VoxelMeshService {
       emitterRecords: result.stats?.emitterRecords,
       ownEmitterRecords: result.stats?.ownEmitterRecords,
       haloEmitterRecords: result.stats?.haloEmitterRecords,
+      haloMs:
+        result.stats?.cacheTier === "worker" ? result.stats?.haloMs : undefined,
+      cachedHaloMs:
+        result.stats?.cacheTier === "disk" ? result.stats.haloMs : undefined,
       emitterRecordBytes: result.stats?.emitterRecordBytes,
       chunkColumns: result.stats?.chunkColumns,
       regionsParsed: result.stats?.regionsParsed,
       chunksMeshed: result.stats?.chunksMeshed,
       visitedAirCells: result.stats?.visitedAirCells,
       facesBeforeMerge: result.stats?.facesBeforeMerge,
+      externalRegionParses: result.stats?.externalRegionParses,
+      externalRegionCacheHits: result.stats?.externalRegionCacheHits,
+      externalRegionMisses: result.stats?.externalRegionMisses,
+      externalRegionParseErrors: result.stats?.externalRegionParseErrors,
       minWorldZ: result.stats?.minWorldZ,
       maxWorldZ: result.stats?.maxWorldZ,
     };
@@ -515,6 +547,10 @@ export class VoxelMeshService {
             ownEmitterRecords: cached.stats.ownEmitterRecords,
             haloEmitterRecords: cached.stats.haloEmitterRecords,
             emitterRecordBytes: cached.stats.emitterRecordBytes,
+            externalRegionParses: cached.stats.externalRegionParses,
+            externalRegionCacheHits: cached.stats.externalRegionCacheHits,
+            externalRegionMisses: cached.stats.externalRegionMisses,
+            externalRegionParseErrors: cached.stats.externalRegionParseErrors,
           }
         : undefined,
       variants,
@@ -529,6 +565,7 @@ export class VoxelMeshService {
     globalEpoch: number,
     keyEpoch: number,
     versionedKey: string,
+    includeHaloEmitters = true,
   ): Promise<InstrumentedPoolResult> {
     const promise = this.pool
       .run({
@@ -539,6 +576,7 @@ export class VoxelMeshService {
         regionY,
         globalEpoch,
         keyEpoch,
+        includeHaloEmitters,
       })
       .finally(() => {
         const inFlight = this.inFlight.get(key);

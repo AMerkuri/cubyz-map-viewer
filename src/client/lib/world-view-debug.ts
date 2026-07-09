@@ -54,6 +54,14 @@ export type ChunkStats = {
     avgDecodedBodyBytes: number | null;
     avgRawBufferBytes: number | null;
     avgWorkerOutputBytes: number | null;
+    avgEmissiveBytes: number | null;
+    avgServerRunMs: number | null;
+    avgServerHaloMs: number | null;
+    cacheHitSamples: number;
+    cacheMissSamples: number;
+    cacheUnknownSamples: number;
+    haloEmittersEnabled: boolean;
+    emissiveAttributesEnabled: boolean;
   };
   blockLight: {
     decodedEmitters: number;
@@ -92,11 +100,19 @@ export interface MapDebugSettings {
   maxVoxelMeshesPerFrame: number;
   warmTerrainCacheMaxBytes: number;
   warmVoxelCacheLimitBytes: number;
+  voxelHaloEmittersEnabled: number;
+  voxelEmissiveAttributesEnabled: number;
 }
 
 export interface MapDebugParameterDefinition {
   key: keyof MapDebugSettings;
-  section: "Atmosphere" | "Loading" | "LOD" | "Focus" | "Memory";
+  section:
+    | "Atmosphere"
+    | "Loading"
+    | "LOD"
+    | "Focus"
+    | "Memory"
+    | "Diagnostics";
   label: string;
   description: string;
   min: number;
@@ -138,6 +154,8 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   voxelFocusStickyMs: 1500,
   voxelFocusSmoothAlpha: 0.6,
   voxelLodHysteresisRatio: 0.12,
+  voxelHaloEmittersEnabled: 1,
+  voxelEmissiveAttributesEnabled: 1,
 };
 
 export function createEmptyChunkStats(): ChunkStats {
@@ -181,6 +199,14 @@ export function createEmptyChunkStats(): ChunkStats {
       avgDecodedBodyBytes: null,
       avgRawBufferBytes: null,
       avgWorkerOutputBytes: null,
+      avgEmissiveBytes: null,
+      avgServerRunMs: null,
+      avgServerHaloMs: null,
+      cacheHitSamples: 0,
+      cacheMissSamples: 0,
+      cacheUnknownSamples: 0,
+      haloEmittersEnabled: true,
+      emissiveAttributesEnabled: true,
     },
     blockLight: {
       decodedEmitters: 0,
@@ -460,5 +486,29 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     toDisplay: (value) => value / MB,
     fromDisplay: (value) => Math.round(value * MB),
     formatDisplay: (value) => `${Math.round(value)} MB`,
+  },
+  {
+    key: "voxelHaloEmittersEnabled",
+    section: "Diagnostics",
+    label: "Diag: Halo Emitters",
+    description:
+      "Temporary voxel-lighting diagnostic. 0 requests LOD 1 voxel payloads without neighboring-region halo emitter records so server halo cost can be isolated. Diagnostic payloads are cached separately and never reused as normal payloads. Default 1 keeps normal behavior.",
+    min: 0,
+    max: 1,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelHaloEmittersEnabled,
+    formatDisplay: (value) => (value <= 0 ? "Off" : "On"),
+  },
+  {
+    key: "voxelEmissiveAttributesEnabled",
+    section: "Diagnostics",
+    label: "Diag: Emissive Attributes",
+    description:
+      "Temporary voxel-lighting diagnostic. 0 makes the client worker skip mesh-local emissive attribute baking, transfer, and geometry upload so client bake cost can be isolated. Emitter records are still decoded for runtime stats. Default 1 keeps normal behavior.",
+    min: 0,
+    max: 1,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelEmissiveAttributesEnabled,
+    formatDisplay: (value) => (value <= 0 ? "Off" : "On"),
   },
 ];

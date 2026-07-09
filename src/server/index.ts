@@ -458,7 +458,7 @@ async function main() {
       res.set("Access-Control-Allow-Headers", "Content-Type,X-Request-Id");
       res.set(
         "Access-Control-Expose-Headers",
-        "X-Request-Id,X-Voxel-Source,X-Voxel-Queue-Ms,X-Voxel-Run-Ms,X-Voxel-Total-Ms,X-Voxel-Queue-Depth,X-Voxel-Running,X-Voxel-In-Flight",
+        "X-Request-Id,X-Voxel-Source,X-Voxel-Cache,X-Voxel-Queue-Ms,X-Voxel-Run-Ms,X-Voxel-Total-Ms,X-Voxel-Queue-Depth,X-Voxel-Running,X-Voxel-In-Flight,X-Voxel-Halo-Ms,X-Voxel-Cached-Halo-Ms,X-Voxel-Own-Emitters,X-Voxel-Halo-Emitters",
       );
     }
     res.set("X-Content-Type-Options", "nosniff");

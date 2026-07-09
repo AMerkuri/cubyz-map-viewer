@@ -55,7 +55,10 @@ import {
 } from "../lib/primitives.js";
 import { SignLayerManager } from "../lib/sign-layer.js";
 import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
-import { publishChunkStats } from "../lib/stats.js";
+import {
+  createEmptyVoxelBenchmarkStats,
+  publishChunkStats,
+} from "../lib/stats.js";
 import {
   disposeTerrainTileResources as disposeTerrainTileResourcesManaged,
   ensureTerrainBorderAssets as ensureTerrainBorderAssetsManaged,
@@ -332,18 +335,24 @@ export function World3DView({
   const activeTerrainRequestGenerationRef = useRef(0);
   const biomeRefreshTokenRef = useRef(0);
   const lastChunkStatsRef = useRef("");
-  const voxelBenchmarkRef = useRef<RollingVoxelBenchmarkStats>({
-    samples: 0,
-    contentEncoding: null,
-    avgFetchMs: 0,
-    avgDecodeMs: 0,
-    avgTotalMs: 0,
-    avgTransferBytes: null,
-    avgEncodedBodyBytes: null,
-    avgDecodedBodyBytes: null,
-    avgRawBufferBytes: null,
-    avgWorkerOutputBytes: null,
-  });
+  const voxelBenchmarkRef = useRef<RollingVoxelBenchmarkStats>(
+    createEmptyVoxelBenchmarkStats(
+      debugSettings.voxelHaloEmittersEnabled > 0,
+      debugSettings.voxelEmissiveAttributesEnabled > 0,
+    ),
+  );
+  // Debug-only voxel-lighting diagnostics: reset benchmark averages whenever
+  // the active diagnostic matrix state changes so samples from different
+  // matrix cells are never averaged together.
+  const diagnosticsMatrixKey = `${debugSettings.voxelHaloEmittersEnabled > 0 ? 1 : 0}:${debugSettings.voxelEmissiveAttributesEnabled > 0 ? 1 : 0}`;
+  const lastDiagnosticsMatrixKeyRef = useRef(diagnosticsMatrixKey);
+  if (lastDiagnosticsMatrixKeyRef.current !== diagnosticsMatrixKey) {
+    lastDiagnosticsMatrixKeyRef.current = diagnosticsMatrixKey;
+    voxelBenchmarkRef.current = createEmptyVoxelBenchmarkStats(
+      debugSettings.voxelHaloEmittersEnabled > 0,
+      debugSettings.voxelEmissiveAttributesEnabled > 0,
+    );
+  }
   const blockLightStatsRef = useRef<BlockLightRuntimeStats>({
     decodedEmitters: 0,
     activeEmitters: 0,
@@ -870,6 +879,10 @@ export function World3DView({
       failedVoxelsRef,
       isVoxelTileStale,
       onFinally: finishVoxelFetch,
+      includeHaloEmitters:
+        debugSettingsRef.current.voxelHaloEmittersEnabled > 0,
+      bakeEmissiveAttributes:
+        debugSettingsRef.current.voxelEmissiveAttributesEnabled > 0,
     });
   }
 
@@ -1207,6 +1220,7 @@ export function World3DView({
       onBenchmarkSample: (sample) => {
         const current = voxelBenchmarkRef.current;
         const nextSamples = current.samples + 1;
+        const cacheOutcome = sample.cacheOutcome ?? "unknown";
         voxelBenchmarkRef.current = {
           samples: nextSamples,
           contentEncoding: sample.contentEncoding,
@@ -1249,6 +1263,32 @@ export function World3DView({
             sample.workerOutputBytes,
             nextSamples,
           ),
+          avgEmissiveBytes: averageNullableMetric(
+            current.avgEmissiveBytes,
+            current.samples,
+            sample.emissiveBytes,
+            nextSamples,
+          ),
+          avgServerRunMs: averageNullableMetric(
+            current.avgServerRunMs,
+            current.samples,
+            sample.serverRunMs,
+            nextSamples,
+          ),
+          avgServerHaloMs: averageNullableMetric(
+            current.avgServerHaloMs,
+            current.samples,
+            sample.serverHaloMs,
+            nextSamples,
+          ),
+          cacheHitSamples:
+            current.cacheHitSamples + (cacheOutcome === "hit" ? 1 : 0),
+          cacheMissSamples:
+            current.cacheMissSamples + (cacheOutcome === "miss" ? 1 : 0),
+          cacheUnknownSamples:
+            current.cacheUnknownSamples + (cacheOutcome === "unknown" ? 1 : 0),
+          haloEmittersEnabled: current.haloEmittersEnabled,
+          emissiveAttributesEnabled: current.emissiveAttributesEnabled,
         };
       },
     });

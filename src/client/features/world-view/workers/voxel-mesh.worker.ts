@@ -96,14 +96,22 @@ interface EmitterLightGrid {
  */
 
 self.onmessage = (e: MessageEvent<WorkerIn>) => {
-  const { buffer, lod, regionX, regionY, version, benchmark } = e.data;
+  const {
+    buffer,
+    lod,
+    regionX,
+    regionY,
+    version,
+    bakeEmissiveAttributes,
+    benchmark,
+  } = e.data;
   const workerGlobal = globalThis as unknown as {
     postMessage(message: WorkerOut, transfer?: Transferable[]): void;
   };
   const startedAt = performance.now();
 
   try {
-    const result = buildMeshArrays(buffer);
+    const result = buildMeshArrays(buffer, bakeEmissiveAttributes !== false);
     const transferables: Transferable[] = [result.chunkTopHeights.buffer];
     for (const quadrant of result.quadrantMeshes) {
       transferables.push(
@@ -145,7 +153,11 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             decodedBodyBytes: benchmark.decodedBodyBytes,
             rawBufferBytes: benchmark.rawBufferBytes,
             workerOutputBytes: getWorkerOutputBytes(result),
+            emissiveBytes: getEmissiveOutputBytes(result),
             contentEncoding: benchmark.contentEncoding,
+            serverRunMs: benchmark.serverRunMs,
+            serverHaloMs: benchmark.serverHaloMs,
+            cacheOutcome: benchmark.cacheOutcome,
           }
         : undefined,
     };
@@ -166,7 +178,11 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             decodedBodyBytes: benchmark.decodedBodyBytes,
             rawBufferBytes: benchmark.rawBufferBytes,
             workerOutputBytes: 0,
+            emissiveBytes: 0,
             contentEncoding: benchmark.contentEncoding,
+            serverRunMs: benchmark.serverRunMs,
+            serverHaloMs: benchmark.serverHaloMs,
+            cacheOutcome: benchmark.cacheOutcome,
           }
         : undefined,
       error: err instanceof Error ? err.message : String(err),
@@ -194,7 +210,23 @@ function getWorkerOutputBytes(
   return bytes;
 }
 
-function buildMeshArrays(buf: ArrayBuffer): {
+function getEmissiveOutputBytes(
+  result: ReturnType<typeof buildMeshArrays>,
+): number {
+  let bytes = 0;
+  for (const quadrant of [
+    ...result.quadrantMeshes,
+    ...result.transparentQuadrantMeshes,
+  ]) {
+    bytes += quadrant.emissiveColors?.byteLength ?? 0;
+  }
+  return bytes;
+}
+
+function buildMeshArrays(
+  buf: ArrayBuffer,
+  bakeEmissiveAttributes: boolean,
+): {
   quadrantMeshes: {
     quadrantIndex: number;
     positions: Float32Array;
@@ -241,7 +273,11 @@ function buildMeshArrays(buf: ArrayBuffer): {
     (buf.byteLength >= 32 &&
       view.getUint32(0, true) === PRE_EMITTER_VOXEL_BINARY_MAGIC)
   ) {
-    return buildOptimizedMeshArrays(view, buf.byteLength);
+    return buildOptimizedMeshArrays(
+      view,
+      buf.byteLength,
+      bakeEmissiveAttributes,
+    );
   }
   const hasVersionedHeader =
     buf.byteLength >= 24 &&
@@ -668,6 +704,7 @@ function buildMeshArrays(buf: ArrayBuffer): {
 function buildOptimizedMeshArrays(
   view: DataView,
   byteLength: number,
+  bakeEmissiveAttributes: boolean,
 ): ReturnType<typeof buildMeshArrays> {
   const worldX = view.getInt32(4, true);
   const worldY = view.getInt32(8, true);
@@ -783,9 +820,13 @@ function buildOptimizedMeshArrays(
   // transparent quads keep their existing presentation so glass/water
   // readability is unaffected, and opaque quads accumulate deterministic
   // per-vertex contribution from payload-owned own-region and halo records.
+  // Debug-only voxel-lighting diagnostic: when emissive attributes are
+  // disabled, skip grid construction so no mesh-local emissive attribute is
+  // allocated, baked, transferred, or uploaded. Emitter records are still
+  // decoded above for lifecycle/runtime stats.
   const meshEmitterRecords = emitterRecords;
   const emitterGrid =
-    meshEmitterRecords.length > 0
+    bakeEmissiveAttributes && meshEmitterRecords.length > 0
       ? buildEmitterLightGrid(meshEmitterRecords)
       : null;
   const opaqueWriters = createQuadrantWriters(opaqueCounts, emitterGrid);

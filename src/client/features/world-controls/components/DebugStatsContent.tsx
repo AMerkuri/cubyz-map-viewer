@@ -101,7 +101,18 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       </div>
 
       <StatsSectionTitle>Voxel Benchmark</StatsSectionTitle>
+      <div>
+        Diag matrix: halo{" "}
+        {chunkStats.voxelBenchmark.haloEmittersEnabled ? "on" : "off"} /
+        emissive{" "}
+        {chunkStats.voxelBenchmark.emissiveAttributesEnabled ? "on" : "off"}
+      </div>
       <div>Samples: {chunkStats.voxelBenchmark.samples}</div>
+      <div>
+        Cache mix: hit {chunkStats.voxelBenchmark.cacheHitSamples} / miss{" "}
+        {chunkStats.voxelBenchmark.cacheMissSamples} / unknown{" "}
+        {chunkStats.voxelBenchmark.cacheUnknownSamples}
+      </div>
       <div>Encoding: {chunkStats.voxelBenchmark.contentEncoding ?? "n/a"}</div>
       <div>Avg fetch: {chunkStats.voxelBenchmark.avgFetchMs.toFixed(1)} ms</div>
       <div>
@@ -127,6 +138,23 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       <div>
         Avg worker output:{" "}
         {formatNullableBytes(chunkStats.voxelBenchmark.avgWorkerOutputBytes)}
+      </div>
+      <div>
+        Avg emissive bytes:{" "}
+        {formatNullableBytes(chunkStats.voxelBenchmark.avgEmissiveBytes)}
+      </div>
+      <div>
+        Avg server run:{" "}
+        {chunkStats.voxelBenchmark.avgServerRunMs === null
+          ? "n/a"
+          : `${chunkStats.voxelBenchmark.avgServerRunMs.toFixed(1)} ms`}
+      </div>
+      <div>
+        Avg server halo:{" "}
+        {chunkStats.voxelBenchmark.avgServerHaloMs === null
+          ? "n/a"
+          : `${chunkStats.voxelBenchmark.avgServerHaloMs.toFixed(1)} ms`}
+        {" (current generation only; cached halo timing is excluded)"}
       </div>
     </div>
   );

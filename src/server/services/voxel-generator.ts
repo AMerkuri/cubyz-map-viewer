@@ -138,7 +138,13 @@ export async function generateVoxelMesh(
   lod: number,
   regionX: number,
   regionY: number,
+  options?: { includeHaloEmitters?: boolean },
 ): Promise<{ buffer: ArrayBuffer | null; stats?: VoxelGenerationStats }> {
+  // Debug-only voxel-lighting diagnostic. When halo emitters are disabled the
+  // persistent voxel cache is bypassed entirely so diagnostic payloads never
+  // contaminate normal cache entries and normal cached payloads never hide
+  // the halo cost being measured.
+  const includeHaloEmitters = options?.includeHaloEmitters !== false;
   const columnWorldSpan = COLUMN_VOXELS * lod;
   if (
     !VALID_LODS.includes(lod) ||
@@ -189,7 +195,9 @@ export async function generateVoxelMesh(
     )
     .update(`|${blockColors.signature}`)
     .digest("hex");
-  const cached = await readPersistentMesh(persistentCachePath, cacheKey);
+  const cached = includeHaloEmitters
+    ? await readPersistentMesh(persistentCachePath, cacheKey)
+    : null;
   if (cached) {
     const view = new DataView(cached);
     const header = readBinaryHeader(view, cached.byteLength);
@@ -206,6 +214,10 @@ export async function generateVoxelMesh(
         chunksMeshed: 0,
         visitedAirCells: 0,
         facesBeforeMerge: 0,
+        externalRegionParses: 0,
+        externalRegionCacheHits: 0,
+        externalRegionMisses: 0,
+        externalRegionParseErrors: 0,
         minWorldZ: header.worldZ,
         maxWorldZ: extractMaxWorldZ(view, cached.byteLength),
       },
@@ -223,6 +235,12 @@ export async function generateVoxelMesh(
   const chunkStates = new Map<string, ChunkState>();
   const chunkQueue: ChunkState[] = [];
   const regionLoaders = new Map<number, Promise<RegionData | null>>();
+  // Generation-local cache of parsed external (neighboring-column) region
+  // files, keyed by normalized region X/Y and region world Z. Halo scanning,
+  // open-face checks, ambient occlusion, and boundary face generation all
+  // route external chunk access through this cache so the same `.region` file
+  // is parsed at most once per generation job instead of once per chunk read.
+  const externalRegionLoaders = new Map<string, Promise<RegionData | null>>();
   const occupancyCache = new Map<string, Promise<boolean>>();
   const faces = new Map<string, FaceEntry>();
   const transparentFaceCells = new Set<string>();
@@ -235,6 +253,13 @@ export async function generateVoxelMesh(
   let regionsParsed = 0;
   let chunksMeshed = 0;
   let visitedAirCells = 0;
+  // Aggregate external region cache behavior for benchmark verification. These
+  // count parse attempts, cache reuse, missing files, and parse errors so the
+  // halo optimization can be confirmed to reduce repeated region parsing.
+  let externalRegionParses = 0;
+  let externalRegionCacheHits = 0;
+  let externalRegionMisses = 0;
+  let externalRegionParseErrors = 0;
 
   function isAir(chunk: ChunkData | null, idx: number): boolean {
     if (!chunk) return true;
@@ -426,10 +451,16 @@ export async function generateVoxelMesh(
       })),
     )
   ).filter((record) => record.openFaces !== 0);
-  const haloEmitterRecords =
-    lod === 1
-      ? await collectHaloEmitterRecords(baseCellZ, Math.ceil(maxFaceZ))
-      : [];
+  let haloMs: number | undefined;
+  let haloEmitterRecords: BinaryEmitterRecord[] = [];
+  if (lod === 1 && includeHaloEmitters) {
+    const haloStartedAt = performance.now();
+    haloEmitterRecords = await collectHaloEmitterRecords(
+      baseCellZ,
+      Math.ceil(maxFaceZ),
+    );
+    haloMs = performance.now() - haloStartedAt;
+  }
   const allEmitterRecords = capEmitterRecords([
     ...rebasedEmitterRecords,
     ...haloEmitterRecords,
@@ -459,8 +490,10 @@ export async function generateVoxelMesh(
     return { buffer: null };
   }
 
-  await mkdir(persistentCacheDir, { recursive: true });
-  await writePersistentMesh(persistentCachePath, cacheKey, mesh);
+  if (includeHaloEmitters) {
+    await mkdir(persistentCacheDir, { recursive: true });
+    await writePersistentMesh(persistentCachePath, cacheKey, mesh);
+  }
   return {
     buffer: mesh,
     stats: {
@@ -471,6 +504,7 @@ export async function generateVoxelMesh(
         0,
         encodedMesh.metrics.emitterRecords - ownEmitterRecordCount,
       ),
+      haloMs,
       droppedModelQuads,
       modelQuadBudget: LOD1_MODEL_QUAD_BUDGET,
       chunkColumns: visibleChunkColumns.size,
@@ -478,6 +512,10 @@ export async function generateVoxelMesh(
       chunksMeshed,
       visitedAirCells,
       facesBeforeMerge: faces.size,
+      externalRegionParses,
+      externalRegionCacheHits,
+      externalRegionMisses,
+      externalRegionParseErrors,
       minWorldZ: baseWorldZ,
       maxWorldZ: extractMaxWorldZ(view, mesh.byteLength),
     },
@@ -1051,6 +1089,56 @@ export async function generateVoxelMesh(
     }
   }
 
+  function loadExternalRegion(
+    normalizedRegionX: number,
+    normalizedRegionY: number,
+    regionWorldZ: number,
+  ): Promise<RegionData | null> {
+    const cacheKey = `${normalizedRegionX}/${normalizedRegionY}/${regionWorldZ}`;
+    const existing = externalRegionLoaders.get(cacheKey);
+    if (existing) {
+      externalRegionCacheHits++;
+      return existing;
+    }
+    const loader = (async () => {
+      const path = join(
+        savePath,
+        "chunks",
+        String(lod),
+        String(normalizedRegionX),
+        String(normalizedRegionY),
+        `${regionWorldZ}.region`,
+      );
+      if (!existsSync(path)) {
+        externalRegionMisses++;
+        return null;
+      }
+      try {
+        externalRegionParses++;
+        return await parseRegionFile(
+          path,
+          normalizedRegionX,
+          normalizedRegionY,
+          regionWorldZ,
+          lod,
+        );
+      } catch (error) {
+        externalRegionParseErrors++;
+        logger.warn("Failed to parse external sparse region", {
+          path,
+          lod,
+          normalizedRegionX,
+          normalizedRegionY,
+          regionWorldZ,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    })();
+    externalRegionLoaders.set(cacheKey, loader);
+    return loader;
+  }
+
   async function loadExternalChunk(
     chunkX: number,
     chunkY: number,
@@ -1071,40 +1159,18 @@ export async function generateVoxelMesh(
     );
     const regionChunkZ = Math.floor(chunkZ / REGION_SIZE) * REGION_SIZE;
     const regionWorldZ = regionChunkZ * CHUNK_SIZE * lod;
-    const path = join(
-      savePath,
-      "chunks",
-      String(lod),
-      String(normalizedRegionX),
-      String(normalizedRegionY),
-      `${regionWorldZ}.region`,
+    const region = await loadExternalRegion(
+      normalizedRegionX,
+      normalizedRegionY,
+      regionWorldZ,
     );
-    if (!existsSync(path)) return null;
-    try {
-      const region = await parseRegionFile(
-        path,
-        normalizedRegionX,
-        normalizedRegionY,
-        regionWorldZ,
-        lod,
-      );
-      const localChunkZ = chunkZ - regionChunkZ;
-      const chunkIndex =
-        localChunkX * REGION_SIZE * REGION_SIZE +
-        localChunkY * REGION_SIZE +
-        localChunkZ;
-      return region.chunks[chunkIndex] ?? null;
-    } catch (error) {
-      logger.warn("Failed to parse external sparse region", {
-        path,
-        lod,
-        normalizedRegionX,
-        normalizedRegionY,
-        regionWorldZ,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
+    if (!region) return null;
+    const localChunkZ = chunkZ - regionChunkZ;
+    const chunkIndex =
+      localChunkX * REGION_SIZE * REGION_SIZE +
+      localChunkY * REGION_SIZE +
+      localChunkZ;
+    return region.chunks[chunkIndex] ?? null;
   }
 
   async function collectHaloEmitterRecords(
