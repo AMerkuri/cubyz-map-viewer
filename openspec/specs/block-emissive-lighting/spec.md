@@ -19,19 +19,51 @@ The server SHALL read numeric `.emittedLight` values from layered Cubyz block de
 - **WHEN** a block texture has a matching `*_emission.png` but the block definition has no `.emittedLight`
 - **THEN** the server MUST NOT classify that block as a light emitter from the texture filename alone
 
-### Requirement: Voxel payload includes compact LOD 1 emitter records
-The `/api/voxels` binary payload SHALL include compact block-light emitter records for LOD 1 regions, derived from block values whose palette index has non-zero emitted-light metadata.
+### Requirement: Server maintains bounded LOD 1 emitter summaries for coarse aggregation
+The server SHALL derive coarser LOD emitter representatives from a deterministic hierarchy of bounded summaries whose leaf data comes from LOD 1 emitted-light sources. Summary nodes SHALL retain enough combined color power, weighted position, and spatial extent to construct coarse representatives without reparsing every covered LOD 1 region for every voxel request.
+
+#### Scenario: Coarse region contains LOD 1 emitters
+- **WHEN** the server generates a voxel payload at LOD greater than 1 for an area containing LOD 1 emitted-light sources
+- **THEN** it obtains deterministic bounded source summaries covering that area and derives coarse representatives from those summaries
+
+#### Scenario: Coarse request covers many LOD 1 regions
+- **WHEN** a coarse voxel region spans more LOD 1 source regions than may be parsed within one generation budget
+- **THEN** the server reuses cached child summaries or persisted summary nodes instead of independently reparsing every raw LOD 1 region on each request
+
+#### Scenario: LOD 1 emitter source changes
+- **WHEN** a world update changes an LOD 1 emitted-light source or its traversable exposure
+- **THEN** affected leaf summaries, ancestor summaries, and dependent coarse voxel payloads are invalidated before stale light representatives are served
+
+#### Scenario: Summary exceeds representative budget
+- **WHEN** a summary node contains more source clusters than its configured budget allows
+- **THEN** it deterministically retains or combines the strongest and most spatially significant clusters while keeping summary size bounded
+
+### Requirement: Voxel payload includes compact emitter records
+The `/api/voxels` binary payload SHALL include compact block-light emitter records for LOD 1 regions, derived from block values whose palette index has non-zero emitted-light metadata. For voxel LODs greater than 1, the payload SHALL include bounded emitter representatives derived from LOD 1 source summaries when important emitted-light sources occur in the covered area. Coarser LOD records SHALL carry or deterministically imply representative power and world-space influence footprint in addition to position, color, exposure, and ownership semantics so aggregation does not reduce every cluster to one ordinary fixed-radius source.
 
 #### Scenario: LOD 1 region contains emitting blocks
 - **WHEN** the server generates a LOD 1 voxel mesh for a region containing blocks with non-zero emitted light
-- **THEN** the encoded payload includes emitter records with region-local block coordinates and emitted RGB color for those blocks
+- **THEN** the encoded payload includes detailed emitter records with region-local block coordinates and emitted RGB color for those blocks
+- **THEN** their default power and influence footprint preserve the existing LOD 1 appearance
 
-#### Scenario: Coarser LOD region contains emitting blocks
-- **WHEN** the server generates a voxel mesh for a region at LOD greater than 1
-- **THEN** the encoded payload MUST omit per-block emitter records unless a future aggregation requirement is defined
+#### Scenario: Coarser LOD region contains important LOD 1 sources
+- **WHEN** the server generates a voxel mesh at LOD greater than 1 whose covered area contains strong or clustered LOD 1 emitted-light sources
+- **THEN** the encoded payload includes bounded representatives whose combined color power, weighted position, and influence footprint approximate those source clusters
+
+#### Scenario: Coarser LOD source is absent from same-LOD chunks
+- **WHEN** an important emitted-light source exists in LOD 1 source data but was discarded by the corresponding coarser voxel data
+- **THEN** the coarse emitter summary remains eligible to represent that source
+
+#### Scenario: Coarser LOD emitter records are decoded by the client
+- **WHEN** the client worker decodes a coarser LOD voxel payload containing representative power and footprint semantics
+- **THEN** it applies those semantics through the bounded emissive bake path and exposes the representatives for runtime accents
+
+#### Scenario: Coarser LOD region contains only weak or sparse sources
+- **WHEN** LOD 1 source summaries contain only emitters below the configured coarse-representation threshold
+- **THEN** the encoded payload MAY omit those emitters to preserve payload and runtime budgets
 
 #### Scenario: Region has no emitting blocks
-- **WHEN** the server generates a voxel mesh for a region with no non-zero emitted-light blocks
+- **WHEN** the covered LOD 1 source summaries contain no non-zero emitted-light blocks
 - **THEN** the encoded payload represents an empty emitter set without requiring a separate request
 
 ### Requirement: Voxel payload includes emitted-light halo records
@@ -50,18 +82,26 @@ The `/api/voxels` binary payload SHALL include enough emitted-light records for 
 - **THEN** voxel payload decoding and persistent voxel mesh cache validity MUST distinguish the new format from older payloads
 
 ### Requirement: Emitter metadata participates in voxel cache validity
-Voxel mesh cache keys SHALL distinguish emitted-light metadata and emitted-light rendering semantics so stale geometry-only, stale-color, stale-emitter, or stale-local-light payloads are not reused after emitter-relevant changes.
+Voxel mesh cache keys and emitter-summary cache keys SHALL distinguish emitted-light metadata, emitter payload format, coarse source-summary behavior, aggregation behavior, and emitted-light rendering semantics so stale geometry-only, stale-color, stale-format, stale-source, stale-aggregation, or stale-local-light payloads are not reused after emitter-relevant changes.
 
 #### Scenario: Emitted-light metadata changes
 - **WHEN** layered block assets change the `.emittedLight` value for a palette entry
-- **THEN** generated voxel payloads and any derived local-light presentation reflect the current emitted-light color rather than a stale cached value
+- **THEN** generated voxel payloads and derived emitter summaries reflect the current emitted-light color rather than stale cached values
 
 #### Scenario: Emitter payload format changes
 - **WHEN** the binary emitter record layout or interpretation changes
 - **THEN** previously persisted voxel mesh cache entries generated with the old layout are not reused
 
+#### Scenario: Coarser LOD aggregation behavior changes
+- **WHEN** source-summary thresholds, grouping, power encoding, footprint encoding, or representative behavior changes for LODs greater than 1
+- **THEN** persisted source summaries and coarse voxel mesh cache entries generated with the old behavior are not reused
+
+#### Scenario: LOD 1 source dependency changes
+- **WHEN** an LOD 1 region contributing to one or more coarse summaries changes
+- **THEN** affected summary ancestors and dependent coarse voxel mesh cache entries are invalidated
+
 #### Scenario: Local-light rendering semantics change
-- **WHEN** server-generated or client-decoded voxel payload semantics change for baked or mesh-local emitted-light contribution
+- **WHEN** server-generated or client-decoded voxel payload semantics change for representative power or influence footprint
 - **THEN** previously persisted voxel mesh cache entries generated with the old lighting semantics are not reused
 
 ### Requirement: Client decodes and owns emitter lifecycle per voxel region
@@ -76,19 +116,42 @@ The client voxel worker SHALL decode emitter records from voxel payloads and the
 - **THEN** the client removes or replaces the emitter effects owned by that region without leaving stale scene objects
 
 ### Requirement: Viewer renders bounded block-emissive lighting
-The viewer SHALL render block-emissive lighting as a bounded Cubyz-like local illumination approximation where emitted blocks affect nearby voxel surfaces through baked or mesh-local light contribution, while dynamic point lights and glow sprites remain optional accents rather than the primary lighting model. Debug-only voxel-lighting performance diagnostics MAY disable halo emitter contribution or mesh-local emissive attributes for measurement, but those diagnostics MUST NOT change the default emitted-light presentation.
+The viewer SHALL render block-emissive lighting as a bounded Cubyz-like local illumination approximation where emitted blocks affect nearby voxel surfaces through baked or mesh-local light contribution. The mesh-local emitter bake SHALL deliver light continuously across emitter-grid cell boundaries and across voxel-region boundaries within the configured emitted-light radius, so a receiving surface finds every emitter whose radius reaches it, including neighbor halo emitters owned by adjacent regions, with no cutoff aligned to the emitter grid or region seams. Emitter-grid cell insertion coverage SHALL be at least as large as the falloff reach used for the same emitter, so an emitter that can contribute to a vertex is always discoverable from that vertex's grid-cell lookup. Coarse representative power and influence footprint SHALL be applied monotonically and with configured caps so stronger or wider source clusters remain more visible than weaker clusters without causing unbounded additive blowout. Dynamic point lights and glow sprites SHALL remain optional accents rather than the primary lighting model. Debug-only voxel-lighting performance diagnostics MAY disable halo emitter contribution or mesh-local emissive attributes for measurement, but those diagnostics MUST NOT change the default emitted-light presentation.
 
-#### Scenario: Nighttime scene contains emitting blocks
+#### Scenario: Nighttime scene contains LOD 1 emitting blocks
 - **WHEN** the active atmosphere is in a low-light state and loaded LOD 1 regions contain emitter records
-- **THEN** emitting blocks remain visibly self-lit or glow-tinted and nearby terrain or voxel surfaces receive local emitted-light color that is integrated into their rendered face colors or equivalent mesh-local lighting
+- **THEN** emitting blocks preserve their existing self-lit appearance and nearby voxel surfaces receive the existing bounded local emitted-light contribution
 
-#### Scenario: Multiple emitters illuminate nearby surfaces
-- **WHEN** nearby loaded LOD 1 emitters contribute to the same visible voxel surface
+#### Scenario: Emitter illuminates surfaces across a grid-cell boundary
+- **WHEN** a receiving surface vertex lies in a different emitter-grid cell than an emitter but within that emitter's configured radius
+- **THEN** the bake includes that emitter's bounded contribution for the vertex
+- **THEN** there is no straight-line brightness cutoff aligned to the emitter-grid cell boundary
+
+#### Scenario: Neighbor halo emitter illuminates surfaces across a region boundary
+- **WHEN** a region payload includes a neighbor halo emitter whose radius reaches visible surfaces near the region seam
+- **THEN** those surfaces receive the halo emitter's bounded contribution
+- **THEN** the light spreads continuously across the region boundary rather than terminating at the seam
+
+#### Scenario: Coarse representative has aggregated power and footprint
+- **WHEN** a coarse emitter representative describes multiple LOD 1 sources
+- **THEN** the worker uses its bounded power and world-space footprint when baking nearby opaque voxel surfaces
+- **THEN** the representative is not treated identically to one ordinary fixed-radius LOD 1 source
+
+#### Scenario: Multiple representatives illuminate nearby surfaces
+- **WHEN** nearby coarse or detailed emitters contribute to the same visible voxel surface
 - **THEN** the viewer combines their bounded local-light contributions without requiring an unbounded number of Three.js point lights
+
+#### Scenario: Representative power exceeds display range
+- **WHEN** a dense source cluster encodes more power than can be displayed without washout
+- **THEN** the client applies the configured monotonic compression and contribution clamps while preserving the representative hue
+
+#### Scenario: Representative footprint exceeds bake budget
+- **WHEN** a source cluster's measured spatial extent would create an excessive emissive-bake search area
+- **THEN** the server or client caps the effective footprint according to the configured coarse-light budget and reports the bounded result through diagnostics
 
 #### Scenario: Loaded emitters exceed rendering budget
 - **WHEN** the number of loaded emitter records exceeds the active block-light rendering budget
-- **THEN** the viewer preserves bounded local surface illumination for loaded voxel geometry and limits only optional runtime accents such as point lights, glow sprites, or other nonessential effects to preserve scene responsiveness
+- **THEN** the viewer preserves bounded local surface illumination for loaded voxel geometry and limits only optional runtime accents to preserve scene responsiveness
 
 #### Scenario: Block-emissive lighting is disabled or unavailable
 - **WHEN** block-emissive lighting is disabled by quality settings or unsupported by the decoded payload
@@ -162,3 +225,36 @@ The client SHALL consume the existing `/api/voxels` binary payload format for em
 #### Scenario: Server returns existing voxel binary payload
 - **WHEN** the client worker receives the current voxel binary payload with emitter records
 - **THEN** it can produce optimized emissive output without requiring a server payload format migration
+
+### Requirement: Capped LOD 1 payloads retain boundary-relevant halo sources deterministically
+When the LOD 1 emitter-record cap is reached, the server SHALL apply a
+documented deterministic retention policy that prevents unrelated own-region
+records from starving all halo sources relevant to a receiving horizontal
+boundary. The policy SHALL define edge allocation or ranking, corner handling,
+vertical relevance, and deterministic tie-breaking while retaining the existing
+binary emitter-record layout and halo-flag semantics.
+
+#### Scenario: Dense own records compete with a relevant halo source
+- **WHEN** a requested LOD 1 region has at least the payload-cap count of unrelated own-region emitters and a neighboring source can illuminate receiving geometry near a horizontal boundary
+- **THEN** the capped payload retains the boundary-relevant halo record according to the documented retention policy
+
+#### Scenario: Halo sources occur at a horizontal corner
+- **WHEN** halo sources can contribute through a receiving region corner
+- **THEN** the retention policy handles the corner deterministically without allowing unrelated edge candidates to starve every relevant corner source
+
+#### Scenario: Halo source is outside the visible vertical relevance range
+- **WHEN** a halo candidate cannot reach the requested region's visible geometry under the configured radius and vertical span
+- **THEN** the retention policy may prioritize a more relevant candidate without changing the emitter record format
+
+### Requirement: Halo retention policy changes invalidate persistent voxel mesh caches
+The server SHALL invalidate persisted voxel mesh entries when the LOD 1
+emitter-cap retention policy or any of its selection semantics change, even when
+the binary emitter-record layout is unchanged.
+
+#### Scenario: Retention policy implementation changes
+- **WHEN** the server changes boundary allocation, relevance ranking, or tie-breaking for capped emitter records
+- **THEN** it increments or otherwise changes voxel mesh cache identity before serving payloads generated under the new policy
+
+#### Scenario: Retention policy remains unchanged
+- **WHEN** a generation changes only non-semantic execution details while retaining identical record selection
+- **THEN** existing cache identity remains valid for that policy

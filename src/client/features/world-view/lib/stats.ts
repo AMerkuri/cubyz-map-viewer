@@ -31,6 +31,12 @@ export interface RollingVoxelBenchmarkStats {
   avgEmissiveBakeMs: number | null;
   avgEmissiveQuadsEvaluated: number | null;
   avgEmissiveQuadsCulled: number | null;
+  avgEmissiveCandidateVisits: number | null;
+  avgEmitterMetadataBytes: number | null;
+  avgEmitterPowerMin: number | null;
+  avgEmitterPowerMax: number | null;
+  avgEmitterRadiusMin: number | null;
+  avgEmitterRadiusMax: number | null;
   avgServerRunMs: number | null;
   avgServerHaloMs: number | null;
   cacheHitSamples: number;
@@ -60,6 +66,12 @@ export function createEmptyVoxelBenchmarkStats(
     avgEmissiveBakeMs: null,
     avgEmissiveQuadsEvaluated: null,
     avgEmissiveQuadsCulled: null,
+    avgEmissiveCandidateVisits: null,
+    avgEmitterMetadataBytes: null,
+    avgEmitterPowerMin: null,
+    avgEmitterPowerMax: null,
+    avgEmitterRadiusMin: null,
+    avgEmitterRadiusMax: null,
     avgServerRunMs: null,
     avgServerHaloMs: null,
     cacheHitSamples: 0,
@@ -163,11 +175,13 @@ export function publishChunkStats(args: {
       queuedMemoryBytes += quadrant.positions.byteLength;
       queuedMemoryBytes += quadrant.normals.byteLength;
       queuedMemoryBytes += quadrant.baseColors.byteLength;
+      queuedMemoryBytes += quadrant.emissiveColors?.byteLength ?? 0;
       queuedMemoryBytes += quadrant.faceAo.byteLength;
       queuedMemoryBytes += quadrant.trianglePaletteIndices.byteLength;
       queuedMemoryBytes += quadrant.indices.byteLength;
     }
     queuedMemoryBytes += item.chunkTopHeights.byteLength;
+    queuedMemoryBytes += item.emitterRecords.length * 32;
   }
 
   const memoryBytes =
@@ -175,7 +189,8 @@ export function publishChunkStats(args: {
     voxelMemoryBytes +
     cachedTerrainMemoryBytes +
     cachedVoxelMemoryBytes +
-    queuedMemoryBytes;
+    queuedMemoryBytes +
+    blockLightStats.poolMemoryBytes;
   const perfWithMemory = performance as Performance & {
     memory?: PerformanceMemoryInfo;
   };
@@ -208,6 +223,7 @@ export function publishChunkStats(args: {
       warmVoxels: cachedVoxelByLodBytes,
       queued: queuedMemoryBytes,
       queuedVoxelOutput: queuedMemoryBytes,
+      blockLightPool: blockLightStats.poolMemoryBytes,
     },
     memoryByLod,
     jsHeapBytes,

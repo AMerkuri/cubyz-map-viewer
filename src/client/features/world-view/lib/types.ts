@@ -92,6 +92,8 @@ export interface VoxelEmitterRecord {
   r: number;
   g: number;
   b: number;
+  power: number;
+  radius: number;
   halo?: boolean;
 }
 
@@ -141,6 +143,11 @@ export interface WorkerIn {
     contentEncoding: string | null;
     serverRunMs: number | null;
     serverHaloMs: number | null;
+    emitterMetadataBytes: number | null;
+    emitterPowerMin: number | null;
+    emitterPowerMax: number | null;
+    emitterRadiusMin: number | null;
+    emitterRadiusMax: number | null;
     cacheOutcome?: VoxelBenchmarkCacheOutcome;
   };
 }
@@ -189,9 +196,15 @@ export interface WorkerOut {
      * bounds could not intersect any emitter radius.
      */
     emissiveQuadsCulled: number;
+    emissiveCandidateVisits: number;
     contentEncoding: string | null;
     serverRunMs: number | null;
     serverHaloMs: number | null;
+    emitterMetadataBytes: number | null;
+    emitterPowerMin: number | null;
+    emitterPowerMax: number | null;
+    emitterRadiusMin: number | null;
+    emitterRadiusMax: number | null;
     cacheOutcome?: VoxelBenchmarkCacheOutcome;
   };
   error?: string;

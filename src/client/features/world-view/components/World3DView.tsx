@@ -245,6 +245,7 @@ export function World3DView({
   const activeTerrainRequestKeysRef = useRef<Set<string>>(new Set());
 
   const loadedVoxelsRef = useRef<Map<string, LoadedVoxelTile>>(new Map());
+  const loadedVoxelsRevisionRef = useRef(0);
   const warmCachedVoxelsRef = useRef<Map<string, WarmCachedVoxelTile>>(
     new Map(),
   );
@@ -359,6 +360,11 @@ export function World3DView({
     budget: 0,
     glowBudget: 0,
     pointLightBudget: 0,
+    glowPoolAllocated: 0,
+    glowPoolUsed: 0,
+    pointLightPoolAllocated: 0,
+    poolMemoryBytes: 0,
+    runtimeMs: 0,
     degraded: false,
   });
   const avatarAssetCacheRef = useRef<AvatarAssetCache>(new Map());
@@ -668,6 +674,7 @@ export function World3DView({
     const vt = loadedVoxelsRef.current.get(key);
     if (!vt) return;
     loadedVoxelsRef.current.delete(key);
+    loadedVoxelsRevisionRef.current++;
     loadingVoxelsRef.current.delete(key);
     voxelUnloadGraceUntilRef.current.delete(key);
     biomeLabelsDirtyRef.current = true;
@@ -813,6 +820,7 @@ export function World3DView({
       loadedVoxels: loadedVoxelsRef.current,
       isVoxelTileStale,
       restoreVoxelTileFromWarmCache,
+      onVoxelTileRestored: () => loadedVoxelsRevisionRef.current++,
       voxelUnloadGraceUntil: voxelUnloadGraceUntilRef.current,
       voxelUnloadGraceMs: debugSettingsRef.current.voxelUnloadGraceMs,
       markVoxelTileFresh,
@@ -1293,6 +1301,42 @@ export function World3DView({
             sample.emissiveQuadsCulled,
             nextSamples,
           ),
+          avgEmissiveCandidateVisits: averageNullableMetric(
+            current.avgEmissiveCandidateVisits,
+            current.samples,
+            sample.emissiveCandidateVisits,
+            nextSamples,
+          ),
+          avgEmitterMetadataBytes: averageNullableMetric(
+            current.avgEmitterMetadataBytes,
+            current.samples,
+            sample.emitterMetadataBytes,
+            nextSamples,
+          ),
+          avgEmitterPowerMin: averageNullableMetric(
+            current.avgEmitterPowerMin,
+            current.samples,
+            sample.emitterPowerMin,
+            nextSamples,
+          ),
+          avgEmitterPowerMax: averageNullableMetric(
+            current.avgEmitterPowerMax,
+            current.samples,
+            sample.emitterPowerMax,
+            nextSamples,
+          ),
+          avgEmitterRadiusMin: averageNullableMetric(
+            current.avgEmitterRadiusMin,
+            current.samples,
+            sample.emitterRadiusMin,
+            nextSamples,
+          ),
+          avgEmitterRadiusMax: averageNullableMetric(
+            current.avgEmitterRadiusMax,
+            current.samples,
+            sample.emitterRadiusMax,
+            nextSamples,
+          ),
           avgServerRunMs: averageNullableMetric(
             current.avgServerRunMs,
             current.samples,
@@ -1353,6 +1397,7 @@ export function World3DView({
           chunkBorderGroupRef.current,
         );
       },
+      onVoxelTileLoaded: () => loadedVoxelsRevisionRef.current++,
     });
   }
 
@@ -1435,6 +1480,7 @@ export function World3DView({
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    loadedVoxelsRevisionRef,
     blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,

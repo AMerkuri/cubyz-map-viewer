@@ -1,5 +1,9 @@
 import type { BlockColorTable } from "../services/block-color-table.js";
 import type { BlockShapeTable } from "../services/block-shape-table.js";
+import type {
+  EmitterSummaryBuildMetrics,
+  EmitterSummaryNode,
+} from "../services/voxel-emitter-aggregation.js";
 
 export interface VoxelWorkerData {
   savePath: string;
@@ -21,6 +25,8 @@ export interface VoxelJob {
    * the persistent voxel cache. Defaults to true (normal behavior).
    */
   includeHaloEmitters?: boolean;
+  emitterSummary?: EmitterSummaryNode;
+  emitterSummaryMetrics?: EmitterSummaryBuildMetrics;
 }
 
 export interface VoxelGenerationStats {
@@ -37,9 +43,21 @@ export interface VoxelGenerationStats {
   emitterRecords: number;
   ownEmitterRecords?: number;
   haloEmitterRecords?: number;
+  aggregatedEmitterRecords?: number;
   /** Time spent collecting neighboring-region halo emitter records, in ms. */
   haloMs?: number;
   emitterRecordBytes: number;
+  emitterMetadataBytes?: number;
+  emitterPowerMin?: number;
+  emitterPowerMax?: number;
+  emitterRadiusMin?: number;
+  emitterRadiusMax?: number;
+  summaryCacheOutcome?: EmitterSummaryBuildMetrics["cacheOutcome"];
+  summaryBuildMs?: number;
+  summaryLeafParses?: number;
+  summaryRawSourceCount?: number;
+  summaryRetainedClusterCount?: number;
+  summaryCappedClusterCount?: number;
   chunkColumns: number;
   regionsParsed: number;
   chunksMeshed: number;

@@ -264,6 +264,26 @@ export async function fetchVoxelRegion(args: {
           contentEncoding: res.headers.get("content-encoding"),
           serverRunMs: readNullableHeaderMs(res, "x-voxel-run-ms"),
           serverHaloMs: readNullableHeaderMs(res, "x-voxel-halo-ms"),
+          emitterMetadataBytes: readNullableHeaderMs(
+            res,
+            "x-voxel-emitter-metadata-bytes",
+          ),
+          emitterPowerMin: readNullableHeaderMs(
+            res,
+            "x-voxel-emitter-power-min",
+          ),
+          emitterPowerMax: readNullableHeaderMs(
+            res,
+            "x-voxel-emitter-power-max",
+          ),
+          emitterRadiusMin: readNullableHeaderMs(
+            res,
+            "x-voxel-emitter-radius-min",
+          ),
+          emitterRadiusMax: readNullableHeaderMs(
+            res,
+            "x-voxel-emitter-radius-max",
+          ),
           cacheOutcome: readCacheOutcome(res),
         },
       } satisfies WorkerIn,

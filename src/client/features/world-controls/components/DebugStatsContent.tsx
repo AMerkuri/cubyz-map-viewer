@@ -46,6 +46,14 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       <div>Glow budget: {chunkStats.blockLight.glowBudget}</div>
       <div>Point-light budget: {chunkStats.blockLight.pointLightBudget}</div>
       <div>
+        Glow pool: {chunkStats.blockLight.glowPoolUsed}/
+        {chunkStats.blockLight.glowPoolAllocated}
+      </div>
+      <div>
+        Point-light pool: {chunkStats.blockLight.pointLightPoolAllocated}
+      </div>
+      <div>Runtime: {chunkStats.blockLight.runtimeMs.toFixed(2)} ms</div>
+      <div>
         Accents degraded: {chunkStats.blockLight.degraded ? "yes" : "no"}
       </div>
 
@@ -81,6 +89,10 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         {chunkStats.warmCacheCount.voxels})
       </div>
       <div>Queued: {formatMemoryBytes(chunkStats.memoryBreakdown.queued)}</div>
+      <div>
+        Block-light pool:{" "}
+        {formatMemoryBytes(chunkStats.memoryBreakdown.blockLightPool)}
+      </div>
       <div>
         Queued voxel output:{" "}
         {formatMemoryBytes(chunkStats.memoryBreakdown.queuedVoxelOutput)}
@@ -160,6 +172,28 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         )}{" "}
         / culled{" "}
         {formatNullableCount(chunkStats.voxelBenchmark.avgEmissiveQuadsCulled)}
+      </div>
+      <div>
+        Avg emitter metadata:{" "}
+        {formatNullableBytes(chunkStats.voxelBenchmark.avgEmitterMetadataBytes)}
+      </div>
+      <div>
+        Avg emitter power:{" "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmitterPowerMin)}
+        {" / "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmitterPowerMax)}
+      </div>
+      <div>
+        Avg emitter radius:{" "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmitterRadiusMin)}
+        {" / "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmitterRadiusMax)}
+      </div>
+      <div>
+        Avg emissive candidates:{" "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveCandidateVisits,
+        )}
       </div>
       <div>
         Avg server run:{" "}

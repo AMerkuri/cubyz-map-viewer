@@ -9,7 +9,8 @@ import type { EmissiveColorArray, WorkerIn, WorkerOut } from "../lib/types.js";
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 const VOXEL_POSITION_FIXED_SCALE = 4096;
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
-const VOXEL_BINARY_MAGIC = 0x354d5856;
+const VOXEL_BINARY_MAGIC = 0x364d5856;
+const INT32_EMITTER_VOXEL_BINARY_MAGIC = 0x354d5856;
 const UINT16_EMITTER_VOXEL_BINARY_MAGIC = 0x344d5856;
 const PRE_EMITTER_VOXEL_BINARY_MAGIC = 0x334d5856;
 const LEGACY_VOXEL_BINARY_MAGIC = 0x324d5856;
@@ -17,7 +18,12 @@ const POSITION_KIND_INTEGER = 1;
 const GREEDY_RECORD_BYTES = 12;
 const MODEL_RECORD_BYTES = 48;
 const EMITTER_RECORD_BYTES = 16;
+const EMITTER_METADATA_BYTES = 4;
 const UINT16_EMITTER_RECORD_BYTES = 14;
+const EMITTER_DEFAULT_POWER = 1;
+const EMITTER_DEFAULT_RADIUS = 12;
+const EMITTER_POWER_FIXED_SCALE = 256;
+const EMITTER_MAX_RADIUS = 64;
 const EMITTER_OPEN_FACE_ALL = 0b11_1111;
 const EMITTER_OPEN_FACE_X_POS = 1 << 0;
 const EMITTER_OPEN_FACE_X_NEG = 1 << 1;
@@ -45,6 +51,9 @@ const EMITTER_DENSE_GRID_MAX_CELLS = 1 << 20;
 // Above this many overlapped cells, quad culling assumes the quad may receive
 // light (false positive) instead of scanning a huge cell volume.
 const EMITTER_QUAD_CULL_MAX_CELLS = 4096;
+const EMITTER_MAX_INDEX_CELLS = 512;
+const EMITTER_MAX_POWER_GAIN = 8;
+const EMITTER_GRID_INSERTION_MARGIN_CELLS = 1;
 
 type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
 
@@ -75,17 +84,24 @@ interface EmissivePhaseMetrics {
   bakeMs: number;
   quadsEvaluated: number;
   quadsCulled: number;
+  candidateVisits: number;
 }
 
 function createEmptyEmissivePhaseMetrics(): EmissivePhaseMetrics {
-  return { gridBuildMs: 0, bakeMs: 0, quadsEvaluated: 0, quadsCulled: 0 };
+  return {
+    gridBuildMs: 0,
+    bakeMs: 0,
+    quadsEvaluated: 0,
+    quadsCulled: 0,
+    candidateVisits: 0,
+  };
 }
 
 /**
  * Spatial index of payload-owned own-region plus halo emitter records used to
  * bake bounded mesh-local emitted-light contribution into per-vertex emissive
- * colors. Cell size is the emitted-light radius so a 3x3x3 neighborhood covers
- * every candidate.
+ * colors. Emitters are inserted into every reachable cell plus one cell of
+ * edge slack, so vertex baking can use a single-cell lookup.
  *
  * The per-vertex hot path avoids string allocation by mapping numeric cell
  * coordinates `(ix, iy, iz)` to emitter buckets. A dense local cell array is
@@ -112,7 +128,16 @@ interface EmitterLightGrid {
   r: Float32Array;
   g: Float32Array;
   b: Float32Array;
+  radius: Float32Array;
+  powerGain: Float32Array;
   openFaces: Uint8Array;
+  broadEmitterIndices: number[];
+  candidateStamps: Uint32Array;
+  candidateStamp: number;
+  candidateScratch: number[];
+  selectedCandidateIndices: number[];
+  selectedCandidateDistances: Float64Array;
+  candidateVisits: number;
 }
 
 /**
@@ -207,9 +232,15 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             emissiveBakeMs: result.emissivePhase.bakeMs,
             emissiveQuadsEvaluated: result.emissivePhase.quadsEvaluated,
             emissiveQuadsCulled: result.emissivePhase.quadsCulled,
+            emissiveCandidateVisits: result.emissivePhase.candidateVisits,
             contentEncoding: benchmark.contentEncoding,
             serverRunMs: benchmark.serverRunMs,
             serverHaloMs: benchmark.serverHaloMs,
+            emitterMetadataBytes: benchmark.emitterMetadataBytes,
+            emitterPowerMin: benchmark.emitterPowerMin,
+            emitterPowerMax: benchmark.emitterPowerMax,
+            emitterRadiusMin: benchmark.emitterRadiusMin,
+            emitterRadiusMax: benchmark.emitterRadiusMax,
             cacheOutcome: benchmark.cacheOutcome,
           }
         : undefined,
@@ -236,9 +267,15 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
             emissiveBakeMs: 0,
             emissiveQuadsEvaluated: 0,
             emissiveQuadsCulled: 0,
+            emissiveCandidateVisits: 0,
             contentEncoding: benchmark.contentEncoding,
             serverRunMs: benchmark.serverRunMs,
             serverHaloMs: benchmark.serverHaloMs,
+            emitterMetadataBytes: benchmark.emitterMetadataBytes,
+            emitterPowerMin: benchmark.emitterPowerMin,
+            emitterPowerMax: benchmark.emitterPowerMax,
+            emitterRadiusMin: benchmark.emitterRadiusMin,
+            emitterRadiusMax: benchmark.emitterRadiusMax,
             cacheOutcome: benchmark.cacheOutcome,
           }
         : undefined,
@@ -318,6 +355,8 @@ function buildMeshArrays(
     b: number;
     halo?: boolean;
     openFaces?: number;
+    power: number;
+    radius: number;
   }[];
   emissivePhase: EmissivePhaseMetrics;
 } {
@@ -325,8 +364,9 @@ function buildMeshArrays(
 
   const view = new DataView(buf);
   if (
+    (buf.byteLength >= 44 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) ||
     (buf.byteLength >= 36 &&
-      (view.getUint32(0, true) === VOXEL_BINARY_MAGIC ||
+      (view.getUint32(0, true) === INT32_EMITTER_VOXEL_BINARY_MAGIC ||
         view.getUint32(0, true) === UINT16_EMITTER_VOXEL_BINARY_MAGIC)) ||
     (buf.byteLength >= 32 &&
       view.getUint32(0, true) === PRE_EMITTER_VOXEL_BINARY_MAGIC)
@@ -774,7 +814,9 @@ function buildOptimizedMeshArrays(
   const modelRecordCount = view.getUint32(28, true);
   const magic = view.getUint32(0, true);
   const hasEmitterHeader =
-    magic === VOXEL_BINARY_MAGIC || magic === UINT16_EMITTER_VOXEL_BINARY_MAGIC;
+    magic === VOXEL_BINARY_MAGIC ||
+    magic === INT32_EMITTER_VOXEL_BINARY_MAGIC ||
+    magic === UINT16_EMITTER_VOXEL_BINARY_MAGIC;
   const emitterRecordBytes =
     magic === UINT16_EMITTER_VOXEL_BINARY_MAGIC
       ? UINT16_EMITTER_RECORD_BYTES
@@ -789,7 +831,8 @@ function buildOptimizedMeshArrays(
   const directionPadded = (quadCount + 3) & ~3;
   const palettePadded = (quadCount * 2 + 3) & ~3;
   const renderKindPadded = (quadCount + 3) & ~3;
-  const colorOffset = hasEmitterHeader ? 36 : 32;
+  const colorOffset =
+    magic === VOXEL_BINARY_MAGIC ? 44 : hasEmitterHeader ? 36 : 32;
   const aoOffset = colorOffset + colorPadded;
   const directionOffset = aoOffset + aoPadded;
   const paletteOffset = directionOffset + directionPadded;
@@ -799,15 +842,44 @@ function buildOptimizedMeshArrays(
     greedyRecordOffset + greedyRecordCount * GREEDY_RECORD_BYTES;
   const emitterRecordOffset =
     modelRecordOffset + modelRecordCount * MODEL_RECORD_BYTES;
-  const expectedSize =
+  const emitterEnd =
     emitterRecordOffset + emitterRecordCount * emitterRecordBytes;
-  if (byteLength < expectedSize) {
+  if (byteLength < emitterEnd) {
     throw new Error("buffer truncated before optimized voxel records");
   }
 
+  let emitterMetadataOffset = 0;
+  let emitterMetadataCount = 0;
+  let trailerOffset = emitterEnd;
+  if (magic === VOXEL_BINARY_MAGIC) {
+    emitterMetadataOffset = view.getUint32(36, true);
+    emitterMetadataCount = view.getUint32(40, true);
+    const metadataAbsent =
+      emitterMetadataOffset === 0 && emitterMetadataCount === 0;
+    if (
+      !metadataAbsent &&
+      (emitterMetadataOffset !== emitterEnd ||
+        emitterMetadataCount !== emitterRecordCount)
+    ) {
+      throw new Error("invalid voxel emitter metadata offset or count");
+    }
+    if (
+      metadataAbsent !==
+      (emitterMetadataOffset === 0 || emitterMetadataCount === 0)
+    ) {
+      throw new Error("incomplete voxel emitter metadata header");
+    }
+    trailerOffset = metadataAbsent
+      ? emitterEnd
+      : emitterMetadataOffset + emitterMetadataCount * EMITTER_METADATA_BYTES;
+    if (trailerOffset + 4 !== byteLength) {
+      throw new Error("invalid voxel emitter metadata bounds");
+    }
+  }
+
   const chunkCoverage =
-    byteLength >= expectedSize + 4
-      ? view.getUint32(expectedSize, true)
+    byteLength >= trailerOffset + 4
+      ? view.getUint32(trailerOffset, true)
       : 0xffff;
   const emitterRecords = readEmitterRecords(
     view,
@@ -818,6 +890,7 @@ function buildOptimizedMeshArrays(
     worldZ,
     voxelSize,
     emitterRecordBytes,
+    emitterMetadataCount > 0 ? emitterMetadataOffset : undefined,
   );
   const regionWorldSize = 128 * voxelSize;
   const chunkWorldSize = 32 * voxelSize;
@@ -888,7 +961,7 @@ function buildOptimizedMeshArrays(
   const gridBuildStart = performance.now();
   const emitterGrid =
     bakeEmissiveAttributes && meshEmitterRecords.length > 0
-      ? buildEmitterLightGrid(meshEmitterRecords)
+      ? buildEmitterLightGrid(meshEmitterRecords, voxelSize)
       : null;
   if (emitterGrid) {
     emissivePhase.gridBuildMs = performance.now() - gridBuildStart;
@@ -947,6 +1020,7 @@ function buildOptimizedMeshArrays(
   );
   if (emitterGrid) {
     emissivePhase.bakeMs = performance.now() - bakeStart;
+    emissivePhase.candidateVisits = emitterGrid.candidateVisits;
   }
 
   return {
@@ -971,6 +1045,7 @@ function readEmitterRecords(
   worldZ: number,
   voxelSize: number,
   recordBytes: number,
+  metadataOffset?: number,
 ): ReturnType<typeof buildMeshArrays>["emitterRecords"] {
   const records: ReturnType<typeof buildMeshArrays>["emitterRecords"] = [];
   let off = offset;
@@ -995,6 +1070,23 @@ function readEmitterRecords(
     const b = view.getUint8(off++);
     const flags = view.getUint8(off++);
     off += recordBytes === UINT16_EMITTER_RECORD_BYTES ? 4 : 0;
+    let power = EMITTER_DEFAULT_POWER;
+    let radius = EMITTER_DEFAULT_RADIUS;
+    if (metadataOffset !== undefined) {
+      const metadataEntryOffset = metadataOffset + i * EMITTER_METADATA_BYTES;
+      power =
+        view.getUint16(metadataEntryOffset, true) / EMITTER_POWER_FIXED_SCALE;
+      radius = view.getUint8(metadataEntryOffset + 2);
+      const reserved = view.getUint8(metadataEntryOffset + 3);
+      if (
+        power <= 0 ||
+        radius <= 0 ||
+        radius > EMITTER_MAX_RADIUS ||
+        reserved !== 0
+      ) {
+        throw new Error("invalid voxel emitter metadata entry");
+      }
+    }
     records.push({
       x: worldX + (x + 0.5) * voxelSize,
       y: worldY + (y + 0.5) * voxelSize,
@@ -1004,6 +1096,8 @@ function readEmitterRecords(
       b,
       halo: (flags & 1) !== 0,
       openFaces: flags >> 1 || EMITTER_OPEN_FACE_ALL,
+      power,
+      radius,
     });
   }
   return records;
@@ -1013,9 +1107,35 @@ const EMITTER_LIGHT_SCRATCH = new Float32Array(3);
 
 function buildEmitterLightGrid(
   emitterRecords: ReturnType<typeof buildMeshArrays>["emitterRecords"],
+  voxelSize: number,
 ): EmitterLightGrid {
   const count = emitterRecords.length;
   const cellSize = VOXEL_EMITTED_LIGHT.radius;
+  const bounds: Array<{
+    minX: number;
+    minY: number;
+    minZ: number;
+    maxX: number;
+    maxY: number;
+    maxZ: number;
+    broad: boolean;
+  }> = [];
+  const influenceRadii = new Float32Array(count);
+
+  // Coarse payload positions are stored in whole voxel cells. At LOD 16 and
+  // 32 that center quantization alone can move a representative nearly one
+  // cell diagonal away from a receiving mesh vertex. The padded radius is
+  // shared by indexing and falloff so a reachable emitter is always indexed.
+  const quantizationPadding =
+    voxelSize >= 16 ? (Math.sqrt(3) * voxelSize) / 2 : 0;
+  for (let i = 0; i < count; i++) {
+    const record = emitterRecords[i];
+    if (!record) continue;
+    influenceRadii[i] = Math.min(
+      EMITTER_MAX_RADIUS,
+      record.radius + quantizationPadding,
+    );
+  }
 
   // Compute the numeric cell extent so dense allocation can be bounded and the
   // hot path can map (ix, iy, iz) to a local array index without string keys.
@@ -1028,15 +1148,36 @@ function buildEmitterLightGrid(
   for (let i = 0; i < count; i++) {
     const record = emitterRecords[i];
     if (!record) continue;
-    const ix = Math.floor(record.x / cellSize);
-    const iy = Math.floor(record.y / cellSize);
-    const iz = Math.floor(record.z / cellSize);
-    if (ix < minCellX) minCellX = ix;
-    if (iy < minCellY) minCellY = iy;
-    if (iz < minCellZ) minCellZ = iz;
-    if (ix > maxCellX) maxCellX = ix;
-    if (iy > maxCellY) maxCellY = iy;
-    if (iz > maxCellZ) maxCellZ = iz;
+    const radius = influenceRadii[i];
+    const minX =
+      Math.floor((record.x - radius) / cellSize) -
+      EMITTER_GRID_INSERTION_MARGIN_CELLS;
+    const minY =
+      Math.floor((record.y - radius) / cellSize) -
+      EMITTER_GRID_INSERTION_MARGIN_CELLS;
+    const minZ =
+      Math.floor((record.z - radius) / cellSize) -
+      EMITTER_GRID_INSERTION_MARGIN_CELLS;
+    const maxX =
+      Math.floor((record.x + radius) / cellSize) +
+      EMITTER_GRID_INSERTION_MARGIN_CELLS;
+    const maxY =
+      Math.floor((record.y + radius) / cellSize) +
+      EMITTER_GRID_INSERTION_MARGIN_CELLS;
+    const maxZ =
+      Math.floor((record.z + radius) / cellSize) +
+      EMITTER_GRID_INSERTION_MARGIN_CELLS;
+    const occupiedCells =
+      (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+    const broad = occupiedCells > EMITTER_MAX_INDEX_CELLS;
+    bounds[i] = { minX, minY, minZ, maxX, maxY, maxZ, broad };
+    if (broad) continue;
+    if (minX < minCellX) minCellX = minX;
+    if (minY < minCellY) minCellY = minY;
+    if (minZ < minCellZ) minCellZ = minZ;
+    if (maxX > maxCellX) maxCellX = maxX;
+    if (maxY > maxCellY) maxCellY = maxY;
+    if (maxZ > maxCellZ) maxCellZ = maxZ;
   }
   if (!Number.isFinite(minCellX)) {
     minCellX = 0;
@@ -1046,10 +1187,9 @@ function buildEmitterLightGrid(
     maxCellY = -1;
     maxCellZ = -1;
   }
-  // Pad by one cell on each side so 3x3x3 neighborhood probes stay in bounds.
-  const cellsX = Math.max(0, maxCellX - minCellX + 1) + 2;
-  const cellsY = Math.max(0, maxCellY - minCellY + 1) + 2;
-  const cellsZ = Math.max(0, maxCellZ - minCellZ + 1) + 2;
+  const cellsX = Math.max(0, maxCellX - minCellX + 1);
+  const cellsY = Math.max(0, maxCellY - minCellY + 1);
+  const cellsZ = Math.max(0, maxCellZ - minCellZ + 1);
   const denseCellCount = cellsX * cellsY * cellsZ;
   // Guard against pathological emitter extents: fall back to a sparse numeric
   // map when the dense grid would exceed the bounded cell budget.
@@ -1060,9 +1200,9 @@ function buildEmitterLightGrid(
 
   const grid: EmitterLightGrid = {
     cellSize,
-    minCellX: useDense ? minCellX - 1 : 0,
-    minCellY: useDense ? minCellY - 1 : 0,
-    minCellZ: useDense ? minCellZ - 1 : 0,
+    minCellX: useDense ? minCellX : 0,
+    minCellY: useDense ? minCellY : 0,
+    minCellZ: useDense ? minCellZ : 0,
     cellsX: useDense ? cellsX : 0,
     cellsY: useDense ? cellsY : 0,
     cellsZ: useDense ? cellsZ : 0,
@@ -1076,7 +1216,20 @@ function buildEmitterLightGrid(
     r: new Float32Array(count),
     g: new Float32Array(count),
     b: new Float32Array(count),
+    radius: new Float32Array(count),
+    powerGain: new Float32Array(count),
     openFaces: new Uint8Array(count),
+    broadEmitterIndices: [],
+    candidateStamps: new Uint32Array(count),
+    candidateStamp: 0,
+    candidateScratch: [],
+    selectedCandidateIndices: new Array<number>(
+      VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex,
+    ),
+    selectedCandidateDistances: new Float64Array(
+      VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex,
+    ),
+    candidateVisits: 0,
   };
   for (let i = 0; i < count; i++) {
     const record = emitterRecords[i];
@@ -1087,14 +1240,40 @@ function buildEmitterLightGrid(
     grid.r[i] = record.r / 255;
     grid.g[i] = record.g / 255;
     grid.b[i] = record.b / 255;
-    grid.openFaces[i] = record.openFaces ?? EMITTER_OPEN_FACE_ALL;
-    addEmitterToGridCell(
-      grid,
-      Math.floor(record.x / cellSize),
-      Math.floor(record.y / cellSize),
-      Math.floor(record.z / cellSize),
-      i,
+    grid.radius[i] = influenceRadii[i];
+    const radiusGainCap = Math.max(1, 3 - (record.radius - 20) / 4);
+    // LOD 4's smaller, concentrated representatives otherwise retain the LOD
+    // 2 peak gain while covering substantially more merged source energy.
+    const lodGainCap = voxelSize === 4 ? 0.75 : radiusGainCap;
+    const radiusEnergyExponent = Math.max(
+      1,
+      6 - Math.max(0, Math.log2(voxelSize / 8)) * 4,
     );
+    const radiusEnergyAttenuation = Math.min(
+      1,
+      (20 / record.radius) ** radiusEnergyExponent,
+    );
+    grid.powerGain[i] =
+      Math.min(
+        EMITTER_MAX_POWER_GAIN,
+        radiusGainCap,
+        lodGainCap,
+        Math.sqrt(record.power),
+      ) * radiusEnergyAttenuation;
+    grid.openFaces[i] = record.openFaces ?? EMITTER_OPEN_FACE_ALL;
+    const emitterBounds = bounds[i];
+    if (!emitterBounds) continue;
+    if (emitterBounds.broad) {
+      grid.broadEmitterIndices.push(i);
+      continue;
+    }
+    for (let ix = emitterBounds.minX; ix <= emitterBounds.maxX; ix++) {
+      for (let iy = emitterBounds.minY; iy <= emitterBounds.maxY; iy++) {
+        for (let iz = emitterBounds.minZ; iz <= emitterBounds.maxZ; iz++) {
+          addEmitterToGridCell(grid, ix, iy, iz, i);
+        }
+      }
+    }
   }
   return grid;
 }
@@ -1182,8 +1361,7 @@ function getEmitterGridCell(
 
 /**
  * Conservative test: can any emitter influence this quad? Uses the quad axis-
- * aligned bounding box expanded by the emitted-light radius and probes the
- * emitter-grid cells overlapping that expanded box. Prefers false positives
+ * aligned bounding box and probes radius-expanded emitter-grid cells. Prefers false positives
  * (keeps existing work) over false negatives (would drop visible light).
  */
 function quadCanReceiveEmitterLight(
@@ -1207,16 +1385,26 @@ function quadCanReceiveEmitterLight(
     if (py > maxY) maxY = py;
     if (pz > maxZ) maxZ = pz;
   }
-  const radius = VOXEL_EMITTED_LIGHT.radius;
   const cellSize = grid.cellSize;
-  // Expand the quad bounds by the emitted-light radius, then convert to grid
-  // cells. Any emitter within radius of the quad lives in one of these cells.
-  const cx0 = Math.floor((minX - radius) / cellSize);
-  const cy0 = Math.floor((minY - radius) / cellSize);
-  const cz0 = Math.floor((minZ - radius) / cellSize);
-  const cx1 = Math.floor((maxX + radius) / cellSize);
-  const cy1 = Math.floor((maxY + radius) / cellSize);
-  const cz1 = Math.floor((maxZ + radius) / cellSize);
+  for (const emitterIndex of grid.broadEmitterIndices) {
+    const radius = grid.radius[emitterIndex];
+    if (
+      grid.x[emitterIndex] + radius >= minX &&
+      grid.x[emitterIndex] - radius <= maxX &&
+      grid.y[emitterIndex] + radius >= minY &&
+      grid.y[emitterIndex] - radius <= maxY &&
+      grid.z[emitterIndex] + radius >= minZ &&
+      grid.z[emitterIndex] - radius <= maxZ
+    ) {
+      return true;
+    }
+  }
+  const cx0 = Math.floor(minX / cellSize) - 1;
+  const cy0 = Math.floor(minY / cellSize) - 1;
+  const cz0 = Math.floor(minZ / cellSize) - 1;
+  const cx1 = Math.floor(maxX / cellSize) + 1;
+  const cy1 = Math.floor(maxY / cellSize) + 1;
+  const cz1 = Math.floor(maxZ / cellSize) + 1;
   // Very large greedy quads can span many cells; iterating a huge volume would
   // cost more than baking. Prefer a false positive (keep baking) in that case.
   const spanCells = (cx1 - cx0 + 1) * (cy1 - cy0 + 1) * (cz1 - cz0 + 1);
@@ -1233,7 +1421,7 @@ function quadCanReceiveEmitterLight(
 
 /**
  * Accumulates bounded emitted-light contribution at a vertex into `out`
- * (r/g/b light factors). Iterates the 3x3x3 grid neighborhood in
+ * (r/g/b light factors). Iterates the radius-aware cell candidates in
  * deterministic payload order, applies a smoothstep falloff with a wrapped
  * lambert term, and clamps per channel so any number of emitters combines
  * without depending on runtime light budgets.
@@ -1249,58 +1437,154 @@ function accumulateEmitterLight(
   out[0] = 0;
   out[1] = 0;
   out[2] = 0;
-  const radius = VOXEL_EMITTED_LIGHT.radius;
-  const radiusSq = radius * radius;
   const wrap = VOXEL_EMITTED_LIGHT.directionalWrap;
   const cx = Math.floor(x / grid.cellSize);
   const cy = Math.floor(y / grid.cellSize);
   const cz = Math.floor(z / grid.cellSize);
-  let candidates = 0;
-  for (let ix = cx - 1; ix <= cx + 1; ix++) {
-    for (let iy = cy - 1; iy <= cy + 1; iy++) {
-      for (let iz = cz - 1; iz <= cz + 1; iz++) {
-        const cell = getEmitterGridCell(grid, ix, iy, iz);
-        if (!cell) continue;
-        for (const emitterIndex of cell) {
-          if (candidates >= VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex) break;
-          candidates++;
-          const dx = grid.x[emitterIndex] - x;
-          const dy = grid.y[emitterIndex] - y;
-          const dz = grid.z[emitterIndex] - z;
-          const occlusionTransmission = getEmitterDirectionTransmission(
-            grid.openFaces[emitterIndex],
-            -dx,
-            -dy,
-            -dz,
-          );
-          if (occlusionTransmission <= 0) continue;
-          const distSq = dx * dx + dy * dy + dz * dz;
-          if (distSq >= radiusSq) continue;
-          const dist = Math.sqrt(distSq);
-          const t = 1 - dist / radius;
-          const falloff = t * t * (3 - 2 * t);
-          const lambert =
-            dist > 0
-              ? Math.max(
-                  0,
-                  (dx * normal[0] + dy * normal[1] + dz * normal[2]) / dist,
-                )
-              : 1;
-          const weight =
-            falloff *
-            (wrap + (1 - wrap) * lambert) *
-            occlusionTransmission *
-            VOXEL_EMITTED_LIGHT.intensity;
-          out[0] += grid.r[emitterIndex] * weight;
-          out[1] += grid.g[emitterIndex] * weight;
-          out[2] += grid.b[emitterIndex] * weight;
+  const candidateStamp = nextEmitterCandidateStamp(grid);
+  const emitterIndices = grid.candidateScratch;
+  emitterIndices.length = 0;
+  const primaryCell = getEmitterGridCell(grid, cx, cy, cz);
+  if (primaryCell) {
+    for (const emitterIndex of primaryCell) {
+      grid.candidateStamps[emitterIndex] = candidateStamp;
+      emitterIndices.push(emitterIndex);
+    }
+  }
+  let hasReachablePrimaryCandidate = false;
+  for (const emitterIndex of emitterIndices) {
+    const dx = grid.x[emitterIndex] - x;
+    const dy = grid.y[emitterIndex] - y;
+    const dz = grid.z[emitterIndex] - z;
+    if (dx * dx + dy * dy + dz * dz < grid.radius[emitterIndex] ** 2) {
+      hasReachablePrimaryCandidate = true;
+      break;
+    }
+  }
+  // The padded insertion grid keeps the common case in the receiver cell. An
+  // empty or non-reaching primary cell falls back to its neighbors, covering
+  // independent region grids at the seam without a 27-cell probe everywhere.
+  if (!hasReachablePrimaryCandidate) {
+    for (let ix = cx - 1; ix <= cx + 1; ix++) {
+      for (let iy = cy - 1; iy <= cy + 1; iy++) {
+        for (let iz = cz - 1; iz <= cz + 1; iz++) {
+          if (ix === cx && iy === cy && iz === cz) continue;
+          const cell = getEmitterGridCell(grid, ix, iy, iz);
+          if (!cell) continue;
+          for (const emitterIndex of cell) {
+            if (grid.candidateStamps[emitterIndex] === candidateStamp) continue;
+            grid.candidateStamps[emitterIndex] = candidateStamp;
+            emitterIndices.push(emitterIndex);
+          }
         }
       }
     }
   }
+  for (const emitterIndex of grid.broadEmitterIndices) {
+    const radius = grid.radius[emitterIndex];
+    if (
+      Math.abs(grid.x[emitterIndex] - x) > radius ||
+      Math.abs(grid.y[emitterIndex] - y) > radius ||
+      Math.abs(grid.z[emitterIndex] - z) > radius
+    ) {
+      continue;
+    }
+    if (grid.candidateStamps[emitterIndex] === candidateStamp) continue;
+    grid.candidateStamps[emitterIndex] = candidateStamp;
+    emitterIndices.push(emitterIndex);
+  }
+  const maxCandidates = VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex;
+  const selectedIndices = grid.selectedCandidateIndices;
+  const selectedDistances = grid.selectedCandidateDistances;
+  let selectedCount = 0;
+  for (const emitterIndex of emitterIndices) {
+    const dx = grid.x[emitterIndex] - x;
+    const dy = grid.y[emitterIndex] - y;
+    const dz = grid.z[emitterIndex] - z;
+    const distanceSquared = dx * dx + dy * dy + dz * dz;
+    const occlusionTransmission = getEmitterDirectionTransmission(
+      grid.openFaces[emitterIndex],
+      -dx,
+      -dy,
+      -dz,
+    );
+    // Insertion slack deliberately adds nearby cells beyond the exact sphere.
+    // Reject those and blocked directions before they can consume the bounded
+    // nearest-candidate budget needed by a reachable halo emitter.
+    if (
+      occlusionTransmission <= 0 ||
+      distanceSquared >= grid.radius[emitterIndex] ** 2
+    ) {
+      continue;
+    }
+
+    let insertionIndex = selectedCount;
+    while (insertionIndex > 0) {
+      const previousIndex = selectedIndices[insertionIndex - 1];
+      const previousDistance = selectedDistances[insertionIndex - 1];
+      if (
+        previousDistance < distanceSquared ||
+        (previousDistance === distanceSquared && previousIndex < emitterIndex)
+      ) {
+        break;
+      }
+      insertionIndex--;
+    }
+    if (insertionIndex >= maxCandidates) continue;
+    const nextCount = Math.min(selectedCount + 1, maxCandidates);
+    for (let i = nextCount - 1; i > insertionIndex; i--) {
+      selectedIndices[i] = selectedIndices[i - 1];
+      selectedDistances[i] = selectedDistances[i - 1];
+    }
+    selectedIndices[insertionIndex] = emitterIndex;
+    selectedDistances[insertionIndex] = distanceSquared;
+    selectedCount = nextCount;
+  }
+
+  for (let i = 0; i < selectedCount; i++) {
+    const emitterIndex = selectedIndices[i];
+    const distanceSquared = selectedDistances[i];
+    const dx = grid.x[emitterIndex] - x;
+    const dy = grid.y[emitterIndex] - y;
+    const dz = grid.z[emitterIndex] - z;
+    const occlusionTransmission = getEmitterDirectionTransmission(
+      grid.openFaces[emitterIndex],
+      -dx,
+      -dy,
+      -dz,
+    );
+    grid.candidateVisits++;
+    const radius = grid.radius[emitterIndex];
+    const dist = Math.sqrt(distanceSquared);
+    const t = 1 - dist / radius;
+    const falloff = t * t * (3 - 2 * t);
+    const lambert =
+      dist > 0
+        ? Math.max(0, (dx * normal[0] + dy * normal[1] + dz * normal[2]) / dist)
+        : 1;
+    const weight =
+      falloff *
+      (wrap + (1 - wrap) * lambert) *
+      occlusionTransmission *
+      VOXEL_EMITTED_LIGHT.intensity *
+      grid.powerGain[emitterIndex];
+    out[0] += grid.r[emitterIndex] * weight;
+    out[1] += grid.g[emitterIndex] * weight;
+    out[2] += grid.b[emitterIndex] * weight;
+  }
   out[0] = Math.min(out[0], VOXEL_EMITTED_LIGHT.maxContribution);
   out[1] = Math.min(out[1], VOXEL_EMITTED_LIGHT.maxContribution);
   out[2] = Math.min(out[2], VOXEL_EMITTED_LIGHT.maxContribution);
+}
+
+function nextEmitterCandidateStamp(grid: EmitterLightGrid): number {
+  if (grid.candidateStamp === 0xffff_ffff) {
+    grid.candidateStamps.fill(0);
+    grid.candidateStamp = 1;
+    return grid.candidateStamp;
+  }
+  grid.candidateStamp++;
+  return grid.candidateStamp;
 }
 
 function getEmitterDirectionTransmission(

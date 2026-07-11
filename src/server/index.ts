@@ -663,6 +663,15 @@ async function main() {
         }
       }
 
+      for (const region of regions) {
+        if (region.lod === 1) {
+          voxelMeshService.invalidateLod1EmitterColumn(
+            region.regionX,
+            region.regionY,
+          );
+        }
+      }
+
       for (const region of expandHaloAffectedVoxelRegions(regions)) {
         voxelMeshService.clear(
           `${region.lod}/${region.regionX}/${region.regionY}`,
@@ -762,6 +771,19 @@ function expandHaloAffectedVoxelRegions(
       for (let y = startY; y <= endY; y += span) {
         const key = `${region.lod}/${x}/${y}`;
         affected.set(key, { lod: region.lod, regionX: x, regionY: y });
+        if (region.lod === 1) {
+          for (const ancestorLod of [2, 4, 8, 16, 32]) {
+            const ancestorSpan = VOXEL_REGION_SIZE * ancestorLod;
+            const ancestorX = Math.floor(x / ancestorSpan) * ancestorSpan;
+            const ancestorY = Math.floor(y / ancestorSpan) * ancestorSpan;
+            const ancestorKey = `${ancestorLod}/${ancestorX}/${ancestorY}`;
+            affected.set(ancestorKey, {
+              lod: ancestorLod,
+              regionX: ancestorX,
+              regionY: ancestorY,
+            });
+          }
+        }
       }
     }
   }

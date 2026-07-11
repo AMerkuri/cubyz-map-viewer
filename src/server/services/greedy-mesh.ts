@@ -5,7 +5,7 @@
  *
  * Binary layout
  * ─────────────
- * Header (36 bytes)
+ * Header (44 bytes)
  *   u32  magic/version marker
  *   i32  worldX
  *   i32  worldY
@@ -15,6 +15,8 @@
  *   u32  greedyRecordCount
  *   u32  modelRecordCount
  *   u32  emitterRecordCount
+ *   u32  emitterMetadataOffset (0 when absent)
+ *   u32  emitterMetadataCount (0 when absent)
  *
  * Per-quad colors  (3 × quadCount bytes, padded to 4-byte alignment)
  *   u8 r, u8 g, u8 b   — one entry per quad (client expands to 4 vertices)
@@ -41,6 +43,10 @@
  *   i32 x, i32 y, i32 z relative to worldX/Y/ZBase in voxel cells
  *   u8 r, u8 g, u8 b, u8 flags (bit 0 halo, bits 1-6 open face mask)
  *
+ * Optional emitter metadata (4 × emitterMetadataCount bytes)
+ *   u16 power in unsigned Q8.8, u8 world radius, u8 reserved (zero)
+ *   The section is omitted when every record uses power 1 and radius 12.
+ *
  * Trailer (4 bytes)
  *   u32 chunkCoverage  — 16-bit bitmask, bit (cx*4+cy) set when the 32×32
  *                        chunk column at local offset (cx*32, cy*32) contains
@@ -52,18 +58,28 @@ import type { BlockColorTable } from "./block-color-table.js";
 import { VOXEL_POSITION_FIXED_SCALE } from "./block-shape-table.js";
 import { FALLBACK_BLOCK_COLOR } from "./color-map.js";
 import { logger } from "./logger.js";
+import {
+  EMITTER_DEFAULT_POWER,
+  EMITTER_DEFAULT_RADIUS,
+  EMITTER_MAX_POWER,
+  EMITTER_MAX_RADIUS,
+  EMITTER_POWER_FIXED_SCALE,
+} from "./voxel-emitter-aggregation.js";
 
 const reportedFallbackPaletteIndices = new Set<number>();
 const reportedOutOfRangePaletteIndices = new Set<number>();
 const AIR_LIKE_COLOR = { r: 0, g: 0, b: 0 };
 const MISSING_BLOCK_PALETTE_INDEX = 0xffff;
-const VOXEL_BINARY_MAGIC = 0x354d5856;
+const VOXEL_BINARY_MAGIC = 0x364d5856;
+const INT32_EMITTER_VOXEL_BINARY_MAGIC = 0x354d5856;
 const UINT16_EMITTER_VOXEL_BINARY_MAGIC = 0x344d5856;
 const PRE_EMITTER_VOXEL_BINARY_MAGIC = 0x334d5856;
 const LEGACY_VOXEL_BINARY_MAGIC = 0x324d5856;
 export const GREEDY_RECORD_BYTES = 12;
 const MODEL_RECORD_BYTES = 48;
 const EMITTER_RECORD_BYTES = 16;
+const EMITTER_METADATA_BYTES = 4;
+const VOXEL_BINARY_HEADER_BYTES = 44;
 
 export type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
 
@@ -102,6 +118,8 @@ export interface BinaryEmitterRecord {
   b: number;
   halo?: boolean;
   openFaces?: number;
+  power?: number;
+  radius?: number;
 }
 
 interface BinaryQuadMetrics {
@@ -114,6 +132,11 @@ interface BinaryQuadMetrics {
   modelRecordBytes: number;
   emitterRecords: number;
   emitterRecordBytes: number;
+  emitterMetadataBytes: number;
+  emitterPowerMin: number;
+  emitterPowerMax: number;
+  emitterRadiusMin: number;
+  emitterRadiusMax: number;
 }
 
 /** Width/depth of one voxel region column in world blocks (4 chunks × 32 = 128) */
@@ -267,8 +290,16 @@ export function encodeBinaryQuads(
   const greedyRecordBytes = greedyCubeQuads * GREEDY_RECORD_BYTES;
   const modelRecordBytes = modelQuads * MODEL_RECORD_BYTES;
   const emitterRecordBytes = validEmitterRecords.length * EMITTER_RECORD_BYTES;
+  const hasEmitterMetadata = validEmitterRecords.some(
+    (record) =>
+      (record.power ?? EMITTER_DEFAULT_POWER) !== EMITTER_DEFAULT_POWER ||
+      (record.radius ?? EMITTER_DEFAULT_RADIUS) !== EMITTER_DEFAULT_RADIUS,
+  );
+  const emitterMetadataBytes = hasEmitterMetadata
+    ? validEmitterRecords.length * EMITTER_METADATA_BYTES
+    : 0;
   const totalBytes =
-    36 +
+    VOXEL_BINARY_HEADER_BYTES +
     colorPadded +
     aoPadded +
     directionPadded +
@@ -277,6 +308,7 @@ export function encodeBinaryQuads(
     greedyRecordBytes +
     modelRecordBytes +
     emitterRecordBytes +
+    emitterMetadataBytes +
     4;
   const buf = new ArrayBuffer(totalBytes);
   const view = new DataView(buf);
@@ -290,24 +322,29 @@ export function encodeBinaryQuads(
   view.setUint32(24, greedyCubeQuads, true);
   view.setUint32(28, modelQuads, true);
   view.setUint32(32, validEmitterRecords.length, true);
+  const emitterMetadataOffset = hasEmitterMetadata
+    ? totalBytes - emitterMetadataBytes - 4
+    : 0;
+  view.setUint32(36, emitterMetadataOffset, true);
+  view.setUint32(40, hasEmitterMetadata ? validEmitterRecords.length : 0, true);
 
-  let off = 36;
+  let off = VOXEL_BINARY_HEADER_BYTES;
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadColors[qi * 3]);
     view.setUint8(off++, quadColors[qi * 3 + 1]);
     view.setUint8(off++, quadColors[qi * 3 + 2]);
   }
-  off = 36 + colorPadded;
+  off = VOXEL_BINARY_HEADER_BYTES + colorPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadAo[qi]);
   }
-  off = 36 + colorPadded + aoPadded;
+  off = VOXEL_BINARY_HEADER_BYTES + colorPadded + aoPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadDirections[qi]);
   }
-  off = 36 + colorPadded + aoPadded + directionPadded;
+  off = VOXEL_BINARY_HEADER_BYTES + colorPadded + aoPadded + directionPadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint16(
@@ -317,13 +354,18 @@ export function encodeBinaryQuads(
     );
     off += 2;
   }
-  off = 36 + colorPadded + aoPadded + directionPadded + palettePadded;
+  off =
+    VOXEL_BINARY_HEADER_BYTES +
+    colorPadded +
+    aoPadded +
+    directionPadded +
+    palettePadded;
 
   for (let qi = 0; qi < quadCount; qi++) {
     view.setUint8(off++, quadRenderKinds[qi] ?? 1);
   }
   off =
-    36 +
+    VOXEL_BINARY_HEADER_BYTES +
     colorPadded +
     aoPadded +
     directionPadded +
@@ -373,6 +415,29 @@ export function encodeBinaryQuads(
     );
   }
 
+  let emitterPowerMin = EMITTER_DEFAULT_POWER;
+  let emitterPowerMax = EMITTER_DEFAULT_POWER;
+  let emitterRadiusMin = EMITTER_DEFAULT_RADIUS;
+  let emitterRadiusMax = EMITTER_DEFAULT_RADIUS;
+  if (hasEmitterMetadata) {
+    emitterPowerMin = Number.POSITIVE_INFINITY;
+    emitterPowerMax = 0;
+    emitterRadiusMin = Number.POSITIVE_INFINITY;
+    emitterRadiusMax = 0;
+    for (const emitter of validEmitterRecords) {
+      const power = clampEmitterPower(emitter.power);
+      const radius = clampEmitterRadius(emitter.radius);
+      view.setUint16(off, Math.round(power * EMITTER_POWER_FIXED_SCALE), true);
+      off += 2;
+      view.setUint8(off++, radius);
+      view.setUint8(off++, 0);
+      emitterPowerMin = Math.min(emitterPowerMin, power);
+      emitterPowerMax = Math.max(emitterPowerMax, power);
+      emitterRadiusMin = Math.min(emitterRadiusMin, radius);
+      emitterRadiusMax = Math.max(emitterRadiusMax, radius);
+    }
+  }
+
   view.setUint32(off, chunkCoverage, true);
   return {
     buffer: buf,
@@ -386,6 +451,11 @@ export function encodeBinaryQuads(
       modelRecordBytes,
       emitterRecords: validEmitterRecords.length,
       emitterRecordBytes,
+      emitterMetadataBytes,
+      emitterPowerMin,
+      emitterPowerMax,
+      emitterRadiusMin,
+      emitterRadiusMax,
     },
   };
 }
@@ -411,6 +481,51 @@ export function readBinaryQuadMetrics(buf: ArrayBuffer): BinaryQuadMetrics {
   if (!header.hasSourceKinds && header.greedyRecordCount === undefined) {
     greedyCubeQuads = header.quadCount;
   }
+  const metadataCount = header.emitterMetadataCount ?? 0;
+  let emitterPowerMin = EMITTER_DEFAULT_POWER;
+  let emitterPowerMax = EMITTER_DEFAULT_POWER;
+  let emitterRadiusMin = EMITTER_DEFAULT_RADIUS;
+  let emitterRadiusMax = EMITTER_DEFAULT_RADIUS;
+  if (metadataCount > 0) {
+    const emitterEnd =
+      layout.positionOffset +
+      (header.greedyRecordCount ?? 0) * GREEDY_RECORD_BYTES +
+      (header.modelRecordCount ?? 0) * MODEL_RECORD_BYTES +
+      (header.emitterRecordCount ?? 0) * EMITTER_RECORD_BYTES;
+    if (
+      metadataCount !== header.emitterRecordCount ||
+      header.emitterMetadataOffset !== emitterEnd
+    ) {
+      throw new Error("invalid voxel emitter metadata header");
+    }
+    const metadataEnd =
+      header.emitterMetadataOffset + metadataCount * EMITTER_METADATA_BYTES;
+    if (metadataEnd + 4 !== buf.byteLength) {
+      throw new Error("invalid voxel emitter metadata bounds");
+    }
+    emitterPowerMin = Number.POSITIVE_INFINITY;
+    emitterPowerMax = 0;
+    emitterRadiusMin = Number.POSITIVE_INFINITY;
+    emitterRadiusMax = 0;
+    for (let index = 0; index < metadataCount; index++) {
+      const offset =
+        header.emitterMetadataOffset + index * EMITTER_METADATA_BYTES;
+      const power = view.getUint16(offset, true) / EMITTER_POWER_FIXED_SCALE;
+      const radius = view.getUint8(offset + 2);
+      if (
+        power <= 0 ||
+        radius <= 0 ||
+        radius > EMITTER_MAX_RADIUS ||
+        view.getUint8(offset + 3) !== 0
+      ) {
+        throw new Error("invalid voxel emitter metadata entry");
+      }
+      emitterPowerMin = Math.min(emitterPowerMin, power);
+      emitterPowerMax = Math.max(emitterPowerMax, power);
+      emitterRadiusMin = Math.min(emitterRadiusMin, radius);
+      emitterRadiusMax = Math.max(emitterRadiusMax, radius);
+    }
+  }
   return {
     quadCount: header.quadCount,
     greedyCubeQuads,
@@ -421,6 +536,11 @@ export function readBinaryQuadMetrics(buf: ArrayBuffer): BinaryQuadMetrics {
     modelRecordBytes: modelQuads * MODEL_RECORD_BYTES,
     emitterRecords: header.emitterRecordCount ?? 0,
     emitterRecordBytes: (header.emitterRecordCount ?? 0) * EMITTER_RECORD_BYTES,
+    emitterMetadataBytes: metadataCount * EMITTER_METADATA_BYTES,
+    emitterPowerMin,
+    emitterPowerMax,
+    emitterRadiusMin,
+    emitterRadiusMax,
   };
 }
 
@@ -459,11 +579,33 @@ export function readBinaryHeader(
   greedyRecordCount?: number;
   modelRecordCount?: number;
   emitterRecordCount?: number;
+  emitterMetadataOffset?: number;
+  emitterMetadataCount?: number;
 } {
   if (byteLength < 20) throw new Error("buffer too small for voxel header");
   if (
+    byteLength >= VOXEL_BINARY_HEADER_BYTES &&
+    view.getUint32(0, true) === VOXEL_BINARY_MAGIC
+  ) {
+    return {
+      worldX: view.getInt32(4, true),
+      worldY: view.getInt32(8, true),
+      worldZ: view.getInt32(12, true),
+      quadCount: view.getUint32(16, true),
+      voxelSize: view.getUint32(20, true) || 1,
+      headerBytes: VOXEL_BINARY_HEADER_BYTES,
+      hasSourceKinds: false,
+      hasPositionKinds: false,
+      greedyRecordCount: view.getUint32(24, true),
+      modelRecordCount: view.getUint32(28, true),
+      emitterRecordCount: view.getUint32(32, true),
+      emitterMetadataOffset: view.getUint32(36, true),
+      emitterMetadataCount: view.getUint32(40, true),
+    };
+  }
+  if (
     byteLength >= 36 &&
-    (view.getUint32(0, true) === VOXEL_BINARY_MAGIC ||
+    (view.getUint32(0, true) === INT32_EMITTER_VOXEL_BINARY_MAGIC ||
       view.getUint32(0, true) === UINT16_EMITTER_VOXEL_BINARY_MAGIC)
   ) {
     return {
@@ -567,6 +709,23 @@ function getBinaryQuadLayout(quadCount: number, headerBytes: number) {
 
 function clampByte(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function clampEmitterPower(value: number | undefined): number {
+  const finite = Number.isFinite(value)
+    ? (value ?? EMITTER_DEFAULT_POWER)
+    : EMITTER_DEFAULT_POWER;
+  return Math.max(
+    1 / EMITTER_POWER_FIXED_SCALE,
+    Math.min(EMITTER_MAX_POWER, finite),
+  );
+}
+
+function clampEmitterRadius(value: number | undefined): number {
+  const finite = Number.isFinite(value)
+    ? (value ?? EMITTER_DEFAULT_RADIUS)
+    : EMITTER_DEFAULT_RADIUS;
+  return Math.max(1, Math.min(EMITTER_MAX_RADIUS, Math.round(finite)));
 }
 
 function isParametricGreedyQuad(quad: BinaryQuad): quad is BinaryQuad & {

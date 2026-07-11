@@ -170,13 +170,28 @@ function getHaloAffectedVoxelRegions(
   const endX = Math.floor((regionX + span - 1 + radius) / span) * span;
   const startY = Math.floor((regionY - radius) / span) * span;
   const endY = Math.floor((regionY + span - 1 + radius) / span) * span;
-  const regions: Array<{ lod: number; regionX: number; regionY: number }> = [];
+  const regions = new Map<
+    string,
+    { lod: number; regionX: number; regionY: number }
+  >();
 
   for (let x = startX; x <= endX; x += span) {
     for (let y = startY; y <= endY; y += span) {
-      regions.push({ lod, regionX: x, regionY: y });
+      regions.set(`${lod}/${x}/${y}`, { lod, regionX: x, regionY: y });
+      if (lod === 1) {
+        for (const ancestorLod of [2, 4, 8, 16, 32]) {
+          const ancestorSpan = regionWorldSize(ancestorLod);
+          const ancestorX = Math.floor(x / ancestorSpan) * ancestorSpan;
+          const ancestorY = Math.floor(y / ancestorSpan) * ancestorSpan;
+          regions.set(`${ancestorLod}/${ancestorX}/${ancestorY}`, {
+            lod: ancestorLod,
+            regionX: ancestorX,
+            regionY: ancestorY,
+          });
+        }
+      }
     }
   }
 
-  return regions;
+  return [...regions.values()];
 }

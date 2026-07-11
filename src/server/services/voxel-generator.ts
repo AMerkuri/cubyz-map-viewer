@@ -39,6 +39,14 @@ import {
 } from "./greedy-mesh.js";
 import { logger } from "./logger.js";
 import { VOXEL_GENERATOR_CACHE_VERSION } from "./voxel-cache-version.js";
+import {
+  EMITTER_COARSE_BASE_RADIUS,
+  EMITTER_MAX_POWER,
+  EMITTER_MAX_SUMMARY_RADIUS,
+  type EmitterSummaryBuildMetrics,
+  type EmitterSummaryCluster,
+  type EmitterSummaryNode,
+} from "./voxel-emitter-aggregation.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 const COLUMN_VOXELS = VOXEL_REGION_SIZE;
@@ -47,6 +55,8 @@ const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 const MAX_ENTRANCE_DEPTH_WORLD = 64;
 const EMITTED_LIGHT_RADIUS_CELLS = 12;
 const MAX_EMITTER_RECORDS_PER_PAYLOAD = 8192;
+const HALO_PROTECTED_RECORDS_PER_EDGE = 256;
+const HALO_PROTECTED_RECORDS_TOTAL = HALO_PROTECTED_RECORDS_PER_EDGE * 4;
 const EMITTER_OPEN_FACE_X_POS = 1 << 0;
 const EMITTER_OPEN_FACE_X_NEG = 1 << 1;
 const EMITTER_OPEN_FACE_Y_POS = 1 << 2;
@@ -138,13 +148,18 @@ export async function generateVoxelMesh(
   lod: number,
   regionX: number,
   regionY: number,
-  options?: { includeHaloEmitters?: boolean },
+  options?: {
+    includeHaloEmitters?: boolean;
+    emitterSummary?: EmitterSummaryNode;
+    emitterSummaryMetrics?: EmitterSummaryBuildMetrics;
+  },
 ): Promise<{ buffer: ArrayBuffer | null; stats?: VoxelGenerationStats }> {
   // Debug-only voxel-lighting diagnostic. When halo emitters are disabled the
   // persistent voxel cache is bypassed entirely so diagnostic payloads never
   // contaminate normal cache entries and normal cached payloads never hide
   // the halo cost being measured.
   const includeHaloEmitters = options?.includeHaloEmitters !== false;
+  const emitterSummary = options?.emitterSummary;
   const columnWorldSpan = COLUMN_VOXELS * lod;
   if (
     !VALID_LODS.includes(lod) ||
@@ -152,6 +167,11 @@ export async function generateVoxelMesh(
     regionY % columnWorldSpan !== 0
   ) {
     throw new Error("Invalid lod/region coordinates");
+  }
+  if (lod > 1 && !emitterSummary) {
+    throw new Error(
+      "Coarse voxel generation requires an LOD 1 emitter summary",
+    );
   }
 
   const colDir = join(
@@ -193,6 +213,7 @@ export async function generateVoxelMesh(
     .update(
       `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${haloColumnSignature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}|${blockShapes.signature}`,
     )
+    .update(`|${lod > 1 ? emitterSummary?.signature : "lod1"}`)
     .update(`|${blockColors.signature}`)
     .digest("hex");
   const cached = includeHaloEmitters
@@ -207,6 +228,9 @@ export async function generateVoxelMesh(
       stats: {
         cacheTier: "disk",
         ...metrics,
+        ownEmitterRecords: lod > 1 ? 0 : undefined,
+        aggregatedEmitterRecords: lod > 1 ? metrics.emitterRecords : 0,
+        haloEmitterRecords: lod > 1 ? 0 : undefined,
         droppedModelQuads: 0,
         modelQuadBudget: LOD1_MODEL_QUAD_BUDGET,
         chunkColumns: countChunkColumns(view, cached.byteLength),
@@ -241,7 +265,10 @@ export async function generateVoxelMesh(
   // route external chunk access through this cache so the same `.region` file
   // is parsed at most once per generation job instead of once per chunk read.
   const externalRegionLoaders = new Map<string, Promise<RegionData | null>>();
-  const occupancyCache = new Map<string, Promise<boolean>>();
+  // One generation-local interpretation cache serves target and external cells.
+  // Promise values also coalesce concurrent face checks without changing the
+  // existing open semantics for unavailable or vertically out-of-range cells.
+  const traversabilityCache = new Map<string, Promise<boolean>>();
   const faces = new Map<string, FaceEntry>();
   const transparentFaceCells = new Set<string>();
   const modelBlocks = new Set<string>();
@@ -356,7 +383,6 @@ export async function generateVoxelMesh(
     y: number,
     z: number,
   ): void {
-    if (lod !== 1) return;
     const paletteIndex = getPaletteIndex(blockValue);
     if (isAirType(paletteIndex)) return;
     const light = getEmittedLight(paletteIndex);
@@ -364,6 +390,9 @@ export async function generateVoxelMesh(
     const key = `${x}/${y}/${z}`;
     if (emitterBlocks.has(key)) return;
     emitterBlocks.add(key);
+    if (lod !== 1) {
+      return;
+    }
     emitterRecords.push({ x, y, z, r: light.r, g: light.g, b: light.b });
   }
 
@@ -451,6 +480,7 @@ export async function generateVoxelMesh(
       })),
     )
   ).filter((record) => record.openFaces !== 0);
+  const aggregatedEmitterRecords = buildSummaryEmitterRecords(baseCellZ);
   let haloMs: number | undefined;
   let haloEmitterRecords: BinaryEmitterRecord[] = [];
   if (lod === 1 && includeHaloEmitters) {
@@ -461,13 +491,16 @@ export async function generateVoxelMesh(
     );
     haloMs = performance.now() - haloStartedAt;
   }
-  const allEmitterRecords = capEmitterRecords([
-    ...rebasedEmitterRecords,
-    ...haloEmitterRecords,
-  ]);
-  const ownEmitterRecordCount = allEmitterRecords.filter(
-    (record) => !record.halo,
-  ).length;
+  const allEmitterRecords = capEmitterRecords(
+    [
+      ...(lod === 1 ? rebasedEmitterRecords : aggregatedEmitterRecords),
+      ...haloEmitterRecords,
+    ],
+    Math.ceil(maxFaceZ) - baseCellZ,
+  );
+  const ownEmitterRecordCount =
+    lod === 1 ? allEmitterRecords.filter((record) => !record.halo).length : 0;
+  const aggregatedEmitterRecordCount = lod > 1 ? allEmitterRecords.length : 0;
 
   let chunkCoverage = 0;
   for (const idx of visibleChunkColumns) {
@@ -482,7 +515,7 @@ export async function generateVoxelMesh(
     lod,
     blockColors,
     chunkCoverage,
-    lod === 1 ? allEmitterRecords : [],
+    allEmitterRecords,
   );
   const mesh = encodedMesh.buffer;
   const view = new DataView(mesh);
@@ -500,10 +533,14 @@ export async function generateVoxelMesh(
       cacheTier: "worker",
       ...encodedMesh.metrics,
       ownEmitterRecords: ownEmitterRecordCount,
-      haloEmitterRecords: Math.max(
-        0,
-        encodedMesh.metrics.emitterRecords - ownEmitterRecordCount,
-      ),
+      aggregatedEmitterRecords: aggregatedEmitterRecordCount,
+      haloEmitterRecords:
+        lod === 1
+          ? Math.max(
+              0,
+              encodedMesh.metrics.emitterRecords - ownEmitterRecordCount,
+            )
+          : 0,
       haloMs,
       droppedModelQuads,
       modelQuadBudget: LOD1_MODEL_QUAD_BUDGET,
@@ -518,8 +555,53 @@ export async function generateVoxelMesh(
       externalRegionParseErrors,
       minWorldZ: baseWorldZ,
       maxWorldZ: extractMaxWorldZ(view, mesh.byteLength),
+      summaryCacheOutcome: options?.emitterSummaryMetrics?.cacheOutcome,
+      summaryBuildMs: options?.emitterSummaryMetrics?.buildMs,
+      summaryLeafParses: options?.emitterSummaryMetrics?.leafParses,
+      summaryRawSourceCount: options?.emitterSummary?.rawSourceCount,
+      summaryRetainedClusterCount: options?.emitterSummary?.clusters.length,
+      summaryCappedClusterCount: options?.emitterSummary?.cappedClusterCount,
     },
   };
+
+  function buildSummaryEmitterRecords(
+    baseCellZ: number,
+  ): BinaryEmitterRecord[] {
+    if (lod === 1 || !emitterSummary) return [];
+    return emitterSummary.clusters.map((cluster) =>
+      summaryClusterToRecord(cluster, baseCellZ),
+    );
+  }
+
+  function summaryClusterToRecord(
+    cluster: EmitterSummaryCluster,
+    baseCellZ: number,
+  ): BinaryEmitterRecord {
+    const power = Math.min(
+      EMITTER_MAX_POWER,
+      Math.max(cluster.powerR, cluster.powerG, cluster.powerB),
+    );
+    const extentRadius =
+      Math.hypot(
+        cluster.maxX - cluster.minX,
+        cluster.maxY - cluster.minY,
+        cluster.maxZ - cluster.minZ,
+      ) / 2;
+    return {
+      x: Math.round((cluster.centroidX - regionX) / lod - 0.5),
+      y: Math.round((cluster.centroidY - regionY) / lod - 0.5),
+      z: Math.round(cluster.centroidZ / lod - 0.5) - baseCellZ,
+      r: Math.round((cluster.powerR / power) * 255),
+      g: Math.round((cluster.powerG / power) * 255),
+      b: Math.round((cluster.powerB / power) * 255),
+      openFaces: cluster.openFaces,
+      power,
+      radius: Math.min(
+        EMITTER_MAX_SUMMARY_RADIUS,
+        Math.ceil(EMITTER_COARSE_BASE_RADIUS + extentRadius * 0.5),
+      ),
+    };
+  }
 
   async function seedTopBoundary(): Promise<void> {
     for (let chunkX = 0; chunkX < CHUNK_COLUMNS_PER_AXIS; chunkX++) {
@@ -1407,15 +1489,21 @@ export async function generateVoxelMesh(
     y: number,
     z: number,
   ): Promise<boolean> {
+    return !(await isTraversableCellWorld(x, y, z));
+  }
+
+  async function isTraversableCellWorld(
+    x: number,
+    y: number,
+    z: number,
+  ): Promise<boolean> {
     const cacheKey = `${x}/${y}/${z}`;
-    const cached = occupancyCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
+    const cached = traversabilityCache.get(cacheKey);
+    if (cached) return cached;
 
     const pending = (async () => {
       if (z < minChunkZ * CHUNK_SIZE || z > (maxChunkZ + 1) * CHUNK_SIZE - 1) {
-        return false;
+        return true;
       }
 
       const chunkX = Math.floor(x / CHUNK_SIZE);
@@ -1424,7 +1512,6 @@ export async function generateVoxelMesh(
       const localX = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
       const localY = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
       const localZ = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-
       const chunk =
         chunkX >= 0 &&
         chunkX < CHUNK_COLUMNS_PER_AXIS &&
@@ -1433,41 +1520,13 @@ export async function generateVoxelMesh(
           ? await loadChunk(chunkX, chunkY, chunkZ)
           : await loadExternalChunk(chunkX, chunkY, chunkZ);
 
-      if (!chunk) return false;
-      return !isTraversable(chunk, localIndex(localX, localY, localZ));
+      if (!chunk) return true;
+      return isTraversableBlockValue(
+        chunk.blocks[localIndex(localX, localY, localZ)] ?? 0,
+      );
     })();
-
-    occupancyCache.set(cacheKey, pending);
+    traversabilityCache.set(cacheKey, pending);
     return pending;
-  }
-
-  async function isTraversableCellWorld(
-    x: number,
-    y: number,
-    z: number,
-  ): Promise<boolean> {
-    if (z < minChunkZ * CHUNK_SIZE || z > (maxChunkZ + 1) * CHUNK_SIZE - 1) {
-      return true;
-    }
-
-    const chunkX = Math.floor(x / CHUNK_SIZE);
-    const chunkY = Math.floor(y / CHUNK_SIZE);
-    const chunkZ = Math.floor(z / CHUNK_SIZE);
-    const localX = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localY = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const localZ = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const chunk =
-      chunkX >= 0 &&
-      chunkX < CHUNK_COLUMNS_PER_AXIS &&
-      chunkY >= 0 &&
-      chunkY < CHUNK_COLUMNS_PER_AXIS
-        ? await loadChunk(chunkX, chunkY, chunkZ)
-        : await loadExternalChunk(chunkX, chunkY, chunkZ);
-
-    if (!chunk) return true;
-    return isTraversableBlockValue(
-      chunk.blocks[localIndex(localX, localY, localZ)] ?? 0,
-    );
   }
 
   function emitModelBlock(
@@ -2175,10 +2234,153 @@ async function buildHaloColumnSignature(
 
 function capEmitterRecords(
   records: BinaryEmitterRecord[],
+  maxVisibleZ: number,
 ): BinaryEmitterRecord[] {
-  return records
-    .sort(compareEmitterRecords)
-    .slice(0, MAX_EMITTER_RECORDS_PER_PAYLOAD);
+  if (records.length <= MAX_EMITTER_RECORDS_PER_PAYLOAD) {
+    return records.sort(compareEmitterRecords);
+  }
+
+  type IndexedEmitter = { record: BinaryEmitterRecord; index: number };
+  type HorizontalEdge = "x-" | "x+" | "y-" | "y+";
+  const edges: HorizontalEdge[] = ["x-", "x+", "y-", "y+"];
+  const indexed = records.map(
+    (record, index): IndexedEmitter => ({
+      record,
+      index,
+    }),
+  );
+  const selected = new Set<number>();
+  const relevantHalo = indexed.filter(
+    (candidate) =>
+      candidate.record.halo === true &&
+      getDistanceToReceivingVolumeSquared(candidate.record, maxVisibleZ) <=
+        EMITTED_LIGHT_RADIUS_CELLS ** 2,
+  );
+
+  // Under cap pressure, reserve 256 slots for each eligible receiving edge.
+  // Corner records participate in both edge rankings but their source index is
+  // selected once. The resulting unused portion of the fixed 1,024-slot halo
+  // reservation is filled by the globally best remaining boundary candidate.
+  // All remaining capacity then follows the legacy own-first record order.
+  for (const edge of edges) {
+    const edgeCandidates = relevantHalo
+      .filter((candidate) => isEmitterBeyondEdge(candidate.record, edge))
+      .sort((a, b) => compareBoundaryCandidates(a, b, edge, maxVisibleZ));
+    for (
+      let index = 0;
+      index < Math.min(HALO_PROTECTED_RECORDS_PER_EDGE, edgeCandidates.length);
+      index++
+    ) {
+      const candidate = edgeCandidates[index];
+      if (candidate) selected.add(candidate.index);
+    }
+  }
+
+  const globallyRankedHalo = relevantHalo.sort((a, b) =>
+    compareBoundaryCandidates(a, b, undefined, maxVisibleZ),
+  );
+  for (const candidate of globallyRankedHalo) {
+    if (selected.size >= HALO_PROTECTED_RECORDS_TOTAL) break;
+    selected.add(candidate.index);
+  }
+
+  const fallback = indexed.sort(
+    (a, b) => compareEmitterRecords(a.record, b.record) || a.index - b.index,
+  );
+  for (const candidate of fallback) {
+    if (selected.size >= MAX_EMITTER_RECORDS_PER_PAYLOAD) break;
+    selected.add(candidate.index);
+  }
+
+  return indexed
+    .filter((candidate) => selected.has(candidate.index))
+    .sort(
+      (a, b) => compareEmitterRecords(a.record, b.record) || a.index - b.index,
+    )
+    .map((candidate) => candidate.record);
+}
+
+function compareBoundaryCandidates(
+  a: { record: BinaryEmitterRecord; index: number },
+  b: { record: BinaryEmitterRecord; index: number },
+  edge: "x-" | "x+" | "y-" | "y+" | undefined,
+  maxVisibleZ: number,
+): number {
+  const boundaryDistanceA = edge
+    ? getDistanceBeyondEdge(a.record, edge)
+    : getHorizontalDistanceToReceivingRegion(a.record);
+  const boundaryDistanceB = edge
+    ? getDistanceBeyondEdge(b.record, edge)
+    : getHorizontalDistanceToReceivingRegion(b.record);
+  return (
+    boundaryDistanceA - boundaryDistanceB ||
+    getVerticalDistanceToVisibleRange(a.record.z, maxVisibleZ) -
+      getVerticalDistanceToVisibleRange(b.record.z, maxVisibleZ) ||
+    compareEmitterRecords(a.record, b.record) ||
+    a.index - b.index
+  );
+}
+
+function getDistanceToReceivingVolumeSquared(
+  record: BinaryEmitterRecord,
+  maxVisibleZ: number,
+): number {
+  const dx =
+    record.x < 0 ? -record.x : Math.max(0, record.x - COLUMN_VOXELS + 1);
+  const dy =
+    record.y < 0 ? -record.y : Math.max(0, record.y - COLUMN_VOXELS + 1);
+  const dz = getVerticalDistanceToVisibleRange(record.z, maxVisibleZ);
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function getHorizontalDistanceToReceivingRegion(
+  record: BinaryEmitterRecord,
+): number {
+  const dx =
+    record.x < 0 ? -record.x : Math.max(0, record.x - COLUMN_VOXELS + 1);
+  const dy =
+    record.y < 0 ? -record.y : Math.max(0, record.y - COLUMN_VOXELS + 1);
+  return dx * dx + dy * dy;
+}
+
+function getVerticalDistanceToVisibleRange(
+  z: number,
+  maxVisibleZ: number,
+): number {
+  if (z < 0) return -z;
+  return Math.max(0, z - maxVisibleZ);
+}
+
+function isEmitterBeyondEdge(
+  record: BinaryEmitterRecord,
+  edge: "x-" | "x+" | "y-" | "y+",
+): boolean {
+  switch (edge) {
+    case "x-":
+      return record.x < 0;
+    case "x+":
+      return record.x >= COLUMN_VOXELS;
+    case "y-":
+      return record.y < 0;
+    case "y+":
+      return record.y >= COLUMN_VOXELS;
+  }
+}
+
+function getDistanceBeyondEdge(
+  record: BinaryEmitterRecord,
+  edge: "x-" | "x+" | "y-" | "y+",
+): number {
+  switch (edge) {
+    case "x-":
+      return -record.x;
+    case "x+":
+      return record.x - COLUMN_VOXELS + 1;
+    case "y-":
+      return -record.y;
+    case "y+":
+      return record.y - COLUMN_VOXELS + 1;
+  }
 }
 
 function compareEmitterRecords(

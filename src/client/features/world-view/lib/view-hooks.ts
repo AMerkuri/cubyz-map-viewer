@@ -61,6 +61,7 @@ export function useWorld3DSceneRuntime(args: {
     current: ReturnType<typeof useWorldData>;
   };
   loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  loadedVoxelsRevisionRef: { current: number };
   blockLightStatsRef: { current: BlockLightRuntimeStats };
   onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };
@@ -123,6 +124,7 @@ export function useWorld3DSceneRuntime(args: {
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    loadedVoxelsRevisionRef,
     blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,
@@ -194,6 +196,7 @@ export function useWorld3DSceneRuntime(args: {
       terrainLoadGenerationRef,
       worldDataRef,
       loadedVoxelsRef,
+      loadedVoxelsRevisionRef,
       blockLightStatsRef,
       onCursorMoveRef,
       onPlayerClickRef,
@@ -243,6 +246,7 @@ export function useWorld3DSceneRuntime(args: {
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    loadedVoxelsRevisionRef,
     blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,

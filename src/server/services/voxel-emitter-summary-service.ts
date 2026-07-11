@@ -1,0 +1,771 @@
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
+import {
+  CHUNK_SIZE,
+  parseRegionFile,
+  REGION_SIZE,
+  type RegionData,
+} from "../parsers/region.js";
+import type { BlockColorTable } from "./block-color-table.js";
+import {
+  type BlockShapeTable,
+  resolveShapeForLod,
+} from "./block-shape-table.js";
+import { LRUCache } from "./cache.js";
+import {
+  EMITTER_SUMMARY_CLUSTER_EDGE_BY_LOD,
+  EMITTER_SUMMARY_FORMAT_VERSION,
+  EMITTER_SUMMARY_LIMIT_BY_LOD,
+  EMITTER_SUMMARY_SIGNATURE,
+  type EmitterSummaryBuildMetrics,
+  type EmitterSummaryCluster,
+  type EmitterSummaryLod,
+  type EmitterSummaryNode,
+  type EmitterSummaryResult,
+  isEmitterSummaryLod,
+} from "./voxel-emitter-aggregation.js";
+
+const REGION_CELLS = CHUNK_SIZE * REGION_SIZE;
+const PROJECT_VOXEL_CACHE_DIR = resolve(
+  process.env.VOXEL_CACHE_DIR ??
+    join(process.cwd(), "dist", "server", "cache", "voxels"),
+);
+const OPEN_FACE_STEPS = [
+  { dx: 1, dy: 0, dz: 0, bit: 1 << 0 },
+  { dx: -1, dy: 0, dz: 0, bit: 1 << 1 },
+  { dx: 0, dy: 1, dz: 0, bit: 1 << 2 },
+  { dx: 0, dy: -1, dz: 0, bit: 1 << 3 },
+  { dx: 0, dy: 0, dz: 1, bit: 1 << 4 },
+  { dx: 0, dy: 0, dz: -1, bit: 1 << 5 },
+] as const;
+
+interface LoadedLeafRegions {
+  regions: Map<string, RegionData | null>;
+  leafParses: number;
+}
+
+interface BuiltClusters {
+  clusters: EmitterSummaryCluster[];
+  cappedClusterCount: number;
+}
+
+export class VoxelEmitterSummaryService {
+  private readonly memory: LRUCache<string, EmitterSummaryNode>;
+  private readonly inFlight = new Map<string, Promise<EmitterSummaryResult>>();
+  private readonly cacheRoot: string;
+
+  constructor(
+    private readonly savePath: string,
+    private readonly blockColors: BlockColorTable,
+    private readonly blockShapes: BlockShapeTable,
+    memoryCacheSize = 512,
+  ) {
+    const saveNamespace = createHash("sha1")
+      .update(savePath)
+      .digest("hex")
+      .slice(0, 16);
+    this.cacheRoot = join(
+      PROJECT_VOXEL_CACHE_DIR,
+      saveNamespace,
+      "emitter-summaries",
+      String(EMITTER_SUMMARY_FORMAT_VERSION),
+    );
+    this.memory = new LRUCache(memoryCacheSize);
+  }
+
+  getNode(
+    lod: number,
+    regionX: number,
+    regionY: number,
+  ): Promise<EmitterSummaryResult> {
+    if (!isEmitterSummaryLod(lod)) {
+      return Promise.reject(new Error(`Invalid emitter summary LOD: ${lod}`));
+    }
+    const span = REGION_CELLS * lod;
+    if (regionX % span !== 0 || regionY % span !== 0) {
+      return Promise.reject(new Error("Unaligned emitter summary coordinates"));
+    }
+
+    const key = nodeKey(lod, regionX, regionY);
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+
+    const promise = this.loadOrBuildNode(lod, regionX, regionY).finally(() => {
+      if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+
+  clear(): void {
+    this.memory.clear();
+    this.inFlight.clear();
+  }
+
+  invalidate(lod: EmitterSummaryLod, regionX: number, regionY: number): void {
+    this.memory.delete(nodeKey(lod, regionX, regionY));
+    this.inFlight.delete(nodeKey(lod, regionX, regionY));
+    void rm(this.nodePath(lod, regionX, regionY), { force: true });
+  }
+
+  private async loadOrBuildNode(
+    lod: EmitterSummaryLod,
+    regionX: number,
+    regionY: number,
+  ): Promise<EmitterSummaryResult> {
+    const startedAt = performance.now();
+    if (lod === 1) {
+      const sourceSignature = await this.buildLeafSourceSignature(
+        regionX,
+        regionY,
+      );
+      const cached = await this.readCachedNode(
+        lod,
+        regionX,
+        regionY,
+        sourceSignature,
+      );
+      if (cached) {
+        return resultForCachedNode(cached, performance.now() - startedAt);
+      }
+      const { clusters, rawSourceCount, cappedClusterCount, leafParses } =
+        await this.buildLeaf(regionX, regionY);
+      const node = this.createNode(
+        lod,
+        regionX,
+        regionY,
+        sourceSignature,
+        rawSourceCount,
+        cappedClusterCount,
+        clusters,
+      );
+      await this.persistNode(node);
+      return {
+        node,
+        metrics: {
+          cacheOutcome: "built",
+          buildMs: performance.now() - startedAt,
+          leafParses,
+          rawSourceCount,
+          retainedClusterCount: clusters.length,
+          cappedClusterCount,
+        },
+      };
+    }
+
+    const childLod = (lod / 2) as EmitterSummaryLod;
+    const childSpan = REGION_CELLS * childLod;
+    const children = await Promise.all([
+      this.getNode(childLod, regionX, regionY),
+      this.getNode(childLod, regionX + childSpan, regionY),
+      this.getNode(childLod, regionX, regionY + childSpan),
+      this.getNode(childLod, regionX + childSpan, regionY + childSpan),
+    ]);
+    const sourceSignature = createHash("sha1")
+      .update(children.map(({ node }) => node.signature).join("|"))
+      .digest("hex");
+    const cached = await this.readCachedNode(
+      lod,
+      regionX,
+      regionY,
+      sourceSignature,
+    );
+    const childMetrics = mergeMetrics(children.map(({ metrics }) => metrics));
+    if (cached) {
+      return {
+        node: cached,
+        metrics: {
+          ...childMetrics,
+          cacheOutcome: "disk",
+          buildMs: performance.now() - startedAt,
+          retainedClusterCount: cached.clusters.length,
+          cappedClusterCount: cached.cappedClusterCount,
+        },
+      };
+    }
+
+    const rawSourceCount = children.reduce(
+      (sum, child) => sum + child.node.rawSourceCount,
+      0,
+    );
+    const inheritedCapped = children.reduce(
+      (sum, child) => sum + child.node.cappedClusterCount,
+      0,
+    );
+    const built = clusterForLod(
+      children.flatMap(({ node }) => node.clusters),
+      lod,
+    );
+    const node = this.createNode(
+      lod,
+      regionX,
+      regionY,
+      sourceSignature,
+      rawSourceCount,
+      inheritedCapped + built.cappedClusterCount,
+      built.clusters,
+    );
+    await this.persistNode(node);
+    return {
+      node,
+      metrics: {
+        ...childMetrics,
+        cacheOutcome: "built",
+        buildMs: performance.now() - startedAt,
+        rawSourceCount,
+        retainedClusterCount: node.clusters.length,
+        cappedClusterCount: node.cappedClusterCount,
+      },
+    };
+  }
+
+  private async buildLeaf(
+    regionX: number,
+    regionY: number,
+  ): Promise<{
+    clusters: EmitterSummaryCluster[];
+    rawSourceCount: number;
+    cappedClusterCount: number;
+    leafParses: number;
+  }> {
+    const loaded = await this.loadLeafRegions(regionX, regionY);
+    const clusters: EmitterSummaryCluster[] = [];
+    const centerPrefix = `${regionX}/${regionY}/`;
+
+    for (const [key, region] of loaded.regions) {
+      if (!key.startsWith(centerPrefix) || !region) continue;
+      for (const chunk of region.chunks) {
+        if (!chunk) continue;
+        for (let x = 0; x < CHUNK_SIZE; x++) {
+          for (let y = 0; y < CHUNK_SIZE; y++) {
+            for (let z = 0; z < CHUNK_SIZE; z++) {
+              const blockValue = chunk.blocks[localIndex(x, y, z)] ?? 0;
+              const paletteIndex = blockValue & 0xffff;
+              const emitted = this.getEmittedLight(paletteIndex);
+              if (!emitted) continue;
+              const worldX = region.worldX + chunk.rx * CHUNK_SIZE + x;
+              const worldY = region.worldY + chunk.ry * CHUNK_SIZE + y;
+              const worldZ = region.worldZ + chunk.rz * CHUNK_SIZE + z;
+              const openFaces = this.getOpenFaces(
+                loaded.regions,
+                worldX,
+                worldY,
+                worldZ,
+              );
+              if (openFaces === 0) continue;
+              const scale = Math.max(emitted.r, emitted.g, emitted.b);
+              const powerR = emitted.r / scale;
+              const powerG = emitted.g / scale;
+              const powerB = emitted.b / scale;
+              const weight = luminance(powerR, powerG, powerB);
+              clusters.push({
+                powerR,
+                powerG,
+                powerB,
+                centroidX: worldX + 0.5,
+                centroidY: worldY + 0.5,
+                centroidZ: worldZ + 0.5,
+                centroidWeight: weight,
+                sourceCount: 1,
+                openFaces,
+                minX: worldX,
+                minY: worldY,
+                minZ: worldZ,
+                maxX: worldX + 1,
+                maxY: worldY + 1,
+                maxZ: worldZ + 1,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const rawSourceCount = clusters.length;
+    const built = clusterForLod(clusters, 1);
+    return {
+      ...built,
+      rawSourceCount,
+      leafParses: loaded.leafParses,
+    };
+  }
+
+  private async loadLeafRegions(
+    regionX: number,
+    regionY: number,
+  ): Promise<LoadedLeafRegions> {
+    const regions = new Map<string, RegionData | null>();
+    let leafParses = 0;
+    const columns = [
+      [regionX, regionY],
+      [regionX - REGION_CELLS, regionY],
+      [regionX + REGION_CELLS, regionY],
+      [regionX, regionY - REGION_CELLS],
+      [regionX, regionY + REGION_CELLS],
+    ] as const;
+
+    await Promise.all(
+      columns.map(async ([columnX, columnY]) => {
+        const dir = this.columnPath(columnX, columnY);
+        if (!existsSync(dir)) return;
+        const worldZs = await listRegionZs(dir);
+        await Promise.all(
+          worldZs.map(async (worldZ) => {
+            const key = regionKey(columnX, columnY, worldZ);
+            try {
+              const region = await parseRegionFile(
+                join(dir, `${worldZ}.region`),
+                columnX,
+                columnY,
+                worldZ,
+                1,
+              );
+              regions.set(key, region);
+              leafParses++;
+            } catch {
+              regions.set(key, null);
+            }
+          }),
+        );
+      }),
+    );
+    return { regions, leafParses };
+  }
+
+  private getOpenFaces(
+    regions: Map<string, RegionData | null>,
+    worldX: number,
+    worldY: number,
+    worldZ: number,
+  ): number {
+    let result = 0;
+    for (const step of OPEN_FACE_STEPS) {
+      const blockValue = getBlockAt(
+        regions,
+        worldX + step.dx,
+        worldY + step.dy,
+        worldZ + step.dz,
+      );
+      if (this.isTraversable(blockValue)) result |= step.bit;
+    }
+    return result;
+  }
+
+  private isTraversable(blockValue: number): boolean {
+    const paletteIndex = blockValue & 0xffff;
+    if (paletteIndex === 0 || this.blockColors.airLike[paletteIndex] === 1) {
+      return true;
+    }
+    if (this.blockColors.renderKind[paletteIndex] === 2) return true;
+    const shape = resolveShapeForLod(this.blockShapes, paletteIndex, 1);
+    if (shape.kind === "air" || shape.kind === "model") return true;
+    if (shape.kind !== "semantic") return false;
+    return (
+      shape.semantic !== "cubyz:stairs" || ((blockValue >>> 16) & 0xff) !== 0
+    );
+  }
+
+  private getEmittedLight(
+    paletteIndex: number,
+  ): { r: number; g: number; b: number } | null {
+    const offset = paletteIndex * 3;
+    const r = this.blockColors.emittedLightRgb[offset] ?? 0;
+    const g = this.blockColors.emittedLightRgb[offset + 1] ?? 0;
+    const b = this.blockColors.emittedLightRgb[offset + 2] ?? 0;
+    return r === 0 && g === 0 && b === 0 ? null : { r, g, b };
+  }
+
+  private async buildLeafSourceSignature(
+    regionX: number,
+    regionY: number,
+  ): Promise<string> {
+    const hash = createHash("sha1");
+    hash.update(`${EMITTER_SUMMARY_SIGNATURE}|${this.blockColors.signature}|`);
+    hash.update(`${this.blockShapes.signature}|${regionX}|${regionY}|`);
+    for (const [columnX, columnY] of [
+      [regionX, regionY],
+      [regionX - REGION_CELLS, regionY],
+      [regionX + REGION_CELLS, regionY],
+      [regionX, regionY - REGION_CELLS],
+      [regionX, regionY + REGION_CELLS],
+    ]) {
+      hash.update(`${columnX}/${columnY}:`);
+      const dir = this.columnPath(columnX, columnY);
+      if (!existsSync(dir)) {
+        hash.update("missing|");
+        continue;
+      }
+      for (const worldZ of await listRegionZs(dir)) {
+        const fileStats = await stat(join(dir, `${worldZ}.region`));
+        hash.update(
+          `${worldZ}:${Math.trunc(fileStats.mtimeMs)}:${fileStats.size}|`,
+        );
+      }
+    }
+    return hash.digest("hex");
+  }
+
+  private createNode(
+    lod: EmitterSummaryLod,
+    regionX: number,
+    regionY: number,
+    sourceSignature: string,
+    rawSourceCount: number,
+    cappedClusterCount: number,
+    clusters: EmitterSummaryCluster[],
+  ): EmitterSummaryNode {
+    const signature = createHash("sha1")
+      .update(`${EMITTER_SUMMARY_SIGNATURE}|${lod}|${regionX}|${regionY}|`)
+      .update(`${sourceSignature}|${rawSourceCount}|${cappedClusterCount}|`)
+      .update(JSON.stringify(clusters))
+      .digest("hex");
+    const node: EmitterSummaryNode = {
+      formatVersion: EMITTER_SUMMARY_FORMAT_VERSION,
+      lod,
+      regionX,
+      regionY,
+      sourceSignature,
+      signature,
+      rawSourceCount,
+      cappedClusterCount,
+      clusters,
+    };
+    this.memory.set(nodeKey(lod, regionX, regionY), node);
+    return node;
+  }
+
+  private async readCachedNode(
+    lod: EmitterSummaryLod,
+    regionX: number,
+    regionY: number,
+    sourceSignature: string,
+  ): Promise<EmitterSummaryNode | null> {
+    const key = nodeKey(lod, regionX, regionY);
+    const memory = this.memory.get(key);
+    if (memory?.sourceSignature === sourceSignature) return memory;
+    try {
+      const parsed = JSON.parse(
+        await readFile(this.nodePath(lod, regionX, regionY), "utf8"),
+      ) as unknown;
+      if (!isValidNode(parsed, lod, regionX, regionY, sourceSignature)) {
+        return null;
+      }
+      this.memory.set(key, parsed);
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  private async persistNode(node: EmitterSummaryNode): Promise<void> {
+    const path = this.nodePath(node.lod, node.regionX, node.regionY);
+    await mkdir(join(this.cacheRoot, String(node.lod), String(node.regionX)), {
+      recursive: true,
+    });
+    const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temporaryPath, JSON.stringify(node));
+    try {
+      await rename(temporaryPath, path);
+    } catch (error) {
+      await rm(temporaryPath, { force: true });
+      throw error;
+    }
+  }
+
+  private columnPath(regionX: number, regionY: number): string {
+    return join(this.savePath, "chunks", "1", String(regionX), String(regionY));
+  }
+
+  private nodePath(
+    lod: EmitterSummaryLod,
+    regionX: number,
+    regionY: number,
+  ): string {
+    return join(
+      this.cacheRoot,
+      String(lod),
+      String(regionX),
+      `${regionY}.json`,
+    );
+  }
+}
+
+function clusterForLod(
+  source: EmitterSummaryCluster[],
+  lod: EmitterSummaryLod,
+): BuiltClusters {
+  const edge = EMITTER_SUMMARY_CLUSTER_EDGE_BY_LOD[lod];
+  const grouped = new Map<string, EmitterSummaryCluster>();
+  for (const cluster of source) {
+    const key = `${Math.floor(cluster.centroidX / edge)}/${Math.floor(cluster.centroidY / edge)}/${Math.floor(cluster.centroidZ / edge)}`;
+    const existing = grouped.get(key);
+    grouped.set(
+      key,
+      existing ? mergeClusters(existing, cluster) : { ...cluster },
+    );
+  }
+
+  const ordered = [...grouped.values()].sort(compareClusters);
+  const limit = EMITTER_SUMMARY_LIMIT_BY_LOD[lod];
+  if (ordered.length <= limit) {
+    return { clusters: ordered, cappedClusterCount: 0 };
+  }
+
+  const topmostByHorizontalCell = new Map<string, EmitterSummaryCluster>();
+  for (const cluster of ordered) {
+    const key = `${Math.floor(cluster.centroidX / edge)}/${Math.floor(cluster.centroidY / edge)}`;
+    const current = topmostByHorizontalCell.get(key);
+    if (
+      !current ||
+      cluster.centroidZ > current.centroidZ ||
+      (cluster.centroidZ === current.centroidZ &&
+        compareClusters(cluster, current) < 0)
+    ) {
+      topmostByHorizontalCell.set(key, cluster);
+    }
+  }
+
+  const topmost = [...topmostByHorizontalCell.values()].sort(
+    (left, right) =>
+      left.centroidX - right.centroidX ||
+      left.centroidY - right.centroidY ||
+      compareClusters(left, right),
+  );
+  const retained = new Set<EmitterSummaryCluster>();
+  const topmostLimit = Math.min(topmost.length, limit);
+  for (let index = 0; index < topmostLimit; index++) {
+    const sampled =
+      topmost[Math.floor((index * topmost.length) / topmostLimit)];
+    if (sampled) retained.add(sampled);
+  }
+  for (const cluster of ordered) {
+    if (retained.size >= limit) break;
+    retained.add(cluster);
+  }
+  const retainedClusters = [...retained];
+  retainedClusters.sort(compareClusters);
+  return {
+    clusters: retainedClusters,
+    cappedClusterCount: ordered.length - limit,
+  };
+}
+
+function mergeClusters(
+  left: EmitterSummaryCluster,
+  right: EmitterSummaryCluster,
+): EmitterSummaryCluster {
+  const centroidWeight = left.centroidWeight + right.centroidWeight;
+  const safeWeight = centroidWeight || 1;
+  return {
+    powerR: left.powerR + right.powerR,
+    powerG: left.powerG + right.powerG,
+    powerB: left.powerB + right.powerB,
+    centroidX:
+      (left.centroidX * left.centroidWeight +
+        right.centroidX * right.centroidWeight) /
+      safeWeight,
+    centroidY:
+      (left.centroidY * left.centroidWeight +
+        right.centroidY * right.centroidWeight) /
+      safeWeight,
+    centroidZ:
+      (left.centroidZ * left.centroidWeight +
+        right.centroidZ * right.centroidWeight) /
+      safeWeight,
+    centroidWeight,
+    sourceCount: left.sourceCount + right.sourceCount,
+    openFaces: left.openFaces | right.openFaces,
+    minX: Math.min(left.minX, right.minX),
+    minY: Math.min(left.minY, right.minY),
+    minZ: Math.min(left.minZ, right.minZ),
+    maxX: Math.max(left.maxX, right.maxX),
+    maxY: Math.max(left.maxY, right.maxY),
+    maxZ: Math.max(left.maxZ, right.maxZ),
+  };
+}
+
+function compareClusters(
+  left: EmitterSummaryCluster,
+  right: EmitterSummaryCluster,
+): number {
+  return (
+    clusterPower(right) - clusterPower(left) ||
+    right.sourceCount - left.sourceCount ||
+    clusterExtent(right) - clusterExtent(left) ||
+    left.centroidX - right.centroidX ||
+    left.centroidY - right.centroidY ||
+    left.centroidZ - right.centroidZ ||
+    left.powerR - right.powerR ||
+    left.powerG - right.powerG ||
+    left.powerB - right.powerB
+  );
+}
+
+function clusterPower(cluster: EmitterSummaryCluster): number {
+  return luminance(cluster.powerR, cluster.powerG, cluster.powerB);
+}
+
+function clusterExtent(cluster: EmitterSummaryCluster): number {
+  return (
+    (cluster.maxX - cluster.minX) ** 2 +
+    (cluster.maxY - cluster.minY) ** 2 +
+    (cluster.maxZ - cluster.minZ) ** 2
+  );
+}
+
+function luminance(r: number, g: number, b: number): number {
+  return r * 0.2126 + g * 0.7152 + b * 0.0722;
+}
+
+function getBlockAt(
+  regions: Map<string, RegionData | null>,
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+): number {
+  const regionX = Math.floor(worldX / REGION_CELLS) * REGION_CELLS;
+  const regionY = Math.floor(worldY / REGION_CELLS) * REGION_CELLS;
+  const regionZ = Math.floor(worldZ / REGION_CELLS) * REGION_CELLS;
+  const region = regions.get(regionKey(regionX, regionY, regionZ));
+  if (!region) return 0;
+  const localX = worldX - regionX;
+  const localY = worldY - regionY;
+  const localZ = worldZ - regionZ;
+  const chunkX = Math.floor(localX / CHUNK_SIZE);
+  const chunkY = Math.floor(localY / CHUNK_SIZE);
+  const chunkZ = Math.floor(localZ / CHUNK_SIZE);
+  const chunk = region.chunks[chunkX * 16 + chunkY * 4 + chunkZ];
+  if (!chunk) return 0;
+  return (
+    chunk.blocks[
+      localIndex(localX % CHUNK_SIZE, localY % CHUNK_SIZE, localZ % CHUNK_SIZE)
+    ] ?? 0
+  );
+}
+
+function localIndex(x: number, y: number, z: number): number {
+  return x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z;
+}
+
+async function listRegionZs(directory: string): Promise<number[]> {
+  return (await readdir(directory))
+    .filter((entry) => entry.endsWith(".region"))
+    .map((entry) => Number.parseInt(entry.slice(0, -7), 10))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+}
+
+function isValidNode(
+  value: unknown,
+  lod: EmitterSummaryLod,
+  regionX: number,
+  regionY: number,
+  sourceSignature: string,
+): value is EmitterSummaryNode {
+  if (!value || typeof value !== "object") return false;
+  const node = value as Partial<EmitterSummaryNode>;
+  if (
+    node.formatVersion !== EMITTER_SUMMARY_FORMAT_VERSION ||
+    node.lod !== lod ||
+    node.regionX !== regionX ||
+    node.regionY !== regionY ||
+    node.sourceSignature !== sourceSignature ||
+    typeof node.signature !== "string" ||
+    typeof node.rawSourceCount !== "number" ||
+    typeof node.cappedClusterCount !== "number" ||
+    !Array.isArray(node.clusters) ||
+    node.clusters.length > EMITTER_SUMMARY_LIMIT_BY_LOD[lod]
+  ) {
+    return false;
+  }
+  return node.clusters.every(isValidCluster);
+}
+
+function isValidCluster(value: unknown): value is EmitterSummaryCluster {
+  if (!value || typeof value !== "object") return false;
+  const cluster = value as Record<string, unknown>;
+  return [
+    "powerR",
+    "powerG",
+    "powerB",
+    "centroidX",
+    "centroidY",
+    "centroidZ",
+    "centroidWeight",
+    "sourceCount",
+    "openFaces",
+    "minX",
+    "minY",
+    "minZ",
+    "maxX",
+    "maxY",
+    "maxZ",
+  ].every(
+    (key) => typeof cluster[key] === "number" && Number.isFinite(cluster[key]),
+  );
+}
+
+function mergeMetrics(
+  metrics: EmitterSummaryBuildMetrics[],
+): EmitterSummaryBuildMetrics {
+  return {
+    cacheOutcome: metrics.some(({ cacheOutcome }) => cacheOutcome === "built")
+      ? "built"
+      : metrics.some(({ cacheOutcome }) => cacheOutcome === "disk")
+        ? "disk"
+        : "memory",
+    buildMs: metrics.reduce((sum, metric) => sum + metric.buildMs, 0),
+    leafParses: metrics.reduce((sum, metric) => sum + metric.leafParses, 0),
+    rawSourceCount: metrics.reduce(
+      (sum, metric) => sum + metric.rawSourceCount,
+      0,
+    ),
+    retainedClusterCount: metrics.reduce(
+      (sum, metric) => sum + metric.retainedClusterCount,
+      0,
+    ),
+    cappedClusterCount: metrics.reduce(
+      (sum, metric) => sum + metric.cappedClusterCount,
+      0,
+    ),
+  };
+}
+
+function resultForCachedNode(
+  node: EmitterSummaryNode,
+  buildMs: number,
+): EmitterSummaryResult {
+  return {
+    node,
+    metrics: {
+      cacheOutcome: "memory",
+      buildMs,
+      leafParses: 0,
+      rawSourceCount: node.rawSourceCount,
+      retainedClusterCount: node.clusters.length,
+      cappedClusterCount: node.cappedClusterCount,
+    },
+  };
+}
+
+function nodeKey(
+  lod: EmitterSummaryLod,
+  regionX: number,
+  regionY: number,
+): string {
+  return `${lod}/${regionX}/${regionY}`;
+}
+
+function regionKey(regionX: number, regionY: number, regionZ: number): string {
+  return `${regionX}/${regionY}/${regionZ}`;
+}

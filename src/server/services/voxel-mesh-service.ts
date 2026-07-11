@@ -5,6 +5,12 @@ import type { BlockColorTable } from "./block-color-table.js";
 import type { BlockShapeTable } from "./block-shape-table.js";
 import { LRUCache } from "./cache.js";
 import { generateSignRecords, type SignRecord } from "./sign-records.js";
+import {
+  EMITTER_SUMMARY_LODS,
+  EMITTER_SUMMARY_REQUEST_TIMEOUT_MS,
+  type EmitterSummaryResult,
+} from "./voxel-emitter-aggregation.js";
+import { VoxelEmitterSummaryService } from "./voxel-emitter-summary-service.js";
 import { computeVoxelSourceSignature } from "./voxel-source-signature.js";
 import {
   type InstrumentedPoolResult,
@@ -49,7 +55,19 @@ interface VoxelMeshBenchmark {
     | "emitterRecords"
     | "ownEmitterRecords"
     | "haloEmitterRecords"
+    | "aggregatedEmitterRecords"
     | "emitterRecordBytes"
+    | "emitterMetadataBytes"
+    | "emitterPowerMin"
+    | "emitterPowerMax"
+    | "emitterRadiusMin"
+    | "emitterRadiusMax"
+    | "summaryCacheOutcome"
+    | "summaryBuildMs"
+    | "summaryLeafParses"
+    | "summaryRawSourceCount"
+    | "summaryRetainedClusterCount"
+    | "summaryCappedClusterCount"
     | "externalRegionParses"
     | "externalRegionCacheHits"
     | "externalRegionMisses"
@@ -114,9 +132,21 @@ interface VoxelRequestMetrics {
   emitterRecords?: number;
   ownEmitterRecords?: number;
   haloEmitterRecords?: number;
+  aggregatedEmitterRecords?: number;
   haloMs?: number;
   cachedHaloMs?: number;
   emitterRecordBytes?: number;
+  emitterMetadataBytes?: number;
+  emitterPowerMin?: number;
+  emitterPowerMax?: number;
+  emitterRadiusMin?: number;
+  emitterRadiusMax?: number;
+  summaryCacheOutcome?: VoxelGenerationStats["summaryCacheOutcome"];
+  summaryBuildMs?: number;
+  summaryLeafParses?: number;
+  summaryRawSourceCount?: number;
+  summaryRetainedClusterCount?: number;
+  summaryCappedClusterCount?: number;
   chunkColumns?: number;
   regionsParsed?: number;
   chunksMeshed?: number;
@@ -156,10 +186,15 @@ export class VoxelMeshService {
   private readonly cache: LRUCache<string, CachedVoxelMesh>;
   private readonly savePath: string;
   private readonly compressionConfig: VoxelCompressionConfig;
+  private readonly emitterSummaries: VoxelEmitterSummaryService;
   private readonly blockShapes: BlockShapeTable;
   private readonly blockShapeSignature: string;
   private readonly blockColorSignature: string;
   private readonly inFlight = new Map<string, InFlightJob>();
+  private readonly preparedEmitterSummaries = new Map<
+    string,
+    EmitterSummaryResult
+  >();
   private globalEpoch = 0;
   private nextJobId = 1;
   private readonly keyEpochs = new Map<string, number>();
@@ -195,6 +230,11 @@ export class VoxelMeshService {
       blockShapes,
       workerCount,
     );
+    this.emitterSummaries = new VoxelEmitterSummaryService(
+      savePath,
+      blockColors,
+      blockShapes,
+    );
     this.cache = new LRUCache<string, CachedVoxelMesh>(cacheSize);
     this.compressionConfig = compressionConfig;
   }
@@ -215,6 +255,24 @@ export class VoxelMeshService {
   clearAll(): void {
     this.cache.clear();
     this.globalEpoch++;
+  }
+
+  invalidateLod1EmitterColumn(regionX: number, regionY: number): void {
+    const affectedLeaves = [
+      [regionX, regionY],
+      [regionX - 128, regionY],
+      [regionX + 128, regionY],
+      [regionX, regionY - 128],
+      [regionX, regionY + 128],
+    ] as const;
+    for (const [leafX, leafY] of affectedLeaves) {
+      for (const lod of EMITTER_SUMMARY_LODS) {
+        const span = 128 * lod;
+        const ancestorX = Math.floor(leafX / span) * span;
+        const ancestorY = Math.floor(leafY / span) * span;
+        this.emitterSummaries.invalidate(lod, ancestorX, ancestorY);
+      }
+    }
   }
 
   getMetricsSnapshot(): VoxelServiceMetricsSnapshot {
@@ -256,6 +314,9 @@ export class VoxelMeshService {
       );
     }
 
+    const emitterSummary =
+      lod > 1 ? await this.getEmitterSummary(lod, regionX, regionY) : undefined;
+    if (emitterSummary) this.preparedEmitterSummaries.set(key, emitterSummary);
     const sourceSignature = await computeVoxelSourceSignature({
       savePath: this.savePath,
       blockShapeSignature: this.blockShapeSignature,
@@ -263,6 +324,7 @@ export class VoxelMeshService {
       lod,
       regionX,
       regionY,
+      emitterSummarySignature: emitterSummary?.node.signature,
     });
     if (!sourceSignature) {
       return null;
@@ -316,8 +378,21 @@ export class VoxelMeshService {
           emitterRecords: cached.stats?.emitterRecords,
           ownEmitterRecords: cached.stats?.ownEmitterRecords,
           haloEmitterRecords: cached.stats?.haloEmitterRecords,
+          aggregatedEmitterRecords: cached.stats?.aggregatedEmitterRecords,
           cachedHaloMs: cached.stats?.haloMs,
           emitterRecordBytes: cached.stats?.emitterRecordBytes,
+          emitterMetadataBytes: cached.stats?.emitterMetadataBytes,
+          emitterPowerMin: cached.stats?.emitterPowerMin,
+          emitterPowerMax: cached.stats?.emitterPowerMax,
+          emitterRadiusMin: cached.stats?.emitterRadiusMin,
+          emitterRadiusMax: cached.stats?.emitterRadiusMax,
+          summaryCacheOutcome: cached.stats?.summaryCacheOutcome,
+          summaryBuildMs: cached.stats?.summaryBuildMs,
+          summaryLeafParses: cached.stats?.summaryLeafParses,
+          summaryRawSourceCount: cached.stats?.summaryRawSourceCount,
+          summaryRetainedClusterCount:
+            cached.stats?.summaryRetainedClusterCount,
+          summaryCappedClusterCount: cached.stats?.summaryCappedClusterCount,
           chunkColumns: cached.stats?.chunkColumns,
           externalRegionParses: cached.stats?.externalRegionParses,
           externalRegionCacheHits: cached.stats?.externalRegionCacheHits,
@@ -332,6 +407,13 @@ export class VoxelMeshService {
     const globalEpoch = this.globalEpoch;
     const keyEpoch = this.keyEpochs.get(key) ?? 0;
     const versionedKey = `${key}@${globalEpoch}:${keyEpoch}`;
+    const preparedEmitterSummary = this.preparedEmitterSummaries.get(key);
+    if (preparedEmitterSummary) this.preparedEmitterSummaries.delete(key);
+    const emitterSummary =
+      lod > 1
+        ? (preparedEmitterSummary ??
+          (await this.getEmitterSummary(lod, regionX, regionY)))
+        : undefined;
     const existing = this.inFlight.get(key);
     const promise =
       existing && existing.versionedKey === versionedKey
@@ -345,6 +427,7 @@ export class VoxelMeshService {
             keyEpoch,
             versionedKey,
             includeHaloEmitters,
+            emitterSummary,
           );
 
     const { result, queueMs, runMs } = await promise;
@@ -382,11 +465,23 @@ export class VoxelMeshService {
       emitterRecords: result.stats?.emitterRecords,
       ownEmitterRecords: result.stats?.ownEmitterRecords,
       haloEmitterRecords: result.stats?.haloEmitterRecords,
+      aggregatedEmitterRecords: result.stats?.aggregatedEmitterRecords,
       haloMs:
         result.stats?.cacheTier === "worker" ? result.stats?.haloMs : undefined,
       cachedHaloMs:
         result.stats?.cacheTier === "disk" ? result.stats.haloMs : undefined,
       emitterRecordBytes: result.stats?.emitterRecordBytes,
+      emitterMetadataBytes: result.stats?.emitterMetadataBytes,
+      emitterPowerMin: result.stats?.emitterPowerMin,
+      emitterPowerMax: result.stats?.emitterPowerMax,
+      emitterRadiusMin: result.stats?.emitterRadiusMin,
+      emitterRadiusMax: result.stats?.emitterRadiusMax,
+      summaryCacheOutcome: result.stats?.summaryCacheOutcome,
+      summaryBuildMs: result.stats?.summaryBuildMs,
+      summaryLeafParses: result.stats?.summaryLeafParses,
+      summaryRawSourceCount: result.stats?.summaryRawSourceCount,
+      summaryRetainedClusterCount: result.stats?.summaryRetainedClusterCount,
+      summaryCappedClusterCount: result.stats?.summaryCappedClusterCount,
       chunkColumns: result.stats?.chunkColumns,
       regionsParsed: result.stats?.regionsParsed,
       chunksMeshed: result.stats?.chunksMeshed,
@@ -421,6 +516,7 @@ export class VoxelMeshService {
       lod,
       regionX,
       regionY,
+      emitterSummarySignature: emitterSummary?.node.signature,
     });
     if (!sourceSignature) {
       this.emptyResponses++;
@@ -546,7 +642,20 @@ export class VoxelMeshService {
             emitterRecords: cached.stats.emitterRecords,
             ownEmitterRecords: cached.stats.ownEmitterRecords,
             haloEmitterRecords: cached.stats.haloEmitterRecords,
+            aggregatedEmitterRecords: cached.stats.aggregatedEmitterRecords,
             emitterRecordBytes: cached.stats.emitterRecordBytes,
+            emitterMetadataBytes: cached.stats.emitterMetadataBytes,
+            emitterPowerMin: cached.stats.emitterPowerMin,
+            emitterPowerMax: cached.stats.emitterPowerMax,
+            emitterRadiusMin: cached.stats.emitterRadiusMin,
+            emitterRadiusMax: cached.stats.emitterRadiusMax,
+            summaryCacheOutcome: cached.stats.summaryCacheOutcome,
+            summaryBuildMs: cached.stats.summaryBuildMs,
+            summaryLeafParses: cached.stats.summaryLeafParses,
+            summaryRawSourceCount: cached.stats.summaryRawSourceCount,
+            summaryRetainedClusterCount:
+              cached.stats.summaryRetainedClusterCount,
+            summaryCappedClusterCount: cached.stats.summaryCappedClusterCount,
             externalRegionParses: cached.stats.externalRegionParses,
             externalRegionCacheHits: cached.stats.externalRegionCacheHits,
             externalRegionMisses: cached.stats.externalRegionMisses,
@@ -566,6 +675,7 @@ export class VoxelMeshService {
     keyEpoch: number,
     versionedKey: string,
     includeHaloEmitters = true,
+    emitterSummary?: EmitterSummaryResult,
   ): Promise<InstrumentedPoolResult> {
     const promise = this.pool
       .run({
@@ -577,6 +687,8 @@ export class VoxelMeshService {
         globalEpoch,
         keyEpoch,
         includeHaloEmitters,
+        emitterSummary: emitterSummary?.node,
+        emitterSummaryMetrics: emitterSummary?.metrics,
       })
       .finally(() => {
         const inFlight = this.inFlight.get(key);
@@ -586,6 +698,27 @@ export class VoxelMeshService {
       });
     this.inFlight.set(key, { versionedKey, promise });
     return promise;
+  }
+
+  private async getEmitterSummary(
+    lod: number,
+    regionX: number,
+    regionY: number,
+  ): Promise<EmitterSummaryResult> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.emitterSummaries.getNode(lod, regionX, regionY),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("Emitter summary cold build timed out")),
+            EMITTER_SUMMARY_REQUEST_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 
   private isCurrentEpoch(

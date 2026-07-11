@@ -12,6 +12,8 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:client": "vite",
     "build": "vite build && tsc -p tsconfig.server.json",
+    "validate:voxel-lighting": "node scripts/capture-isolated-voxel-lighting.mjs",
+    "validate:voxel-seams": "tsx scripts/validate-voxel-seams.ts",
     "start": "node dist/server/index.js",
     "release": "./scripts/release.sh",
     "release:dry-run": "./scripts/release.sh --dry-run",
@@ -44,6 +46,7 @@
     "commit-and-tag-version": "^12.7.1",
     "concurrently": "^9.1.2",
     "knip": "^6.4.1",
+    "playwright": "^1.61.1",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vite": "^6.3.4"

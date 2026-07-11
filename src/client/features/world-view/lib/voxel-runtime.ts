@@ -158,6 +158,7 @@ export function requestVoxelRegion(args: {
   loadedVoxels: Map<string, LoadedVoxelTile>;
   isVoxelTileStale: (key: string) => boolean;
   restoreVoxelTileFromWarmCache: (key: string) => LoadedVoxelTile | null;
+  onVoxelTileRestored?: () => void;
   voxelUnloadGraceUntil: Map<string, number>;
   voxelUnloadGraceMs: number;
   markVoxelTileFresh: (key: string, version: number) => void;
@@ -176,6 +177,7 @@ export function requestVoxelRegion(args: {
     loadedVoxels,
     isVoxelTileStale,
     restoreVoxelTileFromWarmCache,
+    onVoxelTileRestored,
     voxelUnloadGraceUntil,
     voxelUnloadGraceMs,
     markVoxelTileFresh,
@@ -195,6 +197,7 @@ export function requestVoxelRegion(args: {
   const restored = restoreVoxelTileFromWarmCache(key);
   if (restored) {
     loadedVoxels.set(key, restored);
+    onVoxelTileRestored?.();
     voxelUnloadGraceUntil.set(key, performance.now() + voxelUnloadGraceMs);
     markVoxelTileFresh(key, request.version);
     debugLabelsDirtyRef.current = true;
@@ -541,7 +544,7 @@ export function buildQueuedVoxelMeshes(args: {
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
   disposeVoxelTileResources: (tile: LoadedVoxelTile) => void;
-  onVoxelTileLoaded?: (tile: LoadedVoxelTile) => void;
+  onVoxelTileLoaded?: (tile?: LoadedVoxelTile) => void;
 }): boolean {
   const {
     pendingVoxelMeshQueueRef,
@@ -658,6 +661,11 @@ export function buildQueuedVoxelMeshes(args: {
         onVoxelTileLoaded?.(nextTile);
         builtVoxelTile = true;
       } else {
+        if (existingTile && canReplaceExisting) {
+          loadedVoxels.delete(item.key);
+          disposeVoxelTileResources(existingTile);
+          onVoxelTileLoaded?.();
+        }
         missingVoxels.add(item.key);
         markVoxelTileFresh(item.key, item.version);
       }

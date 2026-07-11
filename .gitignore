@@ -5,3 +5,4 @@ logs/
 .github
 compose.local.yml
 .playwright-mcp
+/artifacts/

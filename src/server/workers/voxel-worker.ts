@@ -29,7 +29,11 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
       job.lod,
       job.regionX,
       job.regionY,
-      { includeHaloEmitters: job.includeHaloEmitters !== false },
+      {
+        includeHaloEmitters: job.includeHaloEmitters !== false,
+        emitterSummary: job.emitterSummary,
+        emitterSummaryMetrics: job.emitterSummaryMetrics,
+      },
     );
     const runMs = performance.now() - startedAt;
     const result: VoxelJobResult = generated.buffer

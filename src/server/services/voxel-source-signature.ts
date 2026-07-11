@@ -102,6 +102,7 @@ export async function computeVoxelSourceSignature(args: {
   lod: number;
   regionX: number;
   regionY: number;
+  emitterSummarySignature?: string;
 }): Promise<string | null> {
   const {
     savePath,
@@ -110,7 +111,9 @@ export async function computeVoxelSourceSignature(args: {
     lod,
     regionX,
     regionY,
+    emitterSummarySignature,
   } = args;
+  if (lod > 1 && !emitterSummarySignature) return null;
   const colDir = join(
     savePath,
     "chunks",
@@ -139,6 +142,7 @@ export async function computeVoxelSourceSignature(args: {
     .update(
       `${VOXEL_GENERATOR_CACHE_VERSION}|${MAX_ENTRANCE_DEPTH_WORLD}|${columnSignature.signature}|${haloColumnSignature}|${surfaceSignature.signature}|${lod}|${regionX}|${regionY}`,
     )
+    .update(`|${lod > 1 ? emitterSummarySignature : "lod1"}`)
     .update(`|${blockShapeSignature}`)
     .update(`|${blockColorSignature}`)
     .digest("hex");

@@ -537,7 +537,11 @@ export function runVoxelLodSelection(args: {
           child.regionY,
           childEffectiveDist,
         );
+        // The index is authoritative for available child payloads. Without
+        // this guard, a filtered validation index can still trigger requests
+        // for unadvertised finer regions.
         if (
+          childAvailable &&
           childSelectionDist <= getSelectionDist(child.lod) &&
           isAllowedLod(child.lod)
         ) {

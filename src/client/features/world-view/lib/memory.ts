@@ -29,7 +29,7 @@ export function estimateLoadedVoxelTileMemory(
 ): VoxelTileMemoryEstimate {
   let geometryBytes = estimateGeometryBytes(tile.borderLines.geometry);
   let metadataBytes = tile.chunkTopHeights.byteLength;
-  metadataBytes += tile.emitterRecords.length * 24;
+  metadataBytes += tile.emitterRecords.length * 32;
   for (const sm of [...tile.subMeshes, ...tile.transparentSubMeshes]) {
     const geometry = sm.mesh.geometry;
     geometryBytes += estimateGeometryBytes(geometry);

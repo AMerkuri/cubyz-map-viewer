@@ -63,6 +63,7 @@ export function initializeSceneRuntime(args: {
     current: ReturnType<typeof useWorldData>;
   };
   loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  loadedVoxelsRevisionRef: { current: number };
   blockLightStatsRef: { current: BlockLightRuntimeStats };
   onCursorMoveRef: { current: (info: CursorHoverInfo | null) => void };
   onPlayerClickRef: { current: (player: PlayerData) => void };
@@ -125,6 +126,7 @@ export function initializeSceneRuntime(args: {
     terrainLoadGenerationRef,
     worldDataRef,
     loadedVoxelsRef,
+    loadedVoxelsRevisionRef,
     blockLightStatsRef,
     onCursorMoveRef,
     onPlayerClickRef,
@@ -195,6 +197,7 @@ export function initializeSceneRuntime(args: {
     timeOfDay: debugSettingsRef.current.atmosphereTimeOfDay,
   });
   const blockLightRuntime = new BlockLightRuntimeManager(scene);
+  let syncedLoadedVoxelsRevision = -1;
 
   const terrainGroup = new THREE.Group();
   const voxelGroup = new THREE.Group();
@@ -454,16 +457,6 @@ export function initializeSceneRuntime(args: {
         timeOfDay: atmosphereTimeOfDay,
       });
     }
-    blockLightRuntime.syncRegions(loadedVoxelsRef.current.values());
-    blockLightStatsRef.current = blockLightRuntime.update({
-      enabled:
-        debugSettingsRef.current.atmosphereQuality > 0 &&
-        debugSettingsRef.current.blockLightQuality > 0,
-      quality: debugSettingsRef.current.blockLightQuality,
-      timeOfDay: atmosphereTimeOfDay,
-      cameraPosition: camera.position,
-    });
-
     const frameIntervalMs = effectiveCap <= 0 ? 0 : 1000 / effectiveCap;
     if (frameIntervalMs > 0) {
       if (now < nextFrameAt) {
@@ -502,6 +495,19 @@ export function initializeSceneRuntime(args: {
       markActive(now);
       runLodUpdate(now, idleEligible);
     }
+
+    if (syncedLoadedVoxelsRevision !== loadedVoxelsRevisionRef.current) {
+      blockLightRuntime.syncRegions(loadedVoxelsRef.current.values());
+      syncedLoadedVoxelsRevision = loadedVoxelsRevisionRef.current;
+    }
+    blockLightStatsRef.current = blockLightRuntime.update({
+      enabled:
+        debugSettingsRef.current.atmosphereQuality > 0 &&
+        debugSettingsRef.current.blockLightQuality > 0,
+      quality: debugSettingsRef.current.blockLightQuality,
+      timeOfDay: atmosphereTimeOfDay,
+      cameraPosition: camera.position,
+    });
 
     if (terrainVisibilityDirtyRef.current && showTerrainUnderlayRef.current) {
       const camDist = camera.position.distanceTo(controls.target);

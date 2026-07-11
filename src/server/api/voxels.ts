@@ -222,6 +222,59 @@ export function createVoxelsRouter(
         String(response.metrics.haloEmitterRecords),
       );
     }
+    if (response.metrics.aggregatedEmitterRecords !== undefined) {
+      res.set(
+        "X-Voxel-Aggregated-Emitters",
+        String(response.metrics.aggregatedEmitterRecords),
+      );
+    }
+    if (response.metrics.emitterMetadataBytes !== undefined) {
+      res.set(
+        "X-Voxel-Emitter-Metadata-Bytes",
+        String(response.metrics.emitterMetadataBytes),
+      );
+    }
+    if (response.metrics.emitterPowerMin !== undefined) {
+      res.set(
+        "X-Voxel-Emitter-Power-Min",
+        String(response.metrics.emitterPowerMin),
+      );
+      res.set(
+        "X-Voxel-Emitter-Power-Max",
+        String(response.metrics.emitterPowerMax),
+      );
+      res.set(
+        "X-Voxel-Emitter-Radius-Min",
+        String(response.metrics.emitterRadiusMin),
+      );
+      res.set(
+        "X-Voxel-Emitter-Radius-Max",
+        String(response.metrics.emitterRadiusMax),
+      );
+    }
+    if (response.metrics.summaryCacheOutcome !== undefined) {
+      res.set("X-Voxel-Summary-Cache", response.metrics.summaryCacheOutcome);
+      res.set(
+        "X-Voxel-Summary-Build-Ms",
+        String(response.metrics.summaryBuildMs),
+      );
+      res.set(
+        "X-Voxel-Summary-Leaf-Parses",
+        String(response.metrics.summaryLeafParses),
+      );
+      res.set(
+        "X-Voxel-Summary-Raw-Sources",
+        String(response.metrics.summaryRawSourceCount),
+      );
+      res.set(
+        "X-Voxel-Summary-Representatives",
+        String(response.metrics.summaryRetainedClusterCount),
+      );
+      res.set(
+        "X-Voxel-Summary-Capped-Clusters",
+        String(response.metrics.summaryCappedClusterCount),
+      );
+    }
     if (response.metrics.externalRegionParses !== undefined) {
       res.set(
         "X-Voxel-Ext-Region-Parses",
@@ -262,6 +315,18 @@ export function createVoxelsRouter(
       cachedHaloMs: response.metrics.cachedHaloMs,
       ownEmitterRecords: response.metrics.ownEmitterRecords,
       haloEmitterRecords: response.metrics.haloEmitterRecords,
+      aggregatedEmitterRecords: response.metrics.aggregatedEmitterRecords,
+      emitterMetadataBytes: response.metrics.emitterMetadataBytes,
+      emitterPowerMin: response.metrics.emitterPowerMin,
+      emitterPowerMax: response.metrics.emitterPowerMax,
+      emitterRadiusMin: response.metrics.emitterRadiusMin,
+      emitterRadiusMax: response.metrics.emitterRadiusMax,
+      summaryCacheOutcome: response.metrics.summaryCacheOutcome,
+      summaryBuildMs: response.metrics.summaryBuildMs,
+      summaryLeafParses: response.metrics.summaryLeafParses,
+      summaryRawSourceCount: response.metrics.summaryRawSourceCount,
+      summaryRetainedClusterCount: response.metrics.summaryRetainedClusterCount,
+      summaryCappedClusterCount: response.metrics.summaryCappedClusterCount,
       totalMs: response.metrics.totalMs,
       queueDepth: response.metrics.queueDepth,
       runningJobs: response.metrics.runningJobs,

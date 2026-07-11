@@ -36,6 +36,7 @@ export type ChunkStats = {
     warmVoxels: number;
     queued: number;
     queuedVoxelOutput: number;
+    blockLightPool: number;
   };
   memoryByLod: Partial<Record<1 | 2 | 4 | 8 | 16 | 32, number>>;
   jsHeapBytes: number | null;
@@ -59,6 +60,12 @@ export type ChunkStats = {
     avgEmissiveBakeMs: number | null;
     avgEmissiveQuadsEvaluated: number | null;
     avgEmissiveQuadsCulled: number | null;
+    avgEmissiveCandidateVisits: number | null;
+    avgEmitterMetadataBytes: number | null;
+    avgEmitterPowerMin: number | null;
+    avgEmitterPowerMax: number | null;
+    avgEmitterRadiusMin: number | null;
+    avgEmitterRadiusMax: number | null;
     avgServerRunMs: number | null;
     avgServerHaloMs: number | null;
     cacheHitSamples: number;
@@ -73,6 +80,11 @@ export type ChunkStats = {
     budget: number;
     glowBudget: number;
     pointLightBudget: number;
+    glowPoolAllocated: number;
+    glowPoolUsed: number;
+    pointLightPoolAllocated: number;
+    poolMemoryBytes: number;
+    runtimeMs: number;
     degraded: boolean;
   };
 };
@@ -185,6 +197,7 @@ export function createEmptyChunkStats(): ChunkStats {
       warmVoxels: 0,
       queued: 0,
       queuedVoxelOutput: 0,
+      blockLightPool: 0,
     },
     memoryByLod: {},
     jsHeapBytes: null,
@@ -208,6 +221,12 @@ export function createEmptyChunkStats(): ChunkStats {
       avgEmissiveBakeMs: null,
       avgEmissiveQuadsEvaluated: null,
       avgEmissiveQuadsCulled: null,
+      avgEmissiveCandidateVisits: null,
+      avgEmitterMetadataBytes: null,
+      avgEmitterPowerMin: null,
+      avgEmitterPowerMax: null,
+      avgEmitterRadiusMin: null,
+      avgEmitterRadiusMax: null,
       avgServerRunMs: null,
       avgServerHaloMs: null,
       cacheHitSamples: 0,
@@ -222,6 +241,11 @@ export function createEmptyChunkStats(): ChunkStats {
       budget: 0,
       glowBudget: 0,
       pointLightBudget: 0,
+      glowPoolAllocated: 0,
+      glowPoolUsed: 0,
+      pointLightPoolAllocated: 0,
+      poolMemoryBytes: 0,
+      runtimeMs: 0,
       degraded: false,
     },
   };
