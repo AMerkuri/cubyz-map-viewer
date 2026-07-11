@@ -38,6 +38,7 @@ import { buildChunkIndex } from "./services/chunk-index.js";
 import { ColorMapService } from "./services/color-map.js";
 import { EntityModelAssetService } from "./services/entity-model-assets.js";
 import { logger } from "./services/logger.js";
+import { EMITTER_MAX_SUMMARY_RADIUS } from "./services/voxel-emitter-aggregation.js";
 import { VoxelMeshService } from "./services/voxel-mesh-service.js";
 import { SaveWatcher, type WatchEvent } from "./services/watcher.js";
 
@@ -761,7 +762,10 @@ function expandHaloAffectedVoxelRegions(
   >();
   for (const region of regions) {
     const span = VOXEL_REGION_SIZE * region.lod;
-    const radius = region.lod === 1 ? EMITTED_LIGHT_RADIUS_WORLD : 0;
+    const radius =
+      region.lod === 1
+        ? EMITTED_LIGHT_RADIUS_WORLD
+        : EMITTER_MAX_SUMMARY_RADIUS;
     const startX = Math.floor((region.regionX - radius) / span) * span;
     const endX = Math.floor((region.regionX + span - 1 + radius) / span) * span;
     const startY = Math.floor((region.regionY - radius) / span) * span;

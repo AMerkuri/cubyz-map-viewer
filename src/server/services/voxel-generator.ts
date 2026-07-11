@@ -40,12 +40,11 @@ import {
 import { logger } from "./logger.js";
 import { VOXEL_GENERATOR_CACHE_VERSION } from "./voxel-cache-version.js";
 import {
-  EMITTER_COARSE_BASE_RADIUS,
   EMITTER_MAX_POWER,
-  EMITTER_MAX_SUMMARY_RADIUS,
   type EmitterSummaryBuildMetrics,
   type EmitterSummaryCluster,
   type EmitterSummaryNode,
+  getEmitterSummaryRadius,
 } from "./voxel-emitter-aggregation.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
@@ -57,6 +56,8 @@ const EMITTED_LIGHT_RADIUS_CELLS = 12;
 const MAX_EMITTER_RECORDS_PER_PAYLOAD = 8192;
 const HALO_PROTECTED_RECORDS_PER_EDGE = 256;
 const HALO_PROTECTED_RECORDS_TOTAL = HALO_PROTECTED_RECORDS_PER_EDGE * 4;
+const BOUNDARY_SAMPLE_BUCKET_SIZE = 4;
+const MAX_BOUNDARY_SAMPLES_PER_EDGE = 4096;
 const EMITTER_OPEN_FACE_X_POS = 1 << 0;
 const EMITTER_OPEN_FACE_X_NEG = 1 << 1;
 const EMITTER_OPEN_FACE_Y_POS = 1 << 2;
@@ -76,6 +77,16 @@ const PROJECT_VOXEL_CACHE_DIR = resolve(
 );
 
 type Direction = "x-" | "x+" | "y-" | "y+" | "z+" | "z-";
+type HorizontalEdge = "x-" | "x+" | "y-" | "y+";
+
+interface BoundaryGeometrySample {
+  x: number;
+  y: number;
+  z: number;
+  bucket: string;
+}
+
+type BoundaryGeometrySamples = Record<HorizontalEdge, BoundaryGeometrySample[]>;
 
 const GREEDY_FACE_CODE: Record<Direction, GreedyFaceCode> = {
   "x+": 0,
@@ -497,6 +508,7 @@ export async function generateVoxelMesh(
       ...haloEmitterRecords,
     ],
     Math.ceil(maxFaceZ) - baseCellZ,
+    buildBoundaryGeometrySamples(quads),
   );
   const ownEmitterRecordCount =
     lod === 1 ? allEmitterRecords.filter((record) => !record.halo).length : 0;
@@ -581,12 +593,7 @@ export async function generateVoxelMesh(
       EMITTER_MAX_POWER,
       Math.max(cluster.powerR, cluster.powerG, cluster.powerB),
     );
-    const extentRadius =
-      Math.hypot(
-        cluster.maxX - cluster.minX,
-        cluster.maxY - cluster.minY,
-        cluster.maxZ - cluster.minZ,
-      ) / 2;
+    const regionWorldSpan = COLUMN_VOXELS * lod;
     return {
       x: Math.round((cluster.centroidX - regionX) / lod - 0.5),
       y: Math.round((cluster.centroidY - regionY) / lod - 0.5),
@@ -595,11 +602,13 @@ export async function generateVoxelMesh(
       g: Math.round((cluster.powerG / power) * 255),
       b: Math.round((cluster.powerB / power) * 255),
       openFaces: cluster.openFaces,
+      halo:
+        cluster.centroidX < regionX ||
+        cluster.centroidX >= regionX + regionWorldSpan ||
+        cluster.centroidY < regionY ||
+        cluster.centroidY >= regionY + regionWorldSpan,
       power,
-      radius: Math.min(
-        EMITTER_MAX_SUMMARY_RADIUS,
-        Math.ceil(EMITTER_COARSE_BASE_RADIUS + extentRadius * 0.5),
-      ),
+      radius: getEmitterSummaryRadius(cluster),
     };
   }
 
@@ -2235,13 +2244,13 @@ async function buildHaloColumnSignature(
 function capEmitterRecords(
   records: BinaryEmitterRecord[],
   maxVisibleZ: number,
+  boundarySamples: BoundaryGeometrySamples,
 ): BinaryEmitterRecord[] {
   if (records.length <= MAX_EMITTER_RECORDS_PER_PAYLOAD) {
     return records.sort(compareEmitterRecords);
   }
 
   type IndexedEmitter = { record: BinaryEmitterRecord; index: number };
-  type HorizontalEdge = "x-" | "x+" | "y-" | "y+";
   const edges: HorizontalEdge[] = ["x-", "x+", "y-", "y+"];
   const indexed = records.map(
     (record, index): IndexedEmitter => ({
@@ -2263,16 +2272,62 @@ function capEmitterRecords(
   // reservation is filled by the globally best remaining boundary candidate.
   // All remaining capacity then follows the legacy own-first record order.
   for (const edge of edges) {
-    const edgeCandidates = relevantHalo
-      .filter((candidate) => isEmitterBeyondEdge(candidate.record, edge))
-      .sort((a, b) => compareBoundaryCandidates(a, b, edge, maxVisibleZ));
-    for (
-      let index = 0;
-      index < Math.min(HALO_PROTECTED_RECORDS_PER_EDGE, edgeCandidates.length);
-      index++
+    const edgeCandidates = relevantHalo.filter((candidate) =>
+      isEmitterBeyondEdge(candidate.record, edge),
+    );
+    const candidatesBySample = new Map<string, typeof edgeCandidates>();
+    for (const candidate of edgeCandidates) {
+      const nearest = getNearestReachableBoundarySample(
+        candidate.record,
+        boundarySamples[edge],
+      );
+      if (!nearest) continue;
+      const candidates = candidatesBySample.get(nearest.sample.bucket) ?? [];
+      candidates.push(candidate);
+      candidatesBySample.set(nearest.sample.bucket, candidates);
+    }
+    for (const candidates of candidatesBySample.values()) {
+      candidates.sort(
+        (a, b) =>
+          getDistanceToBoundarySampleSquared(
+            a.record,
+            getNearestReachableBoundarySample(a.record, boundarySamples[edge])
+              ?.sample,
+          ) -
+            getDistanceToBoundarySampleSquared(
+              b.record,
+              getNearestReachableBoundarySample(b.record, boundarySamples[edge])
+                ?.sample,
+            ) || compareBoundaryCandidates(a, b, edge, maxVisibleZ),
+      );
+    }
+    const rankedBuckets = [...candidatesBySample.entries()].sort(([a], [b]) =>
+      a.localeCompare(b),
+    );
+    let round = 0;
+    let edgeSelected = 0;
+    while (
+      edgeSelected < HALO_PROTECTED_RECORDS_PER_EDGE &&
+      rankedBuckets.some(([, candidates]) => round < candidates.length)
     ) {
-      const candidate = edgeCandidates[index];
-      if (candidate) selected.add(candidate.index);
+      for (const [, candidates] of rankedBuckets) {
+        const candidate = candidates[round];
+        if (!candidate || selected.has(candidate.index)) continue;
+        selected.add(candidate.index);
+        edgeSelected++;
+        if (edgeSelected >= HALO_PROTECTED_RECORDS_PER_EDGE) break;
+      }
+      round++;
+    }
+
+    const fallbackCandidates = edgeCandidates.sort((a, b) =>
+      compareBoundaryCandidates(a, b, edge, maxVisibleZ),
+    );
+    for (const candidate of fallbackCandidates) {
+      if (edgeSelected >= HALO_PROTECTED_RECORDS_PER_EDGE) break;
+      if (selected.has(candidate.index)) continue;
+      selected.add(candidate.index);
+      edgeSelected++;
     }
   }
 
@@ -2298,6 +2353,87 @@ function capEmitterRecords(
       (a, b) => compareEmitterRecords(a.record, b.record) || a.index - b.index,
     )
     .map((candidate) => candidate.record);
+}
+
+function buildBoundaryGeometrySamples(
+  quads: BinaryQuad[],
+): BoundaryGeometrySamples {
+  const samples: BoundaryGeometrySamples = {
+    "x-": [],
+    "x+": [],
+    "y-": [],
+    "y+": [],
+  };
+  const buckets: Record<HorizontalEdge, Set<string>> = {
+    "x-": new Set(),
+    "x+": new Set(),
+    "y-": new Set(),
+    "y+": new Set(),
+  };
+
+  for (const quad of quads) {
+    if (quad.renderKind === 2) continue;
+    const vertices = [
+      [quad.v0x, quad.v0y, quad.v0z],
+      [quad.v1x, quad.v1y, quad.v1z],
+      [quad.v2x, quad.v2y, quad.v2z],
+      [quad.v3x, quad.v3y, quad.v3z],
+    ] as const;
+    for (const [x, y, z] of vertices) {
+      const edges: HorizontalEdge[] = [];
+      if (x === 0) edges.push("x-");
+      if (x === COLUMN_VOXELS) edges.push("x+");
+      if (y === 0) edges.push("y-");
+      if (y === COLUMN_VOXELS) edges.push("y+");
+      for (const edge of edges) {
+        if (samples[edge].length >= MAX_BOUNDARY_SAMPLES_PER_EDGE) continue;
+        const along = edge.startsWith("x") ? y : x;
+        const bucket = `${Math.floor(along / BOUNDARY_SAMPLE_BUCKET_SIZE)}/${Math.floor(z / BOUNDARY_SAMPLE_BUCKET_SIZE)}`;
+        if (buckets[edge].has(bucket)) continue;
+        buckets[edge].add(bucket);
+        samples[edge].push({ x, y, z, bucket });
+      }
+    }
+  }
+
+  for (const edge of Object.keys(samples) as HorizontalEdge[]) {
+    samples[edge].sort((a, b) => a.bucket.localeCompare(b.bucket));
+  }
+  return samples;
+}
+
+function getNearestReachableBoundarySample(
+  record: BinaryEmitterRecord,
+  samples: BoundaryGeometrySample[],
+): { sample: BoundaryGeometrySample; distanceSquared: number } | undefined {
+  const radius = record.radius ?? EMITTED_LIGHT_RADIUS_CELLS;
+  let nearest:
+    | { sample: BoundaryGeometrySample; distanceSquared: number }
+    | undefined;
+  for (const sample of samples) {
+    const distanceSquared = getDistanceToBoundarySampleSquared(record, sample);
+    if (distanceSquared >= radius * radius) continue;
+    if (
+      !nearest ||
+      distanceSquared < nearest.distanceSquared ||
+      (distanceSquared === nearest.distanceSquared &&
+        sample.bucket < nearest.sample.bucket)
+    ) {
+      nearest = { sample, distanceSquared };
+    }
+  }
+  return nearest;
+}
+
+function getDistanceToBoundarySampleSquared(
+  record: BinaryEmitterRecord,
+  sample: BoundaryGeometrySample | undefined,
+): number {
+  if (!sample) return Number.POSITIVE_INFINITY;
+  const dx = record.x - sample.x;
+  const dy = record.y - sample.y;
+  const dz = record.z - sample.z;
+  return dx * dx + dy * dy + dz * dz;
 }
 
 function compareBoundaryCandidates(

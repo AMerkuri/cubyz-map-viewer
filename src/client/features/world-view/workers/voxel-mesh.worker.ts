@@ -317,7 +317,7 @@ function getEmissiveOutputBytes(
   return bytes;
 }
 
-function buildMeshArrays(
+export function buildMeshArrays(
   buf: ArrayBuffer,
   bakeEmissiveAttributes: boolean,
 ): {

@@ -6,6 +6,10 @@ import { deflateRawSync } from "node:zlib";
 
 import type { BlockColorTable } from "../src/server/services/block-color-table.js";
 import type { BlockShapeTable } from "../src/server/services/block-shape-table.js";
+import type {
+  EmitterSummaryCluster,
+  EmitterSummaryNode,
+} from "../src/server/services/voxel-emitter-aggregation.js";
 import { generateVoxelMesh } from "../src/server/services/voxel-generator.js";
 
 const SIZE = 128;
@@ -34,6 +38,9 @@ type Fixture = {
   extra?: Cell[];
   denseNeighbor?: boolean;
 };
+type WorkerMesh = ReturnType<
+  typeof import("../src/client/features/world-view/workers/voxel-mesh.worker.js").buildMeshArrays
+>;
 
 const fixtures: Fixture[] = [
   {
@@ -201,6 +208,8 @@ async function main(): Promise<void> {
         );
       }
     }
+    outcomes.push(...(await validateAdjacentCapPressure(root)));
+    outcomes.push(await validateCoarseAdjacent(root));
     console.log(`Voxel seam validation passed (${outcomes.length} runs).`);
     for (const outcome of outcomes) console.log(`  ${outcome}`);
   } finally {
@@ -208,17 +217,295 @@ async function main(): Promise<void> {
   }
 }
 
+async function validateCoarseAdjacent(root: string): Promise<string> {
+  const save = join(root, "adjacent-worker-lod2");
+  const lod = 2;
+  const span = SIZE * lod;
+  const cells: Cell[] = [];
+  for (let x = 0; x < span * 2; x += lod) {
+    for (let y = 0; y < span; y += lod) {
+      cells.push({ x, y, z: 0, type: STONE });
+    }
+  }
+  await writeSurface(save, lod);
+  await writeRegions(save, cells, lod);
+  const clusters = [
+    createSummaryCluster(span - 6, 128, 5, 220, 80, 20),
+    createSummaryCluster(span + 6, 132, 5, 20, 100, 255),
+  ];
+  const west = await generateCoarse(save, lod, 0, 0, clusters);
+  const east = await generateCoarse(save, lod, span, 0, clusters);
+  const [westMesh, eastMesh] = await Promise.all([
+    buildWithProductionWorker(west.buffer.slice(0)),
+    buildWithProductionWorker(east.buffer.slice(0)),
+  ]);
+  const westSeam = collectSeamEmissive(westMesh, span, 0, span, lod);
+  const eastSeam = collectSeamEmissive(eastMesh, span, 0, span, lod);
+  const sharedKeys = [...westSeam.keys()].filter((key) => eastSeam.has(key));
+  assert(
+    sharedKeys.length > 0,
+    "LOD2 fixture produced no matching seam vertices",
+  );
+  let maxDelta = 0;
+  for (const key of sharedKeys) {
+    const westColor = westSeam.get(key);
+    const eastColor = eastSeam.get(key);
+    if (!westColor || !eastColor) continue;
+    maxDelta = Math.max(
+      maxDelta,
+      Math.abs(westColor[0] - eastColor[0]),
+      Math.abs(westColor[1] - eastColor[1]),
+      Math.abs(westColor[2] - eastColor[2]),
+    );
+  }
+  assert(
+    maxDelta <= 1 / 255,
+    `LOD2 worker-baked seam delta ${maxDelta.toFixed(6)} exceeds encoding tolerance`,
+  );
+  return `adjacent-worker/lod2-coarse-halo: ${sharedKeys.length} matched seam vertices, 2 cross-boundary representatives, max delta ${maxDelta.toFixed(6)}`;
+}
+
+async function generateCoarse(
+  save: string,
+  lod: number,
+  regionX: number,
+  regionY: number,
+  clusters: EmitterSummaryCluster[],
+): Promise<{ buffer: ArrayBuffer }> {
+  const emitterSummary: EmitterSummaryNode = {
+    formatVersion: 1,
+    lod: 2,
+    regionX,
+    regionY,
+    sourceSignature: "coarse-seam-fixture",
+    signature: `coarse-seam-fixture-${regionX}-${regionY}`,
+    rawSourceCount: clusters.length,
+    cappedClusterCount: 0,
+    clusters,
+  };
+  const result = await generateVoxelMesh(
+    save,
+    colors,
+    shapes,
+    lod,
+    regionX,
+    regionY,
+    { emitterSummary },
+  );
+  assert(result.buffer, "LOD2 fixture produced no mesh");
+  return { buffer: result.buffer };
+}
+
+function createSummaryCluster(
+  centroidX: number,
+  centroidY: number,
+  centroidZ: number,
+  powerR: number,
+  powerG: number,
+  powerB: number,
+): EmitterSummaryCluster {
+  return {
+    powerR,
+    powerG,
+    powerB,
+    centroidX,
+    centroidY,
+    centroidZ,
+    centroidWeight: 1,
+    sourceCount: 1,
+    openFaces: 0b11_1111,
+    minX: centroidX - 0.5,
+    minY: centroidY - 0.5,
+    minZ: centroidZ - 0.5,
+    maxX: centroidX + 0.5,
+    maxY: centroidY + 0.5,
+    maxZ: centroidZ + 0.5,
+  };
+}
+
 async function generate(
   save: string,
+  regionX = 0,
+  regionY = 0,
 ): Promise<{ records: Record[]; bytes: Uint8Array }> {
-  const result = await generateVoxelMesh(save, colors, shapes, 1, 0, 0, {
-    includeHaloEmitters: true,
-  });
+  const result = await generateVoxelMesh(
+    save,
+    colors,
+    shapes,
+    1,
+    regionX,
+    regionY,
+    {
+      includeHaloEmitters: true,
+    },
+  );
   assert(result.buffer, "fixture produced no mesh");
   return {
     records: decodeRecords(result.buffer),
     bytes: new Uint8Array(result.buffer),
   };
+}
+
+async function validateAdjacentCapPressure(root: string): Promise<string[]> {
+  const outcomes: string[] = [];
+  for (const pressure of [false, true]) {
+    const save = join(
+      root,
+      `adjacent-worker-${pressure ? "capped" : "uncapped"}`,
+    );
+    const requiredSources = await writeAdjacentFixture(save, pressure);
+    const west = await generate(save, 0, 0);
+    const east = await generate(save, SIZE, 0);
+    const westRecords = west.records.map((record) => ({ ...record }));
+    const eastRecords = east.records.map((record) => ({
+      ...record,
+      x: record.x + SIZE,
+    }));
+    for (const source of requiredSources) {
+      assert(
+        westRecords.some((record) => samePoint(record, source)),
+        `adjacent ${pressure ? "capped" : "uncapped"}: west payload omitted required seam source ${positionKey(source)}`,
+      );
+      assert(
+        eastRecords.some((record) => samePoint(record, source)),
+        `adjacent ${pressure ? "capped" : "uncapped"}: east payload omitted required seam source ${positionKey(source)}`,
+      );
+    }
+
+    const [westMesh, eastMesh] = await Promise.all([
+      buildWithProductionWorker(west.bytes.buffer.slice(0)),
+      buildWithProductionWorker(east.bytes.buffer.slice(0)),
+    ]);
+    const westSeam = collectSeamEmissive(westMesh, SIZE);
+    const eastSeam = collectSeamEmissive(eastMesh, SIZE);
+    const sharedKeys = [...westSeam.keys()].filter((key) => eastSeam.has(key));
+    assert(
+      sharedKeys.length > 0,
+      "adjacent fixture produced no matching seam vertices",
+    );
+    let maxDelta = 0;
+    let maxKey = "";
+    for (const key of sharedKeys) {
+      const westColor = westSeam.get(key);
+      const eastColor = eastSeam.get(key);
+      if (!westColor || !eastColor) continue;
+      const delta = Math.max(
+        Math.abs(westColor[0] - eastColor[0]),
+        Math.abs(westColor[1] - eastColor[1]),
+        Math.abs(westColor[2] - eastColor[2]),
+      );
+      if (delta > maxDelta) {
+        maxDelta = delta;
+        maxKey = key;
+      }
+    }
+    const tolerance = 1 / 255;
+    assert(
+      maxDelta <= tolerance,
+      `adjacent ${pressure ? "capped" : "uncapped"}: worker-baked seam delta ${maxDelta.toFixed(6)} exceeds ${tolerance.toFixed(6)} at ${maxKey}`,
+    );
+    outcomes.push(
+      `adjacent-worker/${pressure ? "cap-pressure" : "uncapped"}: ${sharedKeys.length} matched seam vertices, ${requiredSources.length} required sources, max delta ${maxDelta.toFixed(6)}`,
+    );
+  }
+  return outcomes;
+}
+
+async function writeAdjacentFixture(
+  save: string,
+  pressure: boolean,
+): Promise<Point[]> {
+  const cells: Cell[] = [];
+  for (let x = 0; x < SIZE * 2; x++) {
+    for (let y = 0; y < SIZE; y++) {
+      cells.push({ x, y, z: 0, type: STONE });
+      const localX = x % SIZE;
+      const isFarFromSeam = x < SIZE ? localX < SIZE / 2 : localX >= SIZE / 2;
+      if (pressure && isFarFromSeam) {
+        cells.push({ x, y, z: 1, type: EMITTER });
+      }
+    }
+  }
+  const requiredSources = [
+    { x: SIZE + 1, y: 62, z: 2 },
+    { x: SIZE + 1, y: 66, z: 2 },
+  ];
+  const distractors: Point[] = [];
+  for (let y = 0; y < SIZE; y += 2) {
+    for (let z = 3; z <= 11; z += 2) {
+      if (Math.abs(y - 64) < RADIUS) continue;
+      distractors.push({ x: SIZE + 1, y, z });
+    }
+  }
+  for (const point of [...requiredSources, ...distractors]) {
+    cells.push({ ...point, type: EMITTER });
+  }
+  await writeSurface(save);
+  await writeRegions(save, cells);
+  return requiredSources;
+}
+
+let productionWorkerModulePromise:
+  | Promise<
+      typeof import("../src/client/features/world-view/workers/voxel-mesh.worker.js")
+    >
+  | undefined;
+
+async function buildWithProductionWorker(
+  buffer: ArrayBuffer,
+): Promise<WorkerMesh> {
+  if (!productionWorkerModulePromise) {
+    Object.assign(globalThis, { self: globalThis });
+    productionWorkerModulePromise = import(
+      "../src/client/features/world-view/workers/voxel-mesh.worker.js"
+    );
+  }
+  const worker = await productionWorkerModulePromise;
+  return worker.buildMeshArrays(buffer, true);
+}
+
+function collectSeamEmissive(
+  mesh: WorkerMesh,
+  seamX: number,
+  minY = 60,
+  maxY = 68,
+  seamZ = 1,
+): Map<string, [number, number, number]> {
+  const values = new Map<string, [number, number, number]>();
+  for (const quadrant of mesh.quadrantMeshes) {
+    if (!quadrant.emissiveColors) continue;
+    const scale = quadrant.emissiveColors instanceof Uint16Array ? 65535 : 255;
+    for (let index = 0; index < quadrant.positions.length; index += 3) {
+      const x = quadrant.positions[index];
+      if (x !== seamX) continue;
+      const y = quadrant.positions[index + 1];
+      const z = quadrant.positions[index + 2];
+      if (
+        y < minY ||
+        y > maxY ||
+        z !== seamZ ||
+        quadrant.normals[index] !== 0 ||
+        quadrant.normals[index + 1] !== 0 ||
+        quadrant.normals[index + 2] !== 1
+      ) {
+        continue;
+      }
+      const key = [
+        x,
+        y,
+        z,
+        quadrant.normals[index],
+        quadrant.normals[index + 1],
+        quadrant.normals[index + 2],
+      ].join("/");
+      values.set(key, [
+        (quadrant.emissiveColors[index] ?? 0) / scale,
+        (quadrant.emissiveColors[index + 1] ?? 0) / scale,
+        (quadrant.emissiveColors[index + 2] ?? 0) / scale,
+      ]);
+    }
+  }
+  return values;
 }
 
 async function writeFixture(
@@ -251,8 +538,8 @@ async function writeFixture(
   ].sort((a, b) => compareKeys(positionKey(a), positionKey(b)));
 }
 
-async function writeSurface(save: string): Promise<void> {
-  const path = join(save, "maps", "1", "0");
+async function writeSurface(save: string, lod = 1): Promise<void> {
+  const path = join(save, "maps", String(lod), "0");
   await mkdir(path, { recursive: true });
   const data = Buffer.alloc(256 * 256 * 12);
   for (let i = 0; i < 256 * 256; i++) {
@@ -265,15 +552,21 @@ async function writeSurface(save: string): Promise<void> {
   );
 }
 
-async function writeRegions(save: string, cells: Cell[]): Promise<void> {
+async function writeRegions(
+  save: string,
+  cells: Cell[],
+  lod = 1,
+): Promise<void> {
   const regions = new Map<string, Map<number, Uint32Array>>();
   for (const cell of cells) {
-    const regionX = Math.floor(cell.x / SIZE) * SIZE;
-    const regionY = Math.floor(cell.y / SIZE) * SIZE;
-    const regionZ = Math.floor(cell.z / SIZE) * SIZE;
-    const rx = Math.floor((cell.x - regionX) / CHUNK);
-    const ry = Math.floor((cell.y - regionY) / CHUNK);
-    const rz = Math.floor((cell.z - regionZ) / CHUNK);
+    const regionSpan = SIZE * lod;
+    const chunkSpan = CHUNK * lod;
+    const regionX = Math.floor(cell.x / regionSpan) * regionSpan;
+    const regionY = Math.floor(cell.y / regionSpan) * regionSpan;
+    const regionZ = Math.floor(cell.z / regionSpan) * regionSpan;
+    const rx = Math.floor((cell.x - regionX) / chunkSpan);
+    const ry = Math.floor((cell.y - regionY) / chunkSpan);
+    const rz = Math.floor((cell.z - regionZ) / chunkSpan);
     const chunkIndex = rx * 16 + ry * 4 + rz;
     const key = `${regionX}/${regionY}/${regionZ}`;
     let chunks = regions.get(key);
@@ -286,9 +579,9 @@ async function writeRegions(save: string, cells: Cell[]): Promise<void> {
       blocks = new Uint32Array(CHUNK ** 3);
       chunks.set(chunkIndex, blocks);
     }
-    const lx = ((cell.x % CHUNK) + CHUNK) % CHUNK;
-    const ly = ((cell.y % CHUNK) + CHUNK) % CHUNK;
-    const lz = ((cell.z % CHUNK) + CHUNK) % CHUNK;
+    const lx = Math.floor((((cell.x / lod) % CHUNK) + CHUNK) % CHUNK);
+    const ly = Math.floor((((cell.y / lod) % CHUNK) + CHUNK) % CHUNK);
+    const lz = Math.floor((((cell.z / lod) % CHUNK) + CHUNK) % CHUNK);
     blocks[lx * CHUNK * CHUNK + ly * CHUNK + lz] = cell.type;
   }
   for (const [key, chunks] of regions) {
@@ -310,7 +603,7 @@ async function writeRegions(save: string, cells: Cell[]): Promise<void> {
     );
     for (const [index, payload] of payloads)
       header.writeUInt32BE(payload.length, 8 + index * 4);
-    const directory = join(save, "chunks", "1", String(x), String(y));
+    const directory = join(save, "chunks", String(lod), String(x), String(y));
     await mkdir(directory, { recursive: true });
     await writeFile(
       join(directory, `${z}.region`),

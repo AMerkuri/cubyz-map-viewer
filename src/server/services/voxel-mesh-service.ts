@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { brotliCompress, gzip, constants as zlibConstants } from "node:zlib";
 import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
@@ -8,7 +9,9 @@ import { generateSignRecords, type SignRecord } from "./sign-records.js";
 import {
   EMITTER_SUMMARY_LODS,
   EMITTER_SUMMARY_REQUEST_TIMEOUT_MS,
+  type EmitterSummaryCluster,
   type EmitterSummaryResult,
+  getEmitterSummaryRadius,
 } from "./voxel-emitter-aggregation.js";
 import { VoxelEmitterSummaryService } from "./voxel-emitter-summary-service.js";
 import { computeVoxelSourceSignature } from "./voxel-source-signature.js";
@@ -708,7 +711,7 @@ export class VoxelMeshService {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        this.emitterSummaries.getNode(lod, regionX, regionY),
+        this.getCoarseEmitterSummary(lod, regionX, regionY),
         new Promise<never>((_resolve, reject) => {
           timeout = setTimeout(
             () => reject(new Error("Emitter summary cold build timed out")),
@@ -719,6 +722,88 @@ export class VoxelMeshService {
     } finally {
       if (timeout) clearTimeout(timeout);
     }
+  }
+
+  private async getCoarseEmitterSummary(
+    lod: number,
+    regionX: number,
+    regionY: number,
+  ): Promise<EmitterSummaryResult> {
+    const span = 128 * lod;
+    const results = await Promise.all(
+      [-1, 0, 1].flatMap((dx) =>
+        [-1, 0, 1].map((dy) =>
+          this.emitterSummaries.getNode(
+            lod,
+            regionX + dx * span,
+            regionY + dy * span,
+          ),
+        ),
+      ),
+    );
+    const clusters: EmitterSummaryCluster[] = [];
+    for (const result of results) {
+      for (const cluster of result.node.clusters) {
+        const radius = getEmitterSummaryRadius(cluster);
+        const dx =
+          cluster.centroidX < regionX
+            ? regionX - cluster.centroidX
+            : Math.max(0, cluster.centroidX - (regionX + span));
+        const dy =
+          cluster.centroidY < regionY
+            ? regionY - cluster.centroidY
+            : Math.max(0, cluster.centroidY - (regionY + span));
+        if (dx * dx + dy * dy < radius * radius) clusters.push(cluster);
+      }
+    }
+    const signature = createHash("sha1")
+      .update("coarse-halo-summary-v1")
+      .update(results.map((result) => result.node.signature).join("|"))
+      .digest("hex");
+    const own = results[4];
+    if (!own) throw new Error("Missing owning emitter summary");
+    return {
+      node: {
+        ...own.node,
+        sourceSignature: signature,
+        signature,
+        rawSourceCount: results.reduce(
+          (sum, result) => sum + result.node.rawSourceCount,
+          0,
+        ),
+        cappedClusterCount: results.reduce(
+          (sum, result) => sum + result.node.cappedClusterCount,
+          0,
+        ),
+        clusters,
+      },
+      metrics: {
+        cacheOutcome: results.some(
+          (result) => result.metrics.cacheOutcome === "built",
+        )
+          ? "built"
+          : results.some((result) => result.metrics.cacheOutcome === "disk")
+            ? "disk"
+            : "memory",
+        buildMs: results.reduce(
+          (sum, result) => sum + result.metrics.buildMs,
+          0,
+        ),
+        leafParses: results.reduce(
+          (sum, result) => sum + result.metrics.leafParses,
+          0,
+        ),
+        rawSourceCount: results.reduce(
+          (sum, result) => sum + result.metrics.rawSourceCount,
+          0,
+        ),
+        retainedClusterCount: clusters.length,
+        cappedClusterCount: results.reduce(
+          (sum, result) => sum + result.metrics.cappedClusterCount,
+          0,
+        ),
+      },
+    };
   }
 
   private isCurrentEpoch(

@@ -5,7 +5,7 @@ const EMITTER_SUMMARY_CLUSTER_VERSION = "world-grid-top-stratified-v2";
 const EMITTER_METADATA_VERSION = "q8.8-radius-u8-radius-gain-v3";
 export const EMITTER_DEFAULT_POWER = 1;
 export const EMITTER_DEFAULT_RADIUS = 12;
-export const EMITTER_COARSE_BASE_RADIUS = 14;
+const EMITTER_COARSE_BASE_RADIUS = 14;
 export const EMITTER_POWER_FIXED_SCALE = 256;
 export const EMITTER_MAX_POWER = 0xffff / EMITTER_POWER_FIXED_SCALE;
 export const EMITTER_MAX_RADIUS = 64;
@@ -59,6 +59,21 @@ export interface EmitterSummaryBuildMetrics {
 export interface EmitterSummaryResult {
   node: EmitterSummaryNode;
   metrics: EmitterSummaryBuildMetrics;
+}
+
+export function getEmitterSummaryRadius(
+  cluster: EmitterSummaryCluster,
+): number {
+  const extentRadius =
+    Math.hypot(
+      cluster.maxX - cluster.minX,
+      cluster.maxY - cluster.minY,
+      cluster.maxZ - cluster.minZ,
+    ) / 2;
+  return Math.min(
+    EMITTER_MAX_SUMMARY_RADIUS,
+    Math.ceil(EMITTER_COARSE_BASE_RADIUS + extentRadius * 0.5),
+  );
 }
 
 export const EMITTER_SUMMARY_CLUSTER_EDGE_BY_LOD: Record<
