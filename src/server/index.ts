@@ -674,9 +674,9 @@ async function main() {
       }
 
       for (const region of expandHaloAffectedVoxelRegions(regions)) {
-        voxelMeshService.clear(
-          `${region.lod}/${region.regionX}/${region.regionY}`,
-        );
+        const key = `${region.lod}/${region.regionX}/${region.regionY}`;
+        voxelMeshService.clear(key);
+        voxelMeshService.clear(`${key}#nohalo`);
       }
     }
     broadcast(event);

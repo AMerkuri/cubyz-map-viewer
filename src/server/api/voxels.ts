@@ -7,7 +7,7 @@ import { type Request, type Response, Router } from "express";
 import { logger } from "../services/logger.js";
 import type {
   VoxelContentEncoding,
-  VoxelMeshService,
+  VoxelMeshServiceApi,
 } from "../services/voxel-mesh-service.js";
 import { etagMatches } from "./http.js";
 import { assertAlignedRegion, parseRegionParams } from "./validation.js";
@@ -97,25 +97,26 @@ function pickVoxelEncoding(
 }
 
 export function createVoxelsRouter(
-  voxelMeshService: VoxelMeshService,
+  voxelMeshService: VoxelMeshServiceApi,
   preferredEncoding: PreferredVoxelEncoding,
 ): Router {
   const router = Router();
 
   router.get("/metrics", async (req: Request, res: Response) => {
-    const lod = req.query.lod ? Number(req.query.lod) : null;
-    const regionX = req.query.regionX ? Number(req.query.regionX) : null;
-    const regionY = req.query.regionY ? Number(req.query.regionY) : null;
+    const queryLod = req.query.lod;
+    const queryRegionX = req.query.regionX;
+    const queryRegionY = req.query.regionY;
     const fresh = req.query.fresh === "1" || req.query.fresh === "true";
 
-    if (lod !== null || regionX !== null || regionY !== null) {
+    if (
+      queryLod !== undefined ||
+      queryRegionX !== undefined ||
+      queryRegionY !== undefined
+    ) {
       if (
-        lod === null ||
-        regionX === null ||
-        regionY === null ||
-        !Number.isFinite(lod) ||
-        !Number.isFinite(regionX) ||
-        !Number.isFinite(regionY)
+        typeof queryLod !== "string" ||
+        typeof queryRegionX !== "string" ||
+        typeof queryRegionY !== "string"
       ) {
         res.status(400).json({
           error: "lod, regionX, and regionY query params are required together",
@@ -123,6 +124,11 @@ export function createVoxelsRouter(
         return;
       }
 
+      const { lod, regionX, regionY } = parseRegionParams({
+        lod: queryLod,
+        regionX: queryRegionX,
+        regionY: queryRegionY,
+      });
       assertAlignedRegion(lod, regionX, regionY);
       const key = `${lod}/${regionX}/${regionY}`;
       const benchmark = await voxelMeshService.benchmarkVoxelMesh(

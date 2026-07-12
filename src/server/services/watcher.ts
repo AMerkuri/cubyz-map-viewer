@@ -27,9 +27,18 @@ export interface TerrainRegionUpdate {
   regionY: number;
 }
 
+export interface SaveWatcherScheduler {
+  setTimeout(callback: () => void, delayMs: number): NodeJS.Timeout;
+  clearTimeout(timer: NodeJS.Timeout): void;
+}
+
 interface SaveWatcherOptions {
   terrainUpdateBatchMs?: number;
+  scheduler?: SaveWatcherScheduler;
 }
+
+const VALID_LODS = new Set([1, 2, 4, 8, 16, 32]);
+const nativeScheduler: SaveWatcherScheduler = { setTimeout, clearTimeout };
 
 export interface WatchEvent {
   type: WatchEventType;
@@ -53,6 +62,7 @@ export class SaveWatcher extends EventEmitter {
   private savePath: string;
   private debounceTimers = new Map<string, NodeJS.Timeout>();
   private terrainUpdateBatchMs: number;
+  private readonly scheduler: SaveWatcherScheduler;
   private terrainBatchTimer: NodeJS.Timeout | null = null;
   private pendingTileUpdates = new Map<string, TerrainTileUpdate>();
   private pendingRegionUpdates = new Map<string, TerrainRegionUpdate>();
@@ -65,6 +75,7 @@ export class SaveWatcher extends EventEmitter {
       0,
       options.terrainUpdateBatchMs ?? 15_000,
     );
+    this.scheduler = options.scheduler ?? nativeScheduler;
   }
 
   start(): void {
@@ -82,11 +93,13 @@ export class SaveWatcher extends EventEmitter {
     });
 
     this.watcher.on("change", (filePath: string) =>
-      this.handleChange(filePath),
+      this.handleFileEvent("change", filePath),
     );
-    this.watcher.on("add", (filePath: string) => this.handleAdd(filePath));
+    this.watcher.on("add", (filePath: string) =>
+      this.handleFileEvent("add", filePath),
+    );
     this.watcher.on("unlink", (filePath: string) =>
-      this.handleRemove(filePath),
+      this.handleFileEvent("unlink", filePath),
     );
     this.watcher.on("error", (err) => {
       logger.error("SaveWatcher error", {
@@ -103,11 +116,11 @@ export class SaveWatcher extends EventEmitter {
       this.watcher = null;
     }
     for (const timer of this.debounceTimers.values()) {
-      clearTimeout(timer);
+      this.scheduler.clearTimeout(timer);
     }
     this.debounceTimers.clear();
     if (this.terrainBatchTimer) {
-      clearTimeout(this.terrainBatchTimer);
+      this.scheduler.clearTimeout(this.terrainBatchTimer);
       this.terrainBatchTimer = null;
     }
     this.pendingTileUpdates.clear();
@@ -116,10 +129,10 @@ export class SaveWatcher extends EventEmitter {
 
   private debounce(key: string, fn: () => void): void {
     const existing = this.debounceTimers.get(key);
-    if (existing) clearTimeout(existing);
+    if (existing) this.scheduler.clearTimeout(existing);
     this.debounceTimers.set(
       key,
-      setTimeout(() => {
+      this.scheduler.setTimeout(() => {
         this.debounceTimers.delete(key);
         fn();
       }, SaveWatcher.DEBOUNCE_MS),
@@ -144,9 +157,9 @@ export class SaveWatcher extends EventEmitter {
 
   private scheduleTerrainUpdatesBatch(): void {
     if (this.terrainBatchTimer) {
-      clearTimeout(this.terrainBatchTimer);
+      this.scheduler.clearTimeout(this.terrainBatchTimer);
     }
-    this.terrainBatchTimer = setTimeout(() => {
+    this.terrainBatchTimer = this.scheduler.setTimeout(() => {
       this.terrainBatchTimer = null;
       this.flushTerrainUpdatesBatch();
     }, this.terrainUpdateBatchMs);
@@ -171,6 +184,12 @@ export class SaveWatcher extends EventEmitter {
         regions,
       },
     } as WatchEvent);
+  }
+
+  handleFileEvent(event: "change" | "add" | "unlink", filePath: string): void {
+    if (event === "change") this.handleChange(filePath);
+    else if (event === "add") this.handleAdd(filePath);
+    else this.handleRemove(filePath);
   }
 
   private handleChange(filePath: string): void {
@@ -236,11 +255,15 @@ export class SaveWatcher extends EventEmitter {
     const rel = relative(this.savePath, filePath).split(sep).join("/");
 
     if (rel.endsWith(".surface")) {
-      this.debounce("surface-index", () => {
-        this.emit("watch-event", {
-          type: "surface-index-changed",
-        } as WatchEvent);
-      });
+      const tileInfo = this.parseSurfacePath(rel);
+      if (tileInfo) {
+        this.debounce("surface-index", () => {
+          this.emit("watch-event", {
+            type: "surface-index-changed",
+          } as WatchEvent);
+        });
+        this.queueTileUpdate(tileInfo);
+      }
     }
 
     if (rel.endsWith(".region")) {
@@ -257,7 +280,7 @@ export class SaveWatcher extends EventEmitter {
    */
   private parseSurfacePath(rel: string): TerrainTileUpdate | null {
     // Expected: maps/{lod}/{worldX}/{worldY}.surface
-    const match = rel.match(/^maps\/(\d+)\/(\d+)\/(\d+)\.surface$/);
+    const match = rel.match(/^maps\/(\d+)\/(-?\d+)\/(-?\d+)\.surface$/);
     if (!match) return null;
 
     const lod = parseInt(match[1], 10);
@@ -267,7 +290,12 @@ export class SaveWatcher extends EventEmitter {
     const tileX = worldX / (mapSize * lod);
     const tileY = worldY / (mapSize * lod);
 
-    if (!Number.isInteger(tileX) || !Number.isInteger(tileY)) return null;
+    if (
+      !VALID_LODS.has(lod) ||
+      !Number.isInteger(tileX) ||
+      !Number.isInteger(tileY)
+    )
+      return null;
 
     return { lod, tileX, tileY };
   }
@@ -285,7 +313,13 @@ export class SaveWatcher extends EventEmitter {
     const regionX = parseInt(match[2], 10);
     const regionY = parseInt(match[3], 10);
 
-    if (Number.isNaN(lod) || Number.isNaN(regionX) || Number.isNaN(regionY))
+    if (
+      !VALID_LODS.has(lod) ||
+      Number.isNaN(regionX) ||
+      Number.isNaN(regionY) ||
+      regionX % (128 * lod) !== 0 ||
+      regionY % (128 * lod) !== 0
+    )
       return null;
 
     return { lod, regionX, regionY };

@@ -23,11 +23,15 @@
 - `npm run check:knip`: unused exports/dependencies check
 - `npm run typecheck`: client and server TS configs
 - `npm run build`: Vite client build plus `tsc -p tsconfig.server.json`
+- `npm test`: all hermetic voxel and core-mechanics correctness suites
+- `npm run test:voxel:server`, `npm run test:voxel:client`, `npm run test:voxel:contract`: focused correctness groups
+- `npm run test:core:service-api`, `npm run test:core:watcher`, `npm run test:core:client`, `npm run test:core:terrain`: focused service/API, watcher, live-update, and terrain seam groups
+- `npm run bench:voxel:server`, `npm run bench:voxel:client`: opt-in serial benchmarks; timing is observational, not a pass/fail budget
 - `npm start`: runs `dist/server/index.js`
 
 ## Verification Order
 
-- Default for code changes: `npm run check && npm run check:knip && npm run typecheck`
+- Default for code changes: `npm test && npm run check && npm run check:knip && npm run typecheck`
 - Also run `npm run build` when changing build paths, worker wiring, route payloads, or TypeScript boundaries.
 - There is no test runner configured.
 
@@ -47,6 +51,7 @@
 - `src/client/features/world-controls/` owns control state, persistence, and HUD controls.
 - `src/client/features/world-view/` owns the Three.js scene, data loading/runtime, labels, markers, and the browser worker.
 - `World3DView.tsx` is intentionally imperative and ref-heavy; avoid pushing per-frame scene state into React state.
+- `test/core/` owns hermetic runtime mechanics tests. Use fakes or temporary fixtures instead of a real save, browser, WebGL context, Cubyz installation, or running server.
 - `src/server/index.ts` is the only real server composition root.
 - Keep server layering clear: `api/` for HTTP/WebSocket boundary logic, `parsers/` for file decoding, `services/` for runtime/business logic, `workers/` for voxel worker entrypoints/protocol.
 - Routes should go through `VoxelMeshService`; do not bypass it when serving voxel payloads.

@@ -80,7 +80,7 @@ interface VoxelMeshBenchmark {
   variants: VoxelEncodingBenchmark[];
 }
 
-interface VoxelMeshResponse {
+export interface VoxelMeshResponse {
   status: "ok" | "empty";
   buf?: Buffer;
   etag?: string;
@@ -112,7 +112,7 @@ interface VoxelCompressionConfig {
   gzipLevel: number;
 }
 
-interface VoxelRequestMetrics {
+export interface VoxelRequestMetrics {
   source: "cache" | "worker";
   cacheOutcome: "hit" | "miss" | "unknown";
   queueMs: number;
@@ -163,7 +163,7 @@ interface VoxelRequestMetrics {
   maxWorldZ?: number;
 }
 
-interface VoxelServiceMetricsSnapshot {
+export interface VoxelServiceMetricsSnapshot {
   workers: number;
   workerRuntimeMode: "source" | "dist";
   queueDepth: number;
@@ -184,12 +184,62 @@ interface VoxelServiceMetricsSnapshot {
   totalMsMax: number;
 }
 
-export class VoxelMeshService {
-  private readonly pool: VoxelWorkerPool;
+export interface VoxelWorkerPoolLike {
+  start(): Promise<void>;
+  destroy(): Promise<void>;
+  run(
+    request: Parameters<VoxelWorkerPool["run"]>[0],
+  ): Promise<InstrumentedPoolResult>;
+  getWorkerCount(): number;
+  getRuntimeMode(): "source" | "dist";
+  getQueueDepth(): number;
+  getRunningCount(): number;
+}
+
+export interface VoxelEmitterSummaryServiceLike {
+  getNode: VoxelEmitterSummaryService["getNode"];
+  invalidate: VoxelEmitterSummaryService["invalidate"];
+}
+
+interface VoxelMeshServiceDependencies {
+  pool?: VoxelWorkerPoolLike;
+  emitterSummaries?: VoxelEmitterSummaryServiceLike;
+  computeSourceSignature?: typeof computeVoxelSourceSignature;
+}
+
+export interface VoxelMeshServiceApi {
+  getCurrentEtag(
+    key: string,
+    lod: number,
+    regionX: number,
+    regionY: number,
+    contentEncoding: VoxelContentEncoding,
+  ): Promise<string | null>;
+  getVoxelMesh(
+    key: string,
+    lod: number,
+    regionX: number,
+    regionY: number,
+    contentEncoding: VoxelContentEncoding,
+    includeHaloEmitters?: boolean,
+  ): Promise<VoxelMeshResponse>;
+  getMetricsSnapshot(): VoxelServiceMetricsSnapshot;
+  benchmarkVoxelMesh(
+    key: string,
+    lod: number,
+    regionX: number,
+    regionY: number,
+    fresh?: boolean,
+  ): Promise<VoxelMeshBenchmark | null>;
+}
+
+export class VoxelMeshService implements VoxelMeshServiceApi {
+  private readonly pool: VoxelWorkerPoolLike;
   private readonly cache: LRUCache<string, CachedVoxelMesh>;
   private readonly savePath: string;
   private readonly compressionConfig: VoxelCompressionConfig;
-  private readonly emitterSummaries: VoxelEmitterSummaryService;
+  private readonly emitterSummaries: VoxelEmitterSummaryServiceLike;
+  private readonly computeSourceSignature: typeof computeVoxelSourceSignature;
   private readonly blockShapes: BlockShapeTable;
   private readonly blockShapeSignature: string;
   private readonly blockColorSignature: string;
@@ -222,22 +272,20 @@ export class VoxelMeshService {
       brotliLgwin: 20,
       gzipLevel: 6,
     },
+    dependencies: VoxelMeshServiceDependencies = {},
   ) {
     this.savePath = savePath;
     this.blockShapes = blockShapes;
     this.blockShapeSignature = blockShapes.signature;
     this.blockColorSignature = blockColors.signature;
-    this.pool = new VoxelWorkerPool(
-      savePath,
-      blockColors,
-      blockShapes,
-      workerCount,
-    );
-    this.emitterSummaries = new VoxelEmitterSummaryService(
-      savePath,
-      blockColors,
-      blockShapes,
-    );
+    this.pool =
+      dependencies.pool ??
+      new VoxelWorkerPool(savePath, blockColors, blockShapes, workerCount);
+    this.emitterSummaries =
+      dependencies.emitterSummaries ??
+      new VoxelEmitterSummaryService(savePath, blockColors, blockShapes);
+    this.computeSourceSignature =
+      dependencies.computeSourceSignature ?? computeVoxelSourceSignature;
     this.cache = new LRUCache<string, CachedVoxelMesh>(cacheSize);
     this.compressionConfig = compressionConfig;
   }
@@ -261,13 +309,11 @@ export class VoxelMeshService {
   }
 
   invalidateLod1EmitterColumn(regionX: number, regionY: number): void {
-    const affectedLeaves = [
-      [regionX, regionY],
-      [regionX - 128, regionY],
-      [regionX + 128, regionY],
-      [regionX, regionY - 128],
-      [regionX, regionY + 128],
-    ] as const;
+    const affectedLeaves = [-128, 0, 128].flatMap((offsetX) =>
+      [-128, 0, 128].map(
+        (offsetY) => [regionX + offsetX, regionY + offsetY] as const,
+      ),
+    );
     for (const [leafX, leafY] of affectedLeaves) {
       for (const lod of EMITTER_SUMMARY_LODS) {
         const span = 128 * lod;
@@ -320,7 +366,7 @@ export class VoxelMeshService {
     const emitterSummary =
       lod > 1 ? await this.getEmitterSummary(lod, regionX, regionY) : undefined;
     if (emitterSummary) this.preparedEmitterSummaries.set(key, emitterSummary);
-    const sourceSignature = await computeVoxelSourceSignature({
+    const sourceSignature = await this.computeSourceSignature({
       savePath: this.savePath,
       blockShapeSignature: this.blockShapeSignature,
       blockColorSignature: this.blockColorSignature,
@@ -512,7 +558,7 @@ export class VoxelMeshService {
       return { status: "empty", metrics };
     }
 
-    const sourceSignature = await computeVoxelSourceSignature({
+    const sourceSignature = await this.computeSourceSignature({
       savePath: this.savePath,
       blockShapeSignature: this.blockShapeSignature,
       blockColorSignature: this.blockColorSignature,
@@ -523,6 +569,10 @@ export class VoxelMeshService {
     });
     if (!sourceSignature) {
       this.emptyResponses++;
+      return { status: "empty", metrics };
+    }
+    if (!this.isCurrentEpoch(key, result.globalEpoch, result.keyEpoch)) {
+      this.staleDrops++;
       return { status: "empty", metrics };
     }
 
