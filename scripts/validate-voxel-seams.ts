@@ -10,6 +10,7 @@ import type {
   EmitterSummaryCluster,
   EmitterSummaryNode,
 } from "../src/server/services/voxel-emitter-aggregation.js";
+import { VoxelEmitterSummaryService } from "../src/server/services/voxel-emitter-summary-service.js";
 import { generateVoxelMesh } from "../src/server/services/voxel-generator.js";
 
 const SIZE = 128;
@@ -103,15 +104,16 @@ const fixtures: Fixture[] = [
 
 const colors: BlockColorTable = {
   rgb: new Uint8Array([
-    0, 0, 0, 100, 100, 100, 255, 80, 20, 80, 120, 180, 180, 120, 80,
+    0, 0, 0, 100, 100, 100, 255, 80, 20, 80, 120, 180, 180, 120, 80, 255, 160,
+    40,
   ]),
   emittedLightRgb: new Uint8Array([
-    0, 0, 0, 0, 0, 0, 255, 80, 20, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 255, 80, 20, 0, 0, 0, 120, 200, 255, 255, 160, 40,
   ]),
-  airLike: new Uint8Array([1, 0, 0, 0, 0]),
-  renderKind: new Uint8Array([0, 1, 1, 2, 1]),
-  transparentBackface: new Uint8Array(5),
-  transparentGroup: new Uint32Array(5),
+  airLike: new Uint8Array([1, 0, 0, 0, 0, 0]),
+  renderKind: new Uint8Array([0, 1, 1, 2, 1, 1]),
+  transparentBackface: new Uint8Array(6),
+  transparentGroup: new Uint32Array(6),
   signature: "seam-fixture-colors-v1",
 };
 const shapes: BlockShapeTable = {
@@ -132,6 +134,7 @@ const shapes: BlockShapeTable = {
       sideQuads: [],
       bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
     },
+    { kind: "cube", fallback: "solid" },
   ],
   signature: "seam-fixture-shapes-v1",
 };
@@ -210,11 +213,103 @@ async function main(): Promise<void> {
     }
     outcomes.push(...(await validateAdjacentCapPressure(root)));
     outcomes.push(await validateCoarseAdjacent(root));
+    outcomes.push(await validateUnrepresentedSources(root));
+    outcomes.push(await validateQualifiedCoarseSource(root));
     console.log(`Voxel seam validation passed (${outcomes.length} runs).`);
     for (const outcome of outcomes) console.log(`  ${outcome}`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+}
+
+async function validateQualifiedCoarseSource(root: string): Promise<string> {
+  const save = join(root, "qualified-coarse-source");
+  await writeSurface(save);
+  const detailedCells: Cell[] = [{ x: 64, y: 64, z: 1, type: EMITTER }];
+  for (let x = 0; x < SIZE; x++) {
+    for (let y = 0; y < SIZE; y++) {
+      detailedCells.push({ x, y, z: 0, type: STONE });
+    }
+  }
+  await writeRegions(save, detailedCells);
+  await writeSurface(save, 2);
+  const coarseCells: Cell[] = [];
+  for (let x = 0; x < SIZE * 2; x += 2) {
+    for (let y = 0; y < SIZE * 2; y += 2) {
+      coarseCells.push({ x, y, z: 0, type: STONE });
+    }
+  }
+  await writeRegions(save, coarseCells, 2);
+  const detailed = await generateVoxelMesh(save, colors, shapes, 1, 0, 0, {
+    includeHaloEmitters: false,
+    returnRepresentedSources: true,
+  });
+  assert.equal(
+    detailed.representedSources?.length,
+    1,
+    "coarse fixture source was not represented at LOD1",
+  );
+  const service = new VoxelEmitterSummaryService(save, colors, shapes);
+  const summary = await service.getNode(2, 0, 0);
+  assert.equal(
+    summary.node.clusters.length > 0,
+    true,
+    "qualified source was removed from the LOD2 summary",
+  );
+  const coarse = await generateVoxelMesh(save, colors, shapes, 2, 0, 0, {
+    emitterSummary: summary.node,
+    emitterSummaryMetrics: summary.metrics,
+    includeHaloEmitters: false,
+  });
+  assert(coarse.buffer, "air-replaced coarse fixture produced no mesh");
+  assert.equal(
+    decodeRecords(coarse.buffer).length > 0,
+    true,
+    "qualified source did not illuminate coarse receiving geometry",
+  );
+  return "qualified-coarse-source: LOD1 source retained near LOD2 receiving geometry";
+}
+
+async function validateUnrepresentedSources(root: string): Promise<string> {
+  const save = join(root, "unrepresented-sources");
+  const hidden = { x: 32, y: 32, z: 0 };
+  const depthSuppressed = { x: 48, y: 48, z: -70 };
+  const emptyModel = { x: 64, y: 64, z: 1 };
+  await writeSurface(save);
+  await writeRegions(save, [
+    { ...hidden, type: EMITTER },
+    { x: 31, y: 32, z: 0, type: STONE },
+    { x: 33, y: 32, z: 0, type: STONE },
+    { x: 32, y: 31, z: 0, type: STONE },
+    { x: 32, y: 33, z: 0, type: STONE },
+    { x: 32, y: 32, z: -1, type: STONE },
+    { x: 32, y: 32, z: 1, type: STONE },
+    { ...depthSuppressed, type: EMITTER },
+    { ...emptyModel, type: MODEL },
+    { x: 0, y: 0, z: 0, type: STONE },
+  ]);
+  const result = await generateVoxelMesh(save, colors, shapes, 1, 0, 0, {
+    includeHaloEmitters: false,
+    returnRepresentedSources: true,
+  });
+  assert(result.buffer, "unrepresented-source fixture produced no mesh");
+  assert.deepEqual(
+    result.representedSources,
+    [],
+    "hidden, depth-suppressed, or empty-model sources became represented",
+  );
+  assert.equal(
+    decodeRecords(result.buffer).length,
+    0,
+    "unrepresented sources produced payload emitter records",
+  );
+  const workerMesh = await buildWithProductionWorker(result.buffer.slice(0));
+  assert.equal(
+    workerMesh.emitterRecords.length,
+    0,
+    "unrepresented sources produced runtime accent ownership",
+  );
+  return "unrepresented-sources: hidden, depth-suppressed, and empty-model emitters omitted";
 }
 
 async function validateCoarseAdjacent(root: string): Promise<string> {
@@ -539,17 +634,19 @@ async function writeFixture(
 }
 
 async function writeSurface(save: string, lod = 1): Promise<void> {
-  const path = join(save, "maps", String(lod), "0");
-  await mkdir(path, { recursive: true });
   const data = Buffer.alloc(256 * 256 * 12);
   for (let i = 0; i < 256 * 256; i++) {
     data.writeInt32BE(1, 256 * 256 * 4 + i * 4);
     data.writeInt32BE(1, 256 * 256 * 8 + i * 4);
   }
-  await writeFile(
-    join(path, "0.surface"),
-    Buffer.concat([Buffer.from([1, 0]), deflateRawSync(data)]),
-  );
+  const payload = Buffer.concat([Buffer.from([1, 0]), deflateRawSync(data)]);
+  for (const x of [-256, 0, 256]) {
+    const path = join(save, "maps", String(lod), String(x * lod));
+    await mkdir(path, { recursive: true });
+    for (const y of [-256, 0, 256]) {
+      await writeFile(join(path, `${y * lod}.surface`), payload);
+    }
+  }
 }
 
 async function writeRegions(

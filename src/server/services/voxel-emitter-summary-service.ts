@@ -10,17 +10,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import {
-  CHUNK_SIZE,
-  parseRegionFile,
-  REGION_SIZE,
-  type RegionData,
-} from "../parsers/region.js";
+import { CHUNK_SIZE, REGION_SIZE } from "../parsers/region.js";
 import type { BlockColorTable } from "./block-color-table.js";
-import {
-  type BlockShapeTable,
-  resolveShapeForLod,
-} from "./block-shape-table.js";
+import type { BlockShapeTable } from "./block-shape-table.js";
 import { LRUCache } from "./cache.js";
 import {
   EMITTER_SUMMARY_CLUSTER_EDGE_BY_LOD,
@@ -34,26 +26,13 @@ import {
   type EmitterSummaryResult,
   isEmitterSummaryLod,
 } from "./voxel-emitter-aggregation.js";
+import { generateVoxelMesh } from "./voxel-generator.js";
 
 const REGION_CELLS = CHUNK_SIZE * REGION_SIZE;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??
     join(process.cwd(), "dist", "server", "cache", "voxels"),
 );
-const OPEN_FACE_STEPS = [
-  { dx: 1, dy: 0, dz: 0, bit: 1 << 0 },
-  { dx: -1, dy: 0, dz: 0, bit: 1 << 1 },
-  { dx: 0, dy: 1, dz: 0, bit: 1 << 2 },
-  { dx: 0, dy: -1, dz: 0, bit: 1 << 3 },
-  { dx: 0, dy: 0, dz: 1, bit: 1 << 4 },
-  { dx: 0, dy: 0, dz: -1, bit: 1 << 5 },
-] as const;
-
-interface LoadedLeafRegions {
-  regions: Map<string, RegionData | null>;
-  leafParses: number;
-}
-
 interface BuiltClusters {
   clusters: EmitterSummaryCluster[];
   cappedClusterCount: number;
@@ -238,57 +217,40 @@ export class VoxelEmitterSummaryService {
     cappedClusterCount: number;
     leafParses: number;
   }> {
-    const loaded = await this.loadLeafRegions(regionX, regionY);
+    const generated = await generateVoxelMesh(
+      this.savePath,
+      this.blockColors,
+      this.blockShapes,
+      1,
+      regionX,
+      regionY,
+      { includeHaloEmitters: false, returnRepresentedSources: true },
+    );
     const clusters: EmitterSummaryCluster[] = [];
-    const centerPrefix = `${regionX}/${regionY}/`;
-
-    for (const [key, region] of loaded.regions) {
-      if (!key.startsWith(centerPrefix) || !region) continue;
-      for (const chunk of region.chunks) {
-        if (!chunk) continue;
-        for (let x = 0; x < CHUNK_SIZE; x++) {
-          for (let y = 0; y < CHUNK_SIZE; y++) {
-            for (let z = 0; z < CHUNK_SIZE; z++) {
-              const blockValue = chunk.blocks[localIndex(x, y, z)] ?? 0;
-              const paletteIndex = blockValue & 0xffff;
-              const emitted = this.getEmittedLight(paletteIndex);
-              if (!emitted) continue;
-              const worldX = region.worldX + chunk.rx * CHUNK_SIZE + x;
-              const worldY = region.worldY + chunk.ry * CHUNK_SIZE + y;
-              const worldZ = region.worldZ + chunk.rz * CHUNK_SIZE + z;
-              const openFaces = this.getOpenFaces(
-                loaded.regions,
-                worldX,
-                worldY,
-                worldZ,
-              );
-              if (openFaces === 0) continue;
-              const scale = Math.max(emitted.r, emitted.g, emitted.b);
-              const powerR = emitted.r / scale;
-              const powerG = emitted.g / scale;
-              const powerB = emitted.b / scale;
-              const weight = luminance(powerR, powerG, powerB);
-              clusters.push({
-                powerR,
-                powerG,
-                powerB,
-                centroidX: worldX + 0.5,
-                centroidY: worldY + 0.5,
-                centroidZ: worldZ + 0.5,
-                centroidWeight: weight,
-                sourceCount: 1,
-                openFaces,
-                minX: worldX,
-                minY: worldY,
-                minZ: worldZ,
-                maxX: worldX + 1,
-                maxY: worldY + 1,
-                maxZ: worldZ + 1,
-              });
-            }
-          }
-        }
-      }
+    for (const source of generated.representedSources ?? []) {
+      const scale = Math.max(source.r, source.g, source.b);
+      const powerR = source.r / scale;
+      const powerG = source.g / scale;
+      const powerB = source.b / scale;
+      const weight = luminance(powerR, powerG, powerB);
+      clusters.push({
+        powerR,
+        powerG,
+        powerB,
+        centroidX: source.x + 0.5,
+        centroidY: source.y + 0.5,
+        centroidZ: source.z + 0.5,
+        centroidWeight: weight,
+        sourceCount: 1,
+        openFaces: source.openFaces,
+        minX: source.x,
+        minY: source.y,
+        minZ: source.z,
+        maxX: source.x + 1,
+        maxY: source.y + 1,
+        maxZ: source.z + 1,
+        representedLods: source.representedLods,
+      });
     }
 
     const rawSourceCount = clusters.length;
@@ -296,93 +258,8 @@ export class VoxelEmitterSummaryService {
     return {
       ...built,
       rawSourceCount,
-      leafParses: loaded.leafParses,
+      leafParses: generated.stats?.regionsParsed ?? 0,
     };
-  }
-
-  private async loadLeafRegions(
-    regionX: number,
-    regionY: number,
-  ): Promise<LoadedLeafRegions> {
-    const regions = new Map<string, RegionData | null>();
-    let leafParses = 0;
-    const columns = [
-      [regionX, regionY],
-      [regionX - REGION_CELLS, regionY],
-      [regionX + REGION_CELLS, regionY],
-      [regionX, regionY - REGION_CELLS],
-      [regionX, regionY + REGION_CELLS],
-    ] as const;
-
-    await Promise.all(
-      columns.map(async ([columnX, columnY]) => {
-        const dir = this.columnPath(columnX, columnY);
-        if (!existsSync(dir)) return;
-        const worldZs = await listRegionZs(dir);
-        await Promise.all(
-          worldZs.map(async (worldZ) => {
-            const key = regionKey(columnX, columnY, worldZ);
-            try {
-              const region = await parseRegionFile(
-                join(dir, `${worldZ}.region`),
-                columnX,
-                columnY,
-                worldZ,
-                1,
-              );
-              regions.set(key, region);
-              leafParses++;
-            } catch {
-              regions.set(key, null);
-            }
-          }),
-        );
-      }),
-    );
-    return { regions, leafParses };
-  }
-
-  private getOpenFaces(
-    regions: Map<string, RegionData | null>,
-    worldX: number,
-    worldY: number,
-    worldZ: number,
-  ): number {
-    let result = 0;
-    for (const step of OPEN_FACE_STEPS) {
-      const blockValue = getBlockAt(
-        regions,
-        worldX + step.dx,
-        worldY + step.dy,
-        worldZ + step.dz,
-      );
-      if (this.isTraversable(blockValue)) result |= step.bit;
-    }
-    return result;
-  }
-
-  private isTraversable(blockValue: number): boolean {
-    const paletteIndex = blockValue & 0xffff;
-    if (paletteIndex === 0 || this.blockColors.airLike[paletteIndex] === 1) {
-      return true;
-    }
-    if (this.blockColors.renderKind[paletteIndex] === 2) return true;
-    const shape = resolveShapeForLod(this.blockShapes, paletteIndex, 1);
-    if (shape.kind === "air" || shape.kind === "model") return true;
-    if (shape.kind !== "semantic") return false;
-    return (
-      shape.semantic !== "cubyz:stairs" || ((blockValue >>> 16) & 0xff) !== 0
-    );
-  }
-
-  private getEmittedLight(
-    paletteIndex: number,
-  ): { r: number; g: number; b: number } | null {
-    const offset = paletteIndex * 3;
-    const r = this.blockColors.emittedLightRgb[offset] ?? 0;
-    const g = this.blockColors.emittedLightRgb[offset + 1] ?? 0;
-    const b = this.blockColors.emittedLightRgb[offset + 2] ?? 0;
-    return r === 0 && g === 0 && b === 0 ? null : { r, g, b };
   }
 
   private async buildLeafSourceSignature(
@@ -591,6 +468,7 @@ function mergeClusters(
     maxX: Math.max(left.maxX, right.maxX),
     maxY: Math.max(left.maxY, right.maxY),
     maxZ: Math.max(left.maxZ, right.maxZ),
+    representedLods: left.representedLods | right.representedLods,
   };
 }
 
@@ -625,36 +503,6 @@ function clusterExtent(cluster: EmitterSummaryCluster): number {
 
 function luminance(r: number, g: number, b: number): number {
   return r * 0.2126 + g * 0.7152 + b * 0.0722;
-}
-
-function getBlockAt(
-  regions: Map<string, RegionData | null>,
-  worldX: number,
-  worldY: number,
-  worldZ: number,
-): number {
-  const regionX = Math.floor(worldX / REGION_CELLS) * REGION_CELLS;
-  const regionY = Math.floor(worldY / REGION_CELLS) * REGION_CELLS;
-  const regionZ = Math.floor(worldZ / REGION_CELLS) * REGION_CELLS;
-  const region = regions.get(regionKey(regionX, regionY, regionZ));
-  if (!region) return 0;
-  const localX = worldX - regionX;
-  const localY = worldY - regionY;
-  const localZ = worldZ - regionZ;
-  const chunkX = Math.floor(localX / CHUNK_SIZE);
-  const chunkY = Math.floor(localY / CHUNK_SIZE);
-  const chunkZ = Math.floor(localZ / CHUNK_SIZE);
-  const chunk = region.chunks[chunkX * 16 + chunkY * 4 + chunkZ];
-  if (!chunk) return 0;
-  return (
-    chunk.blocks[
-      localIndex(localX % CHUNK_SIZE, localY % CHUNK_SIZE, localZ % CHUNK_SIZE)
-    ] ?? 0
-  );
-}
-
-function localIndex(x: number, y: number, z: number): number {
-  return x * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + z;
 }
 
 async function listRegionZs(directory: string): Promise<number[]> {
@@ -710,6 +558,7 @@ function isValidCluster(value: unknown): value is EmitterSummaryCluster {
     "maxX",
     "maxY",
     "maxZ",
+    "representedLods",
   ].every(
     (key) => typeof cluster[key] === "number" && Number.isFinite(cluster[key]),
   );
@@ -764,8 +613,4 @@ function nodeKey(
   regionY: number,
 ): string {
   return `${lod}/${regionX}/${regionY}`;
-}
-
-function regionKey(regionX: number, regionY: number, regionZ: number): string {
-  return `${regionX}/${regionY}/${regionZ}`;
 }

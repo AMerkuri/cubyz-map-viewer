@@ -75,6 +75,11 @@ const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??
     join(process.cwd(), "dist", "server", "cache", "voxels"),
 );
+const REPRESENTED_SOURCE_CACHE_LIMIT = 64;
+const representedSourceCache = new Map<
+  string,
+  Promise<RepresentedEmitterSource[]>
+>();
 
 type Direction = "x-" | "x+" | "y-" | "y+" | "z+" | "z-";
 type HorizontalEdge = "x-" | "x+" | "y-" | "y+";
@@ -134,6 +139,17 @@ interface FaceEntry {
   mergeKey: number;
 }
 
+interface RepresentedEmitterSource {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  g: number;
+  b: number;
+  openFaces: number;
+  representedLods: number;
+}
+
 const OPPOSITE_FACE: Record<Direction, Direction> = {
   "x-": "x+",
   "x+": "x-",
@@ -151,6 +167,16 @@ const FACE_STEPS: { face: Direction; dx: number; dy: number; dz: number }[] = [
   { face: "z-", dx: 0, dy: 0, dz: -1 },
   { face: "z+", dx: 0, dy: 0, dz: 1 },
 ];
+const HORIZONTAL_NEIGHBOR_OFFSETS = [
+  [-1, -1],
+  [-1, 0],
+  [-1, 1],
+  [0, -1],
+  [0, 1],
+  [1, -1],
+  [1, 0],
+  [1, 1],
+] as const;
 
 export async function generateVoxelMesh(
   savePath: string,
@@ -161,10 +187,15 @@ export async function generateVoxelMesh(
   regionY: number,
   options?: {
     includeHaloEmitters?: boolean;
+    returnRepresentedSources?: boolean;
     emitterSummary?: EmitterSummaryNode;
     emitterSummaryMetrics?: EmitterSummaryBuildMetrics;
   },
-): Promise<{ buffer: ArrayBuffer | null; stats?: VoxelGenerationStats }> {
+): Promise<{
+  buffer: ArrayBuffer | null;
+  stats?: VoxelGenerationStats;
+  representedSources?: RepresentedEmitterSource[];
+}> {
   // Debug-only voxel-lighting diagnostic. When halo emitters are disabled the
   // persistent voxel cache is bypassed entirely so diagnostic payloads never
   // contaminate normal cache entries and normal cached payloads never hide
@@ -283,9 +314,8 @@ export async function generateVoxelMesh(
   const faces = new Map<string, FaceEntry>();
   const transparentFaceCells = new Set<string>();
   const modelBlocks = new Set<string>();
-  const emitterBlocks = new Set<string>();
+  const eligibleEmitterSources = new Map<string, RepresentedEmitterSource>();
   const modelQuads: BinaryQuad[] = [];
-  const emitterRecords: BinaryEmitterRecord[] = [];
   let droppedModelQuads = 0;
   const visibleChunkColumns = new Set<number>();
   let regionsParsed = 0;
@@ -388,23 +418,32 @@ export async function generateVoxelMesh(
     return r === 0 && g === 0 && b === 0 ? null : { r, g, b };
   }
 
-  function emitBlockEmitter(
-    blockValue: number,
+  function qualifyBlockEmitter(
+    paletteIndex: number,
     x: number,
     y: number,
     z: number,
+    openFaces: number,
   ): void {
-    const paletteIndex = getPaletteIndex(blockValue);
     if (isAirType(paletteIndex)) return;
     const light = getEmittedLight(paletteIndex);
     if (!light) return;
     const key = `${x}/${y}/${z}`;
-    if (emitterBlocks.has(key)) return;
-    emitterBlocks.add(key);
-    if (lod !== 1) {
+    const existing = eligibleEmitterSources.get(key);
+    if (existing) {
+      existing.openFaces |= openFaces;
       return;
     }
-    emitterRecords.push({ x, y, z, r: light.r, g: light.g, b: light.b });
+    eligibleEmitterSources.set(key, {
+      x,
+      y,
+      z,
+      r: light.r,
+      g: light.g,
+      b: light.b,
+      openFaces,
+      representedLods: getRepresentedLodMask(blockShapes, paletteIndex),
+    });
   }
 
   function addVisibleFace(
@@ -423,6 +462,9 @@ export async function generateVoxelMesh(
       transparentFaceCells.add(key);
     }
     addFace(faces, x, y, z, face, entry);
+    if (lod === 1) {
+      qualifyBlockEmitter(entry.typ, x, y, z, emitterOpenFaceBit(face));
+    }
   }
 
   await seedTopBoundary();
@@ -482,15 +524,22 @@ export async function generateVoxelMesh(
       }
     }
   }
-  const rebasedEmitterRecords = (
+  const representedSources = (
     await Promise.all(
-      emitterRecords.map(async (record) => ({
+      [...eligibleEmitterSources.values()].map(async (record) => ({
         ...record,
-        z: record.z - baseCellZ,
-        openFaces: await getEmitterOpenFaces(record.x, record.y, record.z),
+        openFaces:
+          record.openFaces ||
+          (await getEmitterOpenFaces(record.x, record.y, record.z)),
       })),
     )
   ).filter((record) => record.openFaces !== 0);
+  const rebasedEmitterRecords = representedSources.map(
+    ({ representedLods: _representedLods, ...record }) => ({
+      ...record,
+      z: record.z - baseCellZ,
+    }),
+  );
   const aggregatedEmitterRecords = buildSummaryEmitterRecords(baseCellZ);
   let haloMs: number | undefined;
   let haloEmitterRecords: BinaryEmitterRecord[] = [];
@@ -499,6 +548,7 @@ export async function generateVoxelMesh(
     haloEmitterRecords = await collectHaloEmitterRecords(
       baseCellZ,
       Math.ceil(maxFaceZ),
+      quads,
     );
     haloMs = performance.now() - haloStartedAt;
   }
@@ -541,6 +591,13 @@ export async function generateVoxelMesh(
   }
   return {
     buffer: mesh,
+    representedSources: options?.returnRepresentedSources
+      ? representedSources.map((source) => ({
+          ...source,
+          x: source.x + regionX,
+          y: source.y + regionY,
+        }))
+      : undefined,
     stats: {
       cacheTier: "worker",
       ...encodedMesh.metrics,
@@ -580,9 +637,17 @@ export async function generateVoxelMesh(
     baseCellZ: number,
   ): BinaryEmitterRecord[] {
     if (lod === 1 || !emitterSummary) return [];
-    return emitterSummary.clusters.map((cluster) =>
-      summaryClusterToRecord(cluster, baseCellZ),
-    );
+    return emitterSummary.clusters
+      .map((cluster) => summaryClusterToRecord(cluster, baseCellZ))
+      .filter((record) =>
+        canReachGeneratedOpaqueGeometry(
+          record.x,
+          record.y,
+          record.z,
+          quads,
+          record.radius,
+        ),
+      );
   }
 
   function summaryClusterToRecord(
@@ -754,7 +819,6 @@ export async function generateVoxelMesh(
       const gz = state.chunkZ * CHUNK_SIZE + lz;
       const currentBlockValue = chunk.blocks[idx] ?? 0;
       const currentPaletteIndex = getPaletteIndex(currentBlockValue);
-      emitBlockEmitter(currentBlockValue, gx, gy, gz);
       emitModelBlock(currentBlockValue, gx, gy, gz);
 
       for (const step of FACE_STEPS) {
@@ -772,12 +836,6 @@ export async function generateVoxelMesh(
         ) {
           const neighborIdx = localIndex(nlx, nly, nlz);
           const neighborBlockValue = chunk.blocks[neighborIdx] ?? 0;
-          emitBlockEmitter(
-            neighborBlockValue,
-            gx + step.dx,
-            gy + step.dy,
-            gz + step.dz,
-          );
           if (isTraversableBlockValue(neighborBlockValue)) {
             if (
               shouldEmitTransparentBoundary(
@@ -900,12 +958,6 @@ export async function generateVoxelMesh(
         }
         const wrappedIdx = localIndex(wrappedLx, wrappedLy, wrappedLz);
         const neighborBlockValue = neighborChunk.blocks[wrappedIdx] ?? 0;
-        emitBlockEmitter(
-          neighborBlockValue,
-          gx + step.dx,
-          gy + step.dy,
-          gz + step.dz,
-        );
         if (isTraversableBlockValue(neighborBlockValue)) {
           if (
             shouldEmitTransparentBoundary(
@@ -1267,56 +1319,80 @@ export async function generateVoxelMesh(
   async function collectHaloEmitterRecords(
     baseCellZ: number,
     maxFaceZ: number,
+    generatedQuads: BinaryQuad[],
   ): Promise<BinaryEmitterRecord[]> {
     const records: BinaryEmitterRecord[] = [];
-    const chunkCache = new Map<string, Promise<ChunkData | null>>();
     const radius = EMITTED_LIGHT_RADIUS_CELLS;
     const minZ = Math.floor(baseCellZ - radius);
     const maxZ = Math.ceil(maxFaceZ + radius);
 
-    for (let x = -radius; x < COLUMN_VOXELS + radius; x++) {
-      for (let y = -radius; y < COLUMN_VOXELS + radius; y++) {
-        if (x >= 0 && x < COLUMN_VOXELS && y >= 0 && y < COLUMN_VOXELS) {
-          continue;
-        }
-        const chunkX = Math.floor(x / CHUNK_SIZE);
-        const chunkY = Math.floor(y / CHUNK_SIZE);
-        const localX = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-        const localY = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-        for (let z = minZ; z <= maxZ; z++) {
-          const chunkZ = Math.floor(z / CHUNK_SIZE);
-          const localZ = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-          const chunkKey = `${chunkX}/${chunkY}/${chunkZ}`;
-          let pendingChunk = chunkCache.get(chunkKey);
-          if (!pendingChunk) {
-            pendingChunk = loadExternalChunk(chunkX, chunkY, chunkZ);
-            chunkCache.set(chunkKey, pendingChunk);
-          }
-          const chunk = await pendingChunk;
-          if (!chunk) continue;
-          const blockValue =
-            chunk.blocks[localIndex(localX, localY, localZ)] ?? 0;
-          const paletteIndex = getPaletteIndex(blockValue);
-          if (isAirType(paletteIndex)) continue;
-          const light = getEmittedLight(paletteIndex);
-          if (!light) continue;
-          const openFaces = await getEmitterOpenFaces(x, y, z);
-          if (openFaces === 0) continue;
-          records.push({
-            x,
-            y,
-            z: z - baseCellZ,
-            r: light.r,
-            g: light.g,
-            b: light.b,
-            halo: true,
-            openFaces,
-          });
-        }
+    const neighboringSources: RepresentedEmitterSource[][] = [];
+    for (const [offsetX, offsetY] of HORIZONTAL_NEIGHBOR_OFFSETS) {
+      const ownerX = regionX + offsetX * COLUMN_VOXELS;
+      const ownerY = regionY + offsetY * COLUMN_VOXELS;
+      neighboringSources.push(
+        await getCachedRepresentedEmitterSources(
+          savePath,
+          blockColors,
+          blockShapes,
+          ownerX,
+          ownerY,
+        ),
+      );
+    }
+
+    for (const source of neighboringSources.flat()) {
+      const x = source.x - regionX;
+      const y = source.y - regionY;
+      const z = source.z;
+      if (z < minZ || z > maxZ) continue;
+      if (
+        !canReachGeneratedOpaqueGeometry(x, y, z - baseCellZ, generatedQuads)
+      ) {
+        continue;
       }
+      records.push({
+        x,
+        y,
+        z: z - baseCellZ,
+        r: source.r,
+        g: source.g,
+        b: source.b,
+        halo: true,
+        openFaces: source.openFaces,
+      });
     }
 
     return records.sort(compareEmitterRecords);
+  }
+
+  function canReachGeneratedOpaqueGeometry(
+    x: number,
+    y: number,
+    z: number,
+    generatedQuads: BinaryQuad[],
+    sourceRadius = EMITTED_LIGHT_RADIUS_CELLS,
+  ): boolean {
+    const radiusSquared = sourceRadius ** 2;
+    const centerX = x + 0.5;
+    const centerY = y + 0.5;
+    const centerZ = z + 0.5;
+    return generatedQuads.some((quad) => {
+      if (quad.renderKind === 2) return false;
+      const minX = Math.min(quad.v0x, quad.v1x, quad.v2x, quad.v3x);
+      const maxX = Math.max(quad.v0x, quad.v1x, quad.v2x, quad.v3x);
+      const minY = Math.min(quad.v0y, quad.v1y, quad.v2y, quad.v3y);
+      const maxY = Math.max(quad.v0y, quad.v1y, quad.v2y, quad.v3y);
+      const minZ = Math.min(quad.v0z, quad.v1z, quad.v2z, quad.v3z);
+      const maxZ = Math.max(quad.v0z, quad.v1z, quad.v2z, quad.v3z);
+      const dx =
+        centerX < minX ? minX - centerX : centerX > maxX ? centerX - maxX : 0;
+      const dy =
+        centerY < minY ? minY - centerY : centerY > maxY ? centerY - maxY : 0;
+      const dz =
+        centerZ < minZ ? minZ - centerZ : centerZ > maxZ ? centerZ - maxZ : 0;
+      return dx * dx + dy * dy + dz * dz <= radiusSquared;
+    });
   }
 
   async function getEmitterOpenFaces(
@@ -1556,6 +1632,7 @@ export async function generateVoxelMesh(
     );
     const data = getBlockData(blockValue);
     const modelEntries = getModelQuadsForData(shape, data);
+    if (modelEntries.length === 0) return;
     if (modelQuads.length + modelEntries.length > LOD1_MODEL_QUAD_BUDGET) {
       droppedModelQuads += modelEntries.length;
       return;
@@ -1591,6 +1668,91 @@ export async function generateVoxelMesh(
         sourceKind: "model",
       });
     }
+    qualifyBlockEmitter(paletteIndex, x, y, z, 0);
+  }
+}
+
+function emitterOpenFaceBit(face: Direction): number {
+  switch (face) {
+    case "x+":
+      return EMITTER_OPEN_FACE_X_POS;
+    case "x-":
+      return EMITTER_OPEN_FACE_X_NEG;
+    case "y+":
+      return EMITTER_OPEN_FACE_Y_POS;
+    case "y-":
+      return EMITTER_OPEN_FACE_Y_NEG;
+    case "z+":
+      return EMITTER_OPEN_FACE_Z_POS;
+    case "z-":
+      return EMITTER_OPEN_FACE_Z_NEG;
+  }
+}
+
+function getRepresentedLodMask(
+  blockShapes: BlockShapeTable,
+  paletteIndex: number,
+): number {
+  let mask = 0;
+  for (const lod of VALID_LODS) {
+    if (resolveShapeForLod(blockShapes, paletteIndex, lod).kind !== "air") {
+      mask |= 1 << Math.log2(lod);
+    }
+  }
+  return mask;
+}
+
+async function getCachedRepresentedEmitterSources(
+  savePath: string,
+  blockColors: BlockColorTable,
+  blockShapes: BlockShapeTable,
+  regionX: number,
+  regionY: number,
+): Promise<RepresentedEmitterSource[]> {
+  const columnDirectory = join(
+    savePath,
+    "chunks",
+    "1",
+    String(regionX),
+    String(regionY),
+  );
+  if (!existsSync(columnDirectory)) return [];
+  const [column, surface] = await Promise.all([
+    buildColumnSignature(columnDirectory),
+    computeSurfaceHeightsWithSignature(savePath, regionX, regionY, 1),
+  ]);
+  if (column.zValues.length === 0 || !surface.data.hasSurface) return [];
+  const key = [
+    savePath,
+    blockColors.signature,
+    blockShapes.signature,
+    column.signature,
+    surface.signature,
+    regionX,
+    regionY,
+  ].join("|");
+  const cached = representedSourceCache.get(key);
+  if (cached) return cached;
+
+  const pending = generateVoxelMesh(
+    savePath,
+    blockColors,
+    blockShapes,
+    1,
+    regionX,
+    regionY,
+    { includeHaloEmitters: false, returnRepresentedSources: true },
+  ).then((result) => result.representedSources ?? []);
+  representedSourceCache.set(key, pending);
+  if (representedSourceCache.size > REPRESENTED_SOURCE_CACHE_LIMIT) {
+    const oldest = representedSourceCache.keys().next().value;
+    if (oldest !== undefined) representedSourceCache.delete(oldest);
+  }
+  try {
+    return await pending;
+  } catch (error) {
+    representedSourceCache.delete(key);
+    throw error;
   }
 }
 

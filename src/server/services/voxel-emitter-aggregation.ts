@@ -1,6 +1,6 @@
-export const EMITTER_SUMMARY_FORMAT_VERSION = 1;
-const EMITTER_SUMMARY_SOURCE_STRATEGY = "lod1-summary-v1";
-const EMITTER_SUMMARY_EXPOSURE_VERSION = "six-neighbor-v1";
+export const EMITTER_SUMMARY_FORMAT_VERSION = 3;
+const EMITTER_SUMMARY_SOURCE_STRATEGY = "represented-lod1-source-receiver-v3";
+const EMITTER_SUMMARY_EXPOSURE_VERSION = "represented-open-geometry-v2";
 const EMITTER_SUMMARY_CLUSTER_VERSION = "world-grid-top-stratified-v2";
 const EMITTER_METADATA_VERSION = "q8.8-radius-u8-radius-gain-v3";
 export const EMITTER_DEFAULT_POWER = 1;
@@ -33,6 +33,7 @@ export interface EmitterSummaryCluster {
   maxX: number;
   maxY: number;
   maxZ: number;
+  representedLods: number;
 }
 
 export interface EmitterSummaryNode {
