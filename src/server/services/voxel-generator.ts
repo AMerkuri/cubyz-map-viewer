@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
@@ -75,11 +75,47 @@ const PROJECT_VOXEL_CACHE_DIR = resolve(
   process.env.VOXEL_CACHE_DIR ??
     join(process.cwd(), "dist", "server", "cache", "voxels"),
 );
-const REPRESENTED_SOURCE_CACHE_LIMIT = 64;
-const representedSourceCache = new Map<
+const representedSourceInFlight = new Map<
   string,
   Promise<RepresentedEmitterSource[]>
 >();
+const representedSourceCache = new Map<string, RepresentedEmitterSource[]>();
+let representedSourceCacheSources = 0;
+let representedSourceCacheMaxEntries = 64;
+let representedSourceCacheMaxSources = 16_384;
+
+export function configureRepresentedEmitterCache(
+  maxEntries: number,
+  maxSources: number,
+): void {
+  representedSourceCacheMaxEntries = Math.max(0, Math.floor(maxEntries));
+  representedSourceCacheMaxSources = Math.max(0, Math.floor(maxSources));
+  evictRepresentedEmitterSources();
+}
+
+export function getRepresentedEmitterCacheMetrics(): {
+  entries: number;
+  sources: number;
+  inFlight: number;
+} {
+  return {
+    entries: representedSourceCache.size,
+    sources: representedSourceCacheSources,
+    inFlight: representedSourceInFlight.size,
+  };
+}
+
+function evictRepresentedEmitterSources(): void {
+  while (
+    representedSourceCache.size > representedSourceCacheMaxEntries ||
+    representedSourceCacheSources > representedSourceCacheMaxSources
+  ) {
+    const oldest = representedSourceCache.entries().next().value;
+    if (!oldest) return;
+    representedSourceCache.delete(oldest[0]);
+    representedSourceCacheSources -= oldest[1].length;
+  }
+}
 
 type Direction = "x-" | "x+" | "y-" | "y+" | "z+" | "z-";
 type HorizontalEdge = "x-" | "x+" | "y-" | "y+";
@@ -482,7 +518,9 @@ export async function generateVoxelMesh(
   if (faces.size === 0 && modelQuads.length === 0) return { buffer: null };
 
   const mergedQuads = buildMergedQuads(faces);
-  const quads = [...mergedQuads, ...modelQuads];
+  const quads: Iterable<BinaryQuad> = {
+    [Symbol.iterator]: () => iterateQuads(mergedQuads, modelQuads),
+  };
   let minFaceZ = Number.POSITIVE_INFINITY;
   let maxFaceZ = Number.NEGATIVE_INFINITY;
   for (const [key, typ] of faces) {
@@ -570,7 +608,8 @@ export async function generateVoxelMesh(
   }
 
   const encodedMesh = encodeBinaryQuads(
-    quads,
+    mergedQuads,
+    modelQuads,
     regionX,
     regionY,
     baseWorldZ,
@@ -1319,7 +1358,7 @@ export async function generateVoxelMesh(
   async function collectHaloEmitterRecords(
     baseCellZ: number,
     maxFaceZ: number,
-    generatedQuads: BinaryQuad[],
+    generatedQuads: Iterable<BinaryQuad>,
   ): Promise<BinaryEmitterRecord[]> {
     const records: BinaryEmitterRecord[] = [];
     const radius = EMITTED_LIGHT_RADIUS_CELLS;
@@ -1370,15 +1409,15 @@ export async function generateVoxelMesh(
     x: number,
     y: number,
     z: number,
-    generatedQuads: BinaryQuad[],
+    generatedQuads: Iterable<BinaryQuad>,
     sourceRadius = EMITTED_LIGHT_RADIUS_CELLS,
   ): boolean {
     const radiusSquared = sourceRadius ** 2;
     const centerX = x + 0.5;
     const centerY = y + 0.5;
     const centerZ = z + 0.5;
-    return generatedQuads.some((quad) => {
-      if (quad.renderKind === 2) return false;
+    for (const quad of generatedQuads) {
+      if (quad.renderKind === 2) continue;
       const minX = Math.min(quad.v0x, quad.v1x, quad.v2x, quad.v3x);
       const maxX = Math.max(quad.v0x, quad.v1x, quad.v2x, quad.v3x);
       const minY = Math.min(quad.v0y, quad.v1y, quad.v2y, quad.v3y);
@@ -1391,8 +1430,9 @@ export async function generateVoxelMesh(
         centerY < minY ? minY - centerY : centerY > maxY ? centerY - maxY : 0;
       const dz =
         centerZ < minZ ? minZ - centerZ : centerZ > maxZ ? centerZ - maxZ : 0;
-      return dx * dx + dy * dy + dz * dz <= radiusSquared;
-    });
+      if (dx * dx + dy * dy + dz * dz <= radiusSquared) return true;
+    }
+    return false;
   }
 
   async function getEmitterOpenFaces(
@@ -1732,7 +1772,13 @@ async function getCachedRepresentedEmitterSources(
     regionY,
   ].join("|");
   const cached = representedSourceCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    representedSourceCache.delete(key);
+    representedSourceCache.set(key, cached);
+    return cached;
+  }
+  const existing = representedSourceInFlight.get(key);
+  if (existing) return existing;
 
   const pending = generateVoxelMesh(
     savePath,
@@ -1743,16 +1789,17 @@ async function getCachedRepresentedEmitterSources(
     regionY,
     { includeHaloEmitters: false, returnRepresentedSources: true },
   ).then((result) => result.representedSources ?? []);
-  representedSourceCache.set(key, pending);
-  if (representedSourceCache.size > REPRESENTED_SOURCE_CACHE_LIMIT) {
-    const oldest = representedSourceCache.keys().next().value;
-    if (oldest !== undefined) representedSourceCache.delete(oldest);
-  }
+  representedSourceInFlight.set(key, pending);
   try {
-    return await pending;
-  } catch (error) {
-    representedSourceCache.delete(key);
-    throw error;
+    const sources = await pending;
+    representedSourceCache.set(key, sources);
+    representedSourceCacheSources += sources.length;
+    evictRepresentedEmitterSources();
+    return sources;
+  } finally {
+    if (representedSourceInFlight.get(key) === pending) {
+      representedSourceInFlight.delete(key);
+    }
   }
 }
 
@@ -2518,7 +2565,7 @@ function capEmitterRecords(
 }
 
 function buildBoundaryGeometrySamples(
-  quads: BinaryQuad[],
+  quads: Iterable<BinaryQuad>,
 ): BoundaryGeometrySamples {
   const samples: BoundaryGeometrySamples = {
     "x-": [],
@@ -3378,10 +3425,22 @@ async function writePersistentMesh(
   const keyBuffer = Buffer.from(key, "utf8");
   const header = Buffer.allocUnsafe(2);
   header.writeUInt16LE(keyBuffer.length, 0);
-  await writeFile(
-    cachePath,
-    Buffer.concat([header, keyBuffer, Buffer.from(mesh)]),
-  );
+  const file = await open(cachePath, "w");
+  try {
+    await file.writeFile(header);
+    await file.writeFile(keyBuffer);
+    await file.writeFile(new Uint8Array(mesh));
+  } finally {
+    await file.close();
+  }
+}
+
+function* iterateQuads(
+  greedyQuads: BinaryQuad[],
+  modelQuads: BinaryQuad[],
+): IterableIterator<BinaryQuad> {
+  yield* greedyQuads;
+  yield* modelQuads;
 }
 
 function countChunkColumns(view: DataView, byteLength: number): number {

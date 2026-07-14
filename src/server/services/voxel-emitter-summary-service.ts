@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { CHUNK_SIZE, REGION_SIZE } from "../parsers/region.js";
 import type { BlockColorTable } from "./block-color-table.js";
 import type { BlockShapeTable } from "./block-shape-table.js";
-import { LRUCache } from "./cache.js";
+import { WeightedLRUCache } from "./cache.js";
 import {
   EMITTER_SUMMARY_CLUSTER_EDGE_BY_LOD,
   EMITTER_SUMMARY_FORMAT_VERSION,
@@ -38,9 +38,33 @@ interface BuiltClusters {
   cappedClusterCount: number;
 }
 
+export interface VoxelEmitterSummaryServiceOptions {
+  leafBuildLimit?: number;
+  memoryCacheSize?: number;
+  memoryCacheByteLimit?: number;
+}
+
+export interface VoxelEmitterSummaryCacheMetrics {
+  entries: number;
+  estimatedBytes: number;
+  retainedClusters: number;
+  evictions: number;
+  oversizedSkips: number;
+  activeWork: number;
+}
+
+interface SummaryWork {
+  valid: boolean;
+  promise: Promise<EmitterSummaryResult>;
+}
+
 export class VoxelEmitterSummaryService {
-  private readonly memory: LRUCache<string, EmitterSummaryNode>;
-  private readonly inFlight = new Map<string, Promise<EmitterSummaryResult>>();
+  private readonly memory: WeightedLRUCache<string, EmitterSummaryNode>;
+  private readonly inFlight = new Map<string, SummaryWork>();
+  private readonly leafBuildQueue: Array<() => void> = [];
+  private readonly leafBuildLimit: number;
+  private leafBuildActive = 0;
+  private activeWork = 0;
   private readonly cacheRoot: string;
 
   constructor(
@@ -48,6 +72,7 @@ export class VoxelEmitterSummaryService {
     private readonly blockColors: BlockColorTable,
     private readonly blockShapes: BlockShapeTable,
     memoryCacheSize = 512,
+    options: VoxelEmitterSummaryServiceOptions = {},
   ) {
     const saveNamespace = createHash("sha1")
       .update(savePath)
@@ -59,7 +84,12 @@ export class VoxelEmitterSummaryService {
       "emitter-summaries",
       String(EMITTER_SUMMARY_FORMAT_VERSION),
     );
-    this.memory = new LRUCache(memoryCacheSize);
+    this.memory = new WeightedLRUCache(
+      options.memoryCacheSize ?? memoryCacheSize,
+      options.memoryCacheByteLimit ?? 64 * 1024 * 1024,
+      estimatedNodeBytes,
+    );
+    this.leafBuildLimit = Math.max(1, options.leafBuildLimit ?? 1);
   }
 
   getNode(
@@ -77,30 +107,56 @@ export class VoxelEmitterSummaryService {
 
     const key = nodeKey(lod, regionX, regionY);
     const existing = this.inFlight.get(key);
-    if (existing) return existing;
+    if (existing) return existing.promise;
 
-    const promise = this.loadOrBuildNode(lod, regionX, regionY).finally(() => {
-      if (this.inFlight.get(key) === promise) this.inFlight.delete(key);
-    });
-    this.inFlight.set(key, promise);
-    return promise;
+    const work = {} as SummaryWork;
+    work.valid = true;
+    this.activeWork++;
+    work.promise = this.loadOrBuildNode(lod, regionX, regionY, work).finally(
+      () => {
+        this.activeWork--;
+        if (this.inFlight.get(key) === work) this.inFlight.delete(key);
+      },
+    );
+    this.inFlight.set(key, work);
+    return work.promise;
   }
 
   clear(): void {
     this.memory.clear();
+    for (const work of this.inFlight.values()) work.valid = false;
     this.inFlight.clear();
   }
 
   invalidate(lod: EmitterSummaryLod, regionX: number, regionY: number): void {
-    this.memory.delete(nodeKey(lod, regionX, regionY));
-    this.inFlight.delete(nodeKey(lod, regionX, regionY));
+    const key = nodeKey(lod, regionX, regionY);
+    this.memory.delete(key);
+    const work = this.inFlight.get(key);
+    if (work) work.valid = false;
+    this.inFlight.delete(key);
     void rm(this.nodePath(lod, regionX, regionY), { force: true });
+  }
+
+  getMetricsSnapshot(): VoxelEmitterSummaryCacheMetrics {
+    let retainedClusters = 0;
+    for (const node of this.memory.values()) {
+      retainedClusters += node.clusters.length;
+    }
+    return {
+      entries: this.memory.size,
+      estimatedBytes: this.memory.weight,
+      retainedClusters,
+      evictions: this.memory.evictions,
+      oversizedSkips: this.memory.oversizedSkips,
+      activeWork: this.activeWork,
+    };
   }
 
   private async loadOrBuildNode(
     lod: EmitterSummaryLod,
     regionX: number,
     regionY: number,
+    work: SummaryWork,
   ): Promise<EmitterSummaryResult> {
     const startedAt = performance.now();
     if (lod === 1) {
@@ -113,12 +169,13 @@ export class VoxelEmitterSummaryService {
         regionX,
         regionY,
         sourceSignature,
+        work,
       );
       if (cached) {
         return resultForCachedNode(cached, performance.now() - startedAt);
       }
       const { clusters, rawSourceCount, cappedClusterCount, leafParses } =
-        await this.buildLeaf(regionX, regionY);
+        await this.withLeafBuildSlot(() => this.buildLeaf(regionX, regionY));
       const node = this.createNode(
         lod,
         regionX,
@@ -127,8 +184,10 @@ export class VoxelEmitterSummaryService {
         rawSourceCount,
         cappedClusterCount,
         clusters,
+        work,
       );
       await this.persistNode(node);
+      await this.removeStaleNode(work, node);
       return {
         node,
         metrics: {
@@ -158,6 +217,7 @@ export class VoxelEmitterSummaryService {
       regionX,
       regionY,
       sourceSignature,
+      work,
     );
     const childMetrics = mergeMetrics(children.map(({ metrics }) => metrics));
     if (cached) {
@@ -193,8 +253,10 @@ export class VoxelEmitterSummaryService {
       rawSourceCount,
       inheritedCapped + built.cappedClusterCount,
       built.clusters,
+      work,
     );
     await this.persistNode(node);
+    await this.removeStaleNode(work, node);
     return {
       node,
       metrics: {
@@ -208,7 +270,21 @@ export class VoxelEmitterSummaryService {
     };
   }
 
-  private async buildLeaf(
+  private async withLeafBuildSlot<T>(build: () => Promise<T>): Promise<T> {
+    if (this.leafBuildActive >= this.leafBuildLimit) {
+      await new Promise<void>((resolve) => this.leafBuildQueue.push(resolve));
+    }
+    this.leafBuildActive++;
+    try {
+      return await build();
+    } finally {
+      this.leafBuildActive--;
+      const next = this.leafBuildQueue.shift();
+      if (next) next();
+    }
+  }
+
+  protected async buildLeaf(
     regionX: number,
     regionY: number,
   ): Promise<{
@@ -262,7 +338,7 @@ export class VoxelEmitterSummaryService {
     };
   }
 
-  private async buildLeafSourceSignature(
+  protected async buildLeafSourceSignature(
     regionX: number,
     regionY: number,
   ): Promise<string> {
@@ -300,6 +376,7 @@ export class VoxelEmitterSummaryService {
     rawSourceCount: number,
     cappedClusterCount: number,
     clusters: EmitterSummaryCluster[],
+    work: SummaryWork,
   ): EmitterSummaryNode {
     const signature = createHash("sha1")
       .update(`${EMITTER_SUMMARY_SIGNATURE}|${lod}|${regionX}|${regionY}|`)
@@ -317,7 +394,7 @@ export class VoxelEmitterSummaryService {
       cappedClusterCount,
       clusters,
     };
-    this.memory.set(nodeKey(lod, regionX, regionY), node);
+    if (work.valid) this.memory.set(nodeKey(lod, regionX, regionY), node);
     return node;
   }
 
@@ -326,6 +403,7 @@ export class VoxelEmitterSummaryService {
     regionX: number,
     regionY: number,
     sourceSignature: string,
+    work: SummaryWork,
   ): Promise<EmitterSummaryNode | null> {
     const key = nodeKey(lod, regionX, regionY);
     const memory = this.memory.get(key);
@@ -337,14 +415,14 @@ export class VoxelEmitterSummaryService {
       if (!isValidNode(parsed, lod, regionX, regionY, sourceSignature)) {
         return null;
       }
-      this.memory.set(key, parsed);
+      if (work.valid) this.memory.set(key, parsed);
       return parsed;
     } catch {
       return null;
     }
   }
 
-  private async persistNode(node: EmitterSummaryNode): Promise<void> {
+  protected async persistNode(node: EmitterSummaryNode): Promise<void> {
     const path = this.nodePath(node.lod, node.regionX, node.regionY);
     await mkdir(join(this.cacheRoot, String(node.lod), String(node.regionX)), {
       recursive: true,
@@ -357,6 +435,17 @@ export class VoxelEmitterSummaryService {
       await rm(temporaryPath, { force: true });
       throw error;
     }
+  }
+
+  private async removeStaleNode(
+    work: SummaryWork,
+    node: EmitterSummaryNode,
+  ): Promise<void> {
+    if (work.valid) return;
+    this.memory.delete(nodeKey(node.lod, node.regionX, node.regionY));
+    await rm(this.nodePath(node.lod, node.regionX, node.regionY), {
+      force: true,
+    });
   }
 
   private columnPath(regionX: number, regionY: number): string {
@@ -613,4 +702,8 @@ function nodeKey(
   regionY: number,
 ): string {
   return `${lod}/${regionX}/${regionY}`;
+}
+
+function estimatedNodeBytes(node: EmitterSummaryNode): number {
+  return Buffer.byteLength(JSON.stringify(node), "utf8");
 }

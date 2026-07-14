@@ -15,6 +15,7 @@ const HIGH_GLOW_BUDGET = 220;
 
 interface RegionEffects {
   emitters: VoxelEmitterRecord[];
+  accentsEnabled: boolean;
 }
 
 export interface BlockLightRuntimeStats {
@@ -77,7 +78,12 @@ export class BlockLightRuntimeManager {
       seen.add(tile.key);
       const existing = this.regions.get(tile.key);
       if (existing?.emitters === tile.emitterRecords) continue;
-      this.regions.set(tile.key, { emitters: tile.emitterRecords });
+      this.regions.set(tile.key, {
+        emitters: tile.emitterRecords,
+        // Coarse records are aggregate centroids used for mesh-local lighting,
+        // not physical source blocks where an accent can be placed.
+        accentsEnabled: tile.lod === 1,
+      });
     }
 
     for (const key of [...this.regions.keys()]) {
@@ -209,6 +215,7 @@ export class BlockLightRuntimeManager {
     this.selectedEmitters.length = 0;
     this.selectedDistances.length = 0;
     for (const region of this.regions.values()) {
+      if (!region.accentsEnabled) continue;
       for (const emitter of region.emitters) {
         const distance = cameraPosition.distanceToSquared(
           TEMP_POSITION.set(emitter.x, emitter.y, emitter.z),

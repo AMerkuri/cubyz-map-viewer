@@ -13,12 +13,22 @@ function createService(
   pool = new DeferredVoxelPool(),
   summaries = new RecordingEmitterSummaries(),
   computeSourceSignature: () => Promise<string | null> = async () => "source",
+  cacheByteLimit = 256 * 1024 * 1024,
 ): VoxelMeshService {
-  return new VoxelMeshService("/unused", colors, shapes, 1, 16, undefined, {
-    pool,
-    emitterSummaries: summaries,
-    computeSourceSignature,
-  });
+  return new VoxelMeshService(
+    "/unused",
+    colors,
+    shapes,
+    1,
+    16,
+    undefined,
+    {
+      pool,
+      emitterSummaries: summaries,
+      computeSourceSignature,
+    },
+    cacheByteLimit,
+  );
 }
 
 test("deduplicates same-key jobs, caches results, and separates halo identities", async () => {
@@ -98,6 +108,96 @@ test("drops a result invalidated while its source signature is being computed", 
   service.clear("1/0/0");
   signature.resolve("source");
   assert.equal((await pending).status, "empty");
+});
+
+test("accounts shared raw storage once and evicts when a compression variant grows the entry", async () => {
+  const pool = new DeferredVoxelPool();
+  const service = createService(
+    pool,
+    new RecordingEmitterSummaries(),
+    async () => "source",
+    140,
+  );
+  const pending = service.getVoxelMesh("1/0/0", 1, 0, 0, "identity");
+  const job = pool.jobs[0];
+  assert.ok(job);
+  if (job) pool.complete(job, Buffer.allocUnsafeSlow(128).fill(1));
+  await pending;
+  assert.deepEqual(
+    {
+      entries: service.getMetricsSnapshot().cacheEntries,
+      bytes: service.getMetricsSnapshot().cacheBytes,
+      rawBytes: service.getMetricsSnapshot().cacheRawBytes,
+    },
+    { entries: 1, bytes: 128, rawBytes: 128 },
+  );
+
+  await service.getVoxelMesh("1/0/0", 1, 0, 0, "gzip");
+  const metrics = service.getMetricsSnapshot();
+  assert.equal(metrics.cacheEntries, 0);
+  assert.equal(metrics.cacheBytes, 0);
+  assert.equal(metrics.cacheOversizedSkips, 1);
+});
+
+test("serves but does not retain an individually oversized raw mesh", async () => {
+  const pool = new DeferredVoxelPool();
+  const service = createService(
+    pool,
+    new RecordingEmitterSummaries(),
+    async () => "source",
+    2,
+  );
+  const pending = service.getVoxelMesh("1/0/0", 1, 0, 0, "identity");
+  const job = pool.jobs[0];
+  assert.ok(job);
+  if (job) pool.complete(job, Buffer.allocUnsafeSlow(3));
+  assert.equal((await pending).status, "ok");
+  assert.equal(service.getMetricsSnapshot().cacheEntries, 0);
+  assert.equal(service.getMetricsSnapshot().cacheOversizedSkips, 1);
+});
+
+test("does not retain request preparation after a failed mesh request", async () => {
+  const pool = new DeferredVoxelPool();
+  const service = createService(pool);
+  assert.match(
+    (await service.getCurrentEtag("1/0/0", 1, 0, 0, "identity")) ?? "",
+    /source/,
+  );
+  const pending = service.getVoxelMesh("1/0/0", 1, 0, 0, "identity");
+  const job = pool.jobs[0];
+  assert.ok(job);
+  if (job) pool.fail(job);
+  await assert.rejects(pending, /generation failed/);
+  assert.equal(service.getMetricsSnapshot().cacheEntries, 0);
+});
+
+test("exposes summary cache diagnostics and clears summary state globally", () => {
+  const summaries = new RecordingEmitterSummaries();
+  summaries.metrics = {
+    entries: 3,
+    estimatedBytes: 4096,
+    retainedClusters: 24,
+    evictions: 2,
+    oversizedSkips: 1,
+    activeWork: 4,
+  };
+  const service = createService(new DeferredVoxelPool(), summaries);
+
+  const metrics = service.getMetricsSnapshot();
+  assert.deepEqual(
+    {
+      entries: metrics.summaryCacheEntries,
+      estimatedBytes: metrics.summaryCacheEstimatedBytes,
+      retainedClusters: metrics.summaryCacheRetainedClusters,
+      evictions: metrics.summaryCacheEvictions,
+      oversizedSkips: metrics.summaryCacheOversizedSkips,
+      activeWork: metrics.summaryActiveWork,
+    },
+    summaries.metrics,
+  );
+
+  service.clearAll();
+  assert.equal(summaries.clearCount, 1);
 });
 
 test("invalidates every LOD 1 halo leaf and floor-aligned summary ancestor", () => {

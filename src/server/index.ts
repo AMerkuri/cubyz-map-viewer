@@ -39,17 +39,17 @@ import { ColorMapService } from "./services/color-map.js";
 import { EntityModelAssetService } from "./services/entity-model-assets.js";
 import { logger } from "./services/logger.js";
 import { EMITTER_MAX_SUMMARY_RADIUS } from "./services/voxel-emitter-aggregation.js";
+import { readVoxelMemoryCacheConfig } from "./services/voxel-memory-config.js";
 import { VoxelMeshService } from "./services/voxel-mesh-service.js";
+import { resolveVoxelWorkerCount } from "./services/voxel-worker-config.js";
 import { SaveWatcher, type WatchEvent } from "./services/watcher.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
-const VOXEL_MEMORY_CACHE_SIZE = parseInt(
-  process.env.VOXEL_MEMORY_CACHE_SIZE ?? "1024",
-  10,
-);
+const VOXEL_MEMORY_CACHE = readVoxelMemoryCacheConfig(process.env);
+const VOXEL_WORKERS = resolveVoxelWorkerCount(process.env.VOXEL_WORKERS);
 const VOXEL_BROTLI_QUALITY = parseIntegerEnv(
   process.env.VOXEL_BROTLI_QUALITY,
   6,
@@ -409,15 +409,30 @@ async function main() {
     savePath,
     buildBlockColorTable(colorMap),
     blockShapeTable,
-    process.env.VOXEL_WORKERS
-      ? parseInt(process.env.VOXEL_WORKERS, 10)
-      : undefined,
-    VOXEL_MEMORY_CACHE_SIZE,
+    VOXEL_WORKERS,
+    VOXEL_MEMORY_CACHE.entryLimit,
     {
       brotliQuality: VOXEL_BROTLI_QUALITY,
       brotliLgwin: VOXEL_BROTLI_LGWIN,
       gzipLevel: VOXEL_GZIP_LEVEL,
     },
+    {
+      workerPoolOptions: {
+        representedEmitterCacheMaxEntries:
+          VOXEL_MEMORY_CACHE.workerEmitterEntryLimit,
+        representedEmitterCacheMaxSources:
+          VOXEL_MEMORY_CACHE.workerEmitterSourceLimit,
+        recycleHeapBytes: VOXEL_MEMORY_CACHE.recycleHeapBytes,
+        recycleExternalBytes: VOXEL_MEMORY_CACHE.recycleExternalBytes,
+        recycleArrayBufferBytes: VOXEL_MEMORY_CACHE.recycleArrayBufferBytes,
+        recycleCompletedJobs: VOXEL_MEMORY_CACHE.recycleCompletedJobs,
+      },
+      emitterSummaryOptions: {
+        memoryCacheSize: VOXEL_MEMORY_CACHE.emitterSummaryEntryLimit,
+        memoryCacheByteLimit: VOXEL_MEMORY_CACHE.emitterSummaryByteLimit,
+      },
+    },
+    VOXEL_MEMORY_CACHE.byteLimit,
   );
   await voxelMeshService.start();
   const voxelMetrics = voxelMeshService.getMetricsSnapshot();

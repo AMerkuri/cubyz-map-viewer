@@ -9,6 +9,19 @@ export interface VoxelWorkerData {
   savePath: string;
   blockColors: BlockColorTable;
   blockShapes: BlockShapeTable;
+  representedEmitterCacheMaxEntries: number;
+  representedEmitterCacheMaxSources: number;
+}
+
+export interface VoxelWorkerDiagnostics {
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  arrayBuffers: number;
+  completedJobs: number;
+  representedEmitterCacheEntries: number;
+  representedEmitterCacheSources: number;
+  representedEmitterInFlight: number;
 }
 
 export interface VoxelJob {
@@ -80,36 +93,32 @@ export interface VoxelGenerationStats {
   maxWorldZ: number;
 }
 
-export type VoxelJobResult =
-  | {
-      id: number;
-      key: string;
-      globalEpoch: number;
-      keyEpoch: number;
-      status: "ok";
-      buffer: ArrayBuffer;
-      runMs: number;
-      stats: VoxelGenerationStats;
-    }
-  | {
-      id: number;
-      key: string;
-      globalEpoch: number;
-      keyEpoch: number;
-      status: "empty";
-      runMs: number;
-      stats?: VoxelGenerationStats;
-    }
-  | {
-      id: number;
-      key: string;
-      globalEpoch: number;
-      keyEpoch: number;
-      status: "error";
-      error: string;
-      runMs: number;
-      stats?: VoxelGenerationStats;
-    };
+type VoxelJobResultBase = {
+  id: number;
+  key: string;
+  globalEpoch: number;
+  keyEpoch: number;
+  runMs: number;
+  diagnostics: VoxelWorkerDiagnostics;
+};
+
+export type VoxelJobResult = VoxelJobResultBase &
+  (
+    | {
+        status: "ok";
+        buffer: ArrayBuffer;
+        stats: VoxelGenerationStats;
+      }
+    | {
+        status: "empty";
+        stats?: VoxelGenerationStats;
+      }
+    | {
+        status: "error";
+        error: string;
+        stats?: VoxelGenerationStats;
+      }
+  );
 
 export interface VoxelWorkerRequestMessage {
   type: "job";

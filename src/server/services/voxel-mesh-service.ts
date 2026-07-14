@@ -4,20 +4,26 @@ import { brotliCompress, gzip, constants as zlibConstants } from "node:zlib";
 import type { VoxelGenerationStats } from "../workers/voxel-worker-protocol.js";
 import type { BlockColorTable } from "./block-color-table.js";
 import type { BlockShapeTable } from "./block-shape-table.js";
-import { LRUCache } from "./cache.js";
+import { WeightedLRUCache } from "./cache.js";
 import { generateSignRecords, type SignRecord } from "./sign-records.js";
 import {
   EMITTER_SUMMARY_LODS,
-  EMITTER_SUMMARY_REQUEST_TIMEOUT_MS,
   type EmitterSummaryCluster,
   type EmitterSummaryResult,
   getEmitterSummaryRadius,
 } from "./voxel-emitter-aggregation.js";
+import type {
+  VoxelEmitterSummaryCacheMetrics,
+  VoxelEmitterSummaryServiceOptions,
+} from "./voxel-emitter-summary-service.js";
 import { VoxelEmitterSummaryService } from "./voxel-emitter-summary-service.js";
 import { computeVoxelSourceSignature } from "./voxel-source-signature.js";
+import { resolveVoxelWorkerCount } from "./voxel-worker-config.js";
 import {
   type InstrumentedPoolResult,
   VoxelWorkerPool,
+  type VoxelWorkerPoolDiagnostics,
+  type VoxelWorkerPoolOptions,
 } from "./voxel-worker-pool.js";
 
 interface CachedVoxelMesh {
@@ -168,8 +174,20 @@ export interface VoxelServiceMetricsSnapshot {
   workerRuntimeMode: "source" | "dist";
   queueDepth: number;
   runningJobs: number;
+  workerDiagnostics?: VoxelWorkerPoolDiagnostics | null;
   inFlightJobs: number;
   cacheEntries: number;
+  cacheBytes: number;
+  cacheRawBytes: number;
+  cacheVariantBytes: number;
+  cacheEvictions: number;
+  cacheOversizedSkips: number;
+  summaryCacheEntries: number;
+  summaryCacheEstimatedBytes: number;
+  summaryCacheRetainedClusters: number;
+  summaryCacheEvictions: number;
+  summaryCacheOversizedSkips: number;
+  summaryActiveWork: number;
   requests: number;
   cacheHits: number;
   workerRequests: number;
@@ -194,16 +212,21 @@ export interface VoxelWorkerPoolLike {
   getRuntimeMode(): "source" | "dist";
   getQueueDepth(): number;
   getRunningCount(): number;
+  getDiagnosticsSnapshot?(): VoxelWorkerPoolDiagnostics;
 }
 
 export interface VoxelEmitterSummaryServiceLike {
   getNode: VoxelEmitterSummaryService["getNode"];
   invalidate: VoxelEmitterSummaryService["invalidate"];
+  clear: VoxelEmitterSummaryService["clear"];
+  getMetricsSnapshot(): VoxelEmitterSummaryCacheMetrics;
 }
 
 interface VoxelMeshServiceDependencies {
   pool?: VoxelWorkerPoolLike;
+  workerPoolOptions?: VoxelWorkerPoolOptions;
   emitterSummaries?: VoxelEmitterSummaryServiceLike;
+  emitterSummaryOptions?: VoxelEmitterSummaryServiceOptions;
   computeSourceSignature?: typeof computeVoxelSourceSignature;
 }
 
@@ -235,7 +258,7 @@ export interface VoxelMeshServiceApi {
 
 export class VoxelMeshService implements VoxelMeshServiceApi {
   private readonly pool: VoxelWorkerPoolLike;
-  private readonly cache: LRUCache<string, CachedVoxelMesh>;
+  private readonly cache: WeightedLRUCache<string, CachedVoxelMesh>;
   private readonly savePath: string;
   private readonly compressionConfig: VoxelCompressionConfig;
   private readonly emitterSummaries: VoxelEmitterSummaryServiceLike;
@@ -244,10 +267,6 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
   private readonly blockShapeSignature: string;
   private readonly blockColorSignature: string;
   private readonly inFlight = new Map<string, InFlightJob>();
-  private readonly preparedEmitterSummaries = new Map<
-    string,
-    EmitterSummaryResult
-  >();
   private globalEpoch = 0;
   private nextJobId = 1;
   private readonly keyEpochs = new Map<string, number>();
@@ -273,20 +292,36 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
       gzipLevel: 6,
     },
     dependencies: VoxelMeshServiceDependencies = {},
+    cacheByteLimit = 256 * 1024 * 1024,
   ) {
+    const resolvedWorkerCount =
+      workerCount ?? resolveVoxelWorkerCount(undefined);
     this.savePath = savePath;
     this.blockShapes = blockShapes;
     this.blockShapeSignature = blockShapes.signature;
     this.blockColorSignature = blockColors.signature;
     this.pool =
       dependencies.pool ??
-      new VoxelWorkerPool(savePath, blockColors, blockShapes, workerCount);
+      new VoxelWorkerPool(
+        savePath,
+        blockColors,
+        blockShapes,
+        resolvedWorkerCount,
+        dependencies.workerPoolOptions,
+      );
     this.emitterSummaries =
       dependencies.emitterSummaries ??
-      new VoxelEmitterSummaryService(savePath, blockColors, blockShapes);
+      new VoxelEmitterSummaryService(savePath, blockColors, blockShapes, 512, {
+        ...dependencies.emitterSummaryOptions,
+        leafBuildLimit: resolvedWorkerCount,
+      });
     this.computeSourceSignature =
       dependencies.computeSourceSignature ?? computeVoxelSourceSignature;
-    this.cache = new LRUCache<string, CachedVoxelMesh>(cacheSize);
+    this.cache = new WeightedLRUCache<string, CachedVoxelMesh>(
+      cacheSize,
+      cacheByteLimit,
+      (mesh) => this.getRetainedBufferBytes(mesh),
+    );
     this.compressionConfig = compressionConfig;
   }
 
@@ -305,6 +340,7 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
 
   clearAll(): void {
     this.cache.clear();
+    this.emitterSummaries.clear();
     this.globalEpoch++;
   }
 
@@ -325,13 +361,27 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
   }
 
   getMetricsSnapshot(): VoxelServiceMetricsSnapshot {
+    const summaryMetrics = this.emitterSummaries.getMetricsSnapshot();
     return {
       workers: this.pool.getWorkerCount(),
       workerRuntimeMode: this.pool.getRuntimeMode(),
       queueDepth: this.pool.getQueueDepth(),
       runningJobs: this.pool.getRunningCount(),
+      workerDiagnostics: this.pool.getDiagnosticsSnapshot?.() ?? null,
       inFlightJobs: this.inFlight.size,
       cacheEntries: this.cache.size,
+      cacheBytes: this.cache.weight,
+      cacheRawBytes: this.getCacheBufferBytes("identity"),
+      cacheVariantBytes:
+        this.getCacheBufferBytes("gzip") + this.getCacheBufferBytes("br"),
+      cacheEvictions: this.cache.evictions,
+      cacheOversizedSkips: this.cache.oversizedSkips,
+      summaryCacheEntries: summaryMetrics.entries,
+      summaryCacheEstimatedBytes: summaryMetrics.estimatedBytes,
+      summaryCacheRetainedClusters: summaryMetrics.retainedClusters,
+      summaryCacheEvictions: summaryMetrics.evictions,
+      summaryCacheOversizedSkips: summaryMetrics.oversizedSkips,
+      summaryActiveWork: summaryMetrics.activeWork,
       requests: this.requests,
       cacheHits: this.cacheHits,
       workerRequests: this.workerRequests,
@@ -365,7 +415,6 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
 
     const emitterSummary =
       lod > 1 ? await this.getEmitterSummary(lod, regionX, regionY) : undefined;
-    if (emitterSummary) this.preparedEmitterSummaries.set(key, emitterSummary);
     const sourceSignature = await this.computeSourceSignature({
       savePath: this.savePath,
       blockShapeSignature: this.blockShapeSignature,
@@ -456,13 +505,8 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     const globalEpoch = this.globalEpoch;
     const keyEpoch = this.keyEpochs.get(key) ?? 0;
     const versionedKey = `${key}@${globalEpoch}:${keyEpoch}`;
-    const preparedEmitterSummary = this.preparedEmitterSummaries.get(key);
-    if (preparedEmitterSummary) this.preparedEmitterSummaries.delete(key);
     const emitterSummary =
-      lod > 1
-        ? (preparedEmitterSummary ??
-          (await this.getEmitterSummary(lod, regionX, regionY)))
-        : undefined;
+      lod > 1 ? await this.getEmitterSummary(lod, regionX, regionY) : undefined;
     const existing = this.inFlight.get(key);
     const promise =
       existing && existing.versionedKey === versionedKey
@@ -758,20 +802,7 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     regionX: number,
     regionY: number,
   ): Promise<EmitterSummaryResult> {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        this.getCoarseEmitterSummary(lod, regionX, regionY),
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("Emitter summary cold build timed out")),
-            EMITTER_SUMMARY_REQUEST_TIMEOUT_MS,
-          );
-        }),
-      ]);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-    }
+    return this.getCoarseEmitterSummary(lod, regionX, regionY);
   }
 
   private async getCoarseEmitterSummary(
@@ -895,6 +926,7 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     const job = this.compressVariant(cached, contentEncoding)
       .then((variant) => {
         cached.variants.set(contentEncoding, variant);
+        this.cache.set(cached.key, cached);
         cached.variantJobs.delete(contentEncoding);
         return variant;
       })
@@ -942,5 +974,21 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     contentEncoding: VoxelContentEncoding,
   ): string {
     return `"voxels-${key}-${contentEncoding}-${sourceSignature}"`;
+  }
+
+  private getRetainedBufferBytes(mesh: CachedVoxelMesh): number {
+    const buffers = new Set<ArrayBufferLike>();
+    for (const variant of mesh.variants.values())
+      buffers.add(variant.buf.buffer);
+    return [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0);
+  }
+
+  private getCacheBufferBytes(encoding: VoxelContentEncoding): number {
+    let bytes = 0;
+    for (const mesh of this.cache.values()) {
+      const variant = mesh.variants.get(encoding);
+      if (variant) bytes += variant.buf.buffer.byteLength;
+    }
+    return bytes;
   }
 }

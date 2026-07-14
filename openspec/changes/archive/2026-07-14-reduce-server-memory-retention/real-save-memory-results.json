@@ -1,0 +1,1198 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-13T21:20:21.951Z",
+  "observational": true,
+  "runtime": {
+    "node": "v22.19.0",
+    "platform": "linux",
+    "arch": "x64",
+    "serverMode": "source"
+  },
+  "save": {
+    "path": "/home/arturk/.cubyz/saves/SEASON3",
+    "worldMetadataSha256": "7a8aeeb372919b68e7d2d62b6ae601f06a475840eab92905573ad7cd8ead56a4"
+  },
+  "manifest": {
+    "path": "/var/home/arturk/Games/Cubyz/cubyz-map-viewer/test/voxel/benchmarks/real-save-workload.json",
+    "sha256": "9b63783bc0270e2c6cdcfe672c6733bffd015b6c69e158111a66737185e366c4",
+    "contents": {
+      "version": 1,
+      "name": "dense-spawn-memory-v1",
+      "description": "Fixed 52-request mixed-LOD workload around a dense save spawn.",
+      "requests": [
+        {
+          "lod": 1,
+          "regionX": 1408,
+          "regionY": 5760
+        },
+        {
+          "lod": 1,
+          "regionX": 1536,
+          "regionY": 5760
+        },
+        {
+          "lod": 1,
+          "regionX": 1664,
+          "regionY": 5760
+        },
+        {
+          "lod": 1,
+          "regionX": 1792,
+          "regionY": 5760
+        },
+        {
+          "lod": 1,
+          "regionX": 1920,
+          "regionY": 5760
+        },
+        {
+          "lod": 1,
+          "regionX": 1408,
+          "regionY": 5888
+        },
+        {
+          "lod": 1,
+          "regionX": 1536,
+          "regionY": 5888
+        },
+        {
+          "lod": 1,
+          "regionX": 1664,
+          "regionY": 5888
+        },
+        {
+          "lod": 1,
+          "regionX": 1792,
+          "regionY": 5888
+        },
+        {
+          "lod": 1,
+          "regionX": 1920,
+          "regionY": 5888
+        },
+        {
+          "lod": 1,
+          "regionX": 1408,
+          "regionY": 6016
+        },
+        {
+          "lod": 1,
+          "regionX": 1536,
+          "regionY": 6016
+        },
+        {
+          "lod": 1,
+          "regionX": 1664,
+          "regionY": 6016
+        },
+        {
+          "lod": 1,
+          "regionX": 1792,
+          "regionY": 6016
+        },
+        {
+          "lod": 1,
+          "regionX": 1920,
+          "regionY": 6016
+        },
+        {
+          "lod": 1,
+          "regionX": 1408,
+          "regionY": 6144
+        },
+        {
+          "lod": 1,
+          "regionX": 1536,
+          "regionY": 6144
+        },
+        {
+          "lod": 1,
+          "regionX": 1664,
+          "regionY": 6144
+        },
+        {
+          "lod": 1,
+          "regionX": 1792,
+          "regionY": 6144
+        },
+        {
+          "lod": 1,
+          "regionX": 1920,
+          "regionY": 6144
+        },
+        {
+          "lod": 1,
+          "regionX": 1408,
+          "regionY": 6272
+        },
+        {
+          "lod": 1,
+          "regionX": 1536,
+          "regionY": 6272
+        },
+        {
+          "lod": 1,
+          "regionX": 1664,
+          "regionY": 6272
+        },
+        {
+          "lod": 1,
+          "regionX": 1792,
+          "regionY": 6272
+        },
+        {
+          "lod": 1,
+          "regionX": 1920,
+          "regionY": 6272
+        },
+        {
+          "lod": 2,
+          "regionX": 1280,
+          "regionY": 5632
+        },
+        {
+          "lod": 2,
+          "regionX": 1536,
+          "regionY": 5632
+        },
+        {
+          "lod": 2,
+          "regionX": 1792,
+          "regionY": 5632
+        },
+        {
+          "lod": 2,
+          "regionX": 1280,
+          "regionY": 5888
+        },
+        {
+          "lod": 2,
+          "regionX": 1536,
+          "regionY": 5888
+        },
+        {
+          "lod": 2,
+          "regionX": 1792,
+          "regionY": 5888
+        },
+        {
+          "lod": 2,
+          "regionX": 1280,
+          "regionY": 6144
+        },
+        {
+          "lod": 2,
+          "regionX": 1536,
+          "regionY": 6144
+        },
+        {
+          "lod": 2,
+          "regionX": 1792,
+          "regionY": 6144
+        },
+        {
+          "lod": 4,
+          "regionX": 1024,
+          "regionY": 5632
+        },
+        {
+          "lod": 4,
+          "regionX": 1536,
+          "regionY": 5632
+        },
+        {
+          "lod": 4,
+          "regionX": 2048,
+          "regionY": 5632
+        },
+        {
+          "lod": 4,
+          "regionX": 1024,
+          "regionY": 6144
+        },
+        {
+          "lod": 4,
+          "regionX": 1536,
+          "regionY": 6144
+        },
+        {
+          "lod": 4,
+          "regionX": 2048,
+          "regionY": 6144
+        },
+        {
+          "lod": 4,
+          "regionX": 1024,
+          "regionY": 6656
+        },
+        {
+          "lod": 4,
+          "regionX": 1536,
+          "regionY": 6656
+        },
+        {
+          "lod": 4,
+          "regionX": 2048,
+          "regionY": 6656
+        },
+        {
+          "lod": 8,
+          "regionX": 1024,
+          "regionY": 5120
+        },
+        {
+          "lod": 8,
+          "regionX": 2048,
+          "regionY": 5120
+        },
+        {
+          "lod": 8,
+          "regionX": 1024,
+          "regionY": 6144
+        },
+        {
+          "lod": 8,
+          "regionX": 2048,
+          "regionY": 6144
+        },
+        {
+          "lod": 16,
+          "regionX": 0,
+          "regionY": 4096
+        },
+        {
+          "lod": 16,
+          "regionX": 2048,
+          "regionY": 4096
+        },
+        {
+          "lod": 16,
+          "regionX": 0,
+          "regionY": 6144
+        },
+        {
+          "lod": 16,
+          "regionX": 2048,
+          "regionY": 6144
+        },
+        {
+          "lod": 32,
+          "regionX": 0,
+          "regionY": 4096
+        }
+      ]
+    }
+  },
+  "workload": {
+    "concurrency": 8,
+    "encoding": "br",
+    "sampleMs": 100,
+    "idleMs": 30000
+  },
+  "runs": [
+    {
+      "workers": 1,
+      "configuration": {
+        "VOXEL_MEMORY_CACHE_SIZE": null,
+        "VOXEL_MEMORY_CACHE_BYTES": null,
+        "VOXEL_EMITTER_SUMMARY_CACHE_SIZE": null,
+        "VOXEL_EMITTER_SUMMARY_CACHE_BYTES": null,
+        "VOXEL_WORKER_EMITTER_CACHE_SIZE": null,
+        "VOXEL_WORKER_EMITTER_CACHE_SOURCES": null,
+        "VOXEL_WORKER_RECYCLE_HEAP_BYTES": null,
+        "VOXEL_WORKER_RECYCLE_EXTERNAL_BYTES": null,
+        "VOXEL_WORKER_RECYCLE_ARRAY_BUFFER_BYTES": null,
+        "VOXEL_WORKER_RECYCLE_JOBS": null
+      },
+      "health": {
+        "status": "ok",
+        "savePath": "/home/arturk/.cubyz/saves/SEASON3",
+        "worldName": "SEASON3"
+      },
+      "startup": {
+        "readyRssBytes": 168554496,
+        "peakRssBytes": 168554496
+      },
+      "cold": {
+        "phase": "cold",
+        "durationMs": 164186.34131000002,
+        "requests": 52,
+        "outcomes": {
+          "200": 13,
+          "204": 39
+        },
+        "wireBytes": 1365697,
+        "rss": {
+          "peakRssBytes": 1911234560,
+          "postWorkRssBytes": 1843740672,
+          "postIdleRssBytes": 1545932800
+        },
+        "metricsBefore": {
+          "workers": 1,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [],
+            "heapUsed": 0,
+            "heapTotal": 0,
+            "external": 0,
+            "arrayBuffers": 0,
+            "representedEmitterCacheEntries": 0,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 0,
+          "cacheBytes": 0,
+          "cacheRawBytes": 0,
+          "cacheVariantBytes": 0,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 0,
+          "summaryCacheEstimatedBytes": 0,
+          "summaryCacheRetainedClusters": 0,
+          "summaryCacheEvictions": 0,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 0,
+          "cacheHits": 0,
+          "workerRequests": 0,
+          "emptyResponses": 0,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0,
+          "queueMsMax": 0,
+          "runMsAvg": 0,
+          "runMsMax": 0,
+          "totalMsAvg": 0,
+          "totalMsMax": 0
+        },
+        "metricsAfterWork": {
+          "workers": 1,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 24276880,
+                "heapTotal": 59297792,
+                "external": 18833979,
+                "arrayBuffers": 25045652,
+                "completedJobs": 14,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 24276880,
+            "heapTotal": 59297792,
+            "external": 18833979,
+            "arrayBuffers": 25045652,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865305,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34875,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 64.29005428571362,
+          "queueMsMax": 479.77323399999295,
+          "runMsAvg": 286.20109950000017,
+          "runMsMax": 1858.978492,
+          "totalMsAvg": 1070.2589590714285,
+          "totalMsMax": 2839.2587780000176
+        },
+        "metricsAfterIdle": {
+          "workers": 1,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 24276880,
+                "heapTotal": 59297792,
+                "external": 18833979,
+                "arrayBuffers": 25045652,
+                "completedJobs": 14,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 24276880,
+            "heapTotal": 59297792,
+            "external": 18833979,
+            "arrayBuffers": 25045652,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865305,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34875,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 64.29005428571362,
+          "queueMsMax": 479.77323399999295,
+          "runMsAvg": 286.20109950000017,
+          "runMsMax": 1858.978492,
+          "totalMsAvg": 1070.2589590714285,
+          "totalMsMax": 2839.2587780000176
+        },
+        "metricDeltas": {
+          "workers": 0,
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865305,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34875,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 64.29005428571362,
+          "queueMsMax": 479.77323399999295,
+          "runMsAvg": 286.20109950000017,
+          "runMsMax": 1858.978492,
+          "totalMsAvg": 1070.2589590714285,
+          "totalMsMax": 2839.2587780000176
+        }
+      },
+      "warm": {
+        "phase": "warm",
+        "durationMs": 313.15058300000965,
+        "requests": 52,
+        "outcomes": {
+          "200": 13,
+          "204": 39
+        },
+        "wireBytes": 1365697,
+        "rss": {
+          "peakRssBytes": 1591308288,
+          "postWorkRssBytes": 1591308288,
+          "postIdleRssBytes": 1545940992
+        },
+        "metricsBefore": {
+          "workers": 1,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 24276880,
+                "heapTotal": 59297792,
+                "external": 18833979,
+                "arrayBuffers": 25045652,
+                "completedJobs": 14,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 24276880,
+            "heapTotal": 59297792,
+            "external": 18833979,
+            "arrayBuffers": 25045652,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865305,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34875,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 64.29005428571362,
+          "queueMsMax": 479.77323399999295,
+          "runMsAvg": 286.20109950000017,
+          "runMsMax": 1858.978492,
+          "totalMsAvg": 1070.2589590714285,
+          "totalMsMax": 2839.2587780000176
+        },
+        "metricsAfterWork": {
+          "workers": 1,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 20912888,
+                "heapTotal": 57724928,
+                "external": 20569670,
+                "arrayBuffers": 27174119,
+                "completedJobs": 15,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 20912888,
+            "heapTotal": 57724928,
+            "external": 20569670,
+            "arrayBuffers": 27174119,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1608087,
+          "summaryCacheRetainedClusters": 5211,
+          "summaryCacheEvictions": 38132,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 28,
+          "cacheHits": 13,
+          "workerRequests": 15,
+          "emptyResponses": 2,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 60.00475799999922,
+          "queueMsMax": 479.77323399999295,
+          "runMsAvg": 267.68868666666714,
+          "runMsMax": 1858.978492,
+          "totalMsAvg": 541.6293422857179,
+          "totalMsMax": 2839.2587780000176
+        },
+        "metricsAfterIdle": {
+          "workers": 1,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 20912888,
+                "heapTotal": 57724928,
+                "external": 20569670,
+                "arrayBuffers": 27174119,
+                "completedJobs": 15,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 20912888,
+            "heapTotal": 57724928,
+            "external": 20569670,
+            "arrayBuffers": 27174119,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1608087,
+          "summaryCacheRetainedClusters": 5211,
+          "summaryCacheEvictions": 38132,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 28,
+          "cacheHits": 13,
+          "workerRequests": 15,
+          "emptyResponses": 2,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 60.00475799999922,
+          "queueMsMax": 479.77323399999295,
+          "runMsAvg": 267.68868666666714,
+          "runMsMax": 1858.978492,
+          "totalMsAvg": 541.6293422857179,
+          "totalMsMax": 2839.2587780000176
+        },
+        "metricDeltas": {
+          "workers": 0,
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "inFlightJobs": 0,
+          "cacheEntries": 0,
+          "cacheBytes": 0,
+          "cacheRawBytes": 0,
+          "cacheVariantBytes": 0,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 0,
+          "summaryCacheEstimatedBytes": -257218,
+          "summaryCacheRetainedClusters": -886,
+          "summaryCacheEvictions": 3257,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 13,
+          "workerRequests": 1,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": -4.285296285714402,
+          "queueMsMax": 0,
+          "runMsAvg": -18.51241283333303,
+          "runMsMax": 0,
+          "totalMsAvg": -528.6296167857106,
+          "totalMsMax": 0
+        }
+      }
+    },
+    {
+      "workers": 8,
+      "configuration": {
+        "VOXEL_MEMORY_CACHE_SIZE": null,
+        "VOXEL_MEMORY_CACHE_BYTES": null,
+        "VOXEL_EMITTER_SUMMARY_CACHE_SIZE": null,
+        "VOXEL_EMITTER_SUMMARY_CACHE_BYTES": null,
+        "VOXEL_WORKER_EMITTER_CACHE_SIZE": null,
+        "VOXEL_WORKER_EMITTER_CACHE_SOURCES": null,
+        "VOXEL_WORKER_RECYCLE_HEAP_BYTES": null,
+        "VOXEL_WORKER_RECYCLE_EXTERNAL_BYTES": null,
+        "VOXEL_WORKER_RECYCLE_ARRAY_BUFFER_BYTES": null,
+        "VOXEL_WORKER_RECYCLE_JOBS": null
+      },
+      "health": {
+        "status": "ok",
+        "savePath": "/home/arturk/.cubyz/saves/SEASON3",
+        "worldName": "SEASON3"
+      },
+      "startup": {
+        "readyRssBytes": 278839296,
+        "peakRssBytes": 278839296
+      },
+      "cold": {
+        "phase": "cold",
+        "durationMs": 162857.39086499996,
+        "requests": 52,
+        "outcomes": {
+          "200": 13,
+          "204": 39
+        },
+        "wireBytes": 1365697,
+        "rss": {
+          "peakRssBytes": 3335041024,
+          "postWorkRssBytes": 2500567040,
+          "postIdleRssBytes": 2021142528
+        },
+        "metricsBefore": {
+          "workers": 8,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [],
+            "heapUsed": 0,
+            "heapTotal": 0,
+            "external": 0,
+            "arrayBuffers": 0,
+            "representedEmitterCacheEntries": 0,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 0,
+          "cacheBytes": 0,
+          "cacheRawBytes": 0,
+          "cacheVariantBytes": 0,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 0,
+          "summaryCacheEstimatedBytes": 0,
+          "summaryCacheRetainedClusters": 0,
+          "summaryCacheEvictions": 0,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 0,
+          "cacheHits": 0,
+          "workerRequests": 0,
+          "emptyResponses": 0,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0,
+          "queueMsMax": 0,
+          "runMsAvg": 0,
+          "runMsMax": 0,
+          "totalMsAvg": 0,
+          "totalMsMax": 0
+        },
+        "metricsAfterWork": {
+          "workers": 8,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 31216760,
+                "heapTotal": 60084224,
+                "external": 19664591,
+                "arrayBuffers": 25017276,
+                "completedJobs": 11,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              },
+              {
+                "heapUsed": 24712968,
+                "heapTotal": 37941248,
+                "external": 18206322,
+                "arrayBuffers": 14981575,
+                "completedJobs": 3,
+                "representedEmitterCacheEntries": 0,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 55929728,
+            "heapTotal": 98025472,
+            "external": 37870913,
+            "arrayBuffers": 39998851,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865306,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34748,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0.05030485714220439,
+          "queueMsMax": 0.0913589999981923,
+          "runMsAvg": 304.7312286428579,
+          "runMsMax": 1794.1245020000001,
+          "totalMsAvg": 3302.479325071428,
+          "totalMsMax": 9157.970220999996
+        },
+        "metricsAfterIdle": {
+          "workers": 8,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 31216760,
+                "heapTotal": 60084224,
+                "external": 19664591,
+                "arrayBuffers": 25017276,
+                "completedJobs": 11,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              },
+              {
+                "heapUsed": 24712968,
+                "heapTotal": 37941248,
+                "external": 18206322,
+                "arrayBuffers": 14981575,
+                "completedJobs": 3,
+                "representedEmitterCacheEntries": 0,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 55929728,
+            "heapTotal": 98025472,
+            "external": 37870913,
+            "arrayBuffers": 39998851,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865306,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34748,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0.05030485714220439,
+          "queueMsMax": 0.0913589999981923,
+          "runMsAvg": 304.7312286428579,
+          "runMsMax": 1794.1245020000001,
+          "totalMsAvg": 3302.479325071428,
+          "totalMsMax": 9157.970220999996
+        },
+        "metricDeltas": {
+          "workers": 0,
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865306,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34748,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0.05030485714220439,
+          "queueMsMax": 0.0913589999981923,
+          "runMsAvg": 304.7312286428579,
+          "runMsMax": 1794.1245020000001,
+          "totalMsAvg": 3302.479325071428,
+          "totalMsMax": 9157.970220999996
+        }
+      },
+      "warm": {
+        "phase": "warm",
+        "durationMs": 302.9108889999916,
+        "requests": 52,
+        "outcomes": {
+          "200": 13,
+          "204": 39
+        },
+        "wireBytes": 1365697,
+        "rss": {
+          "peakRssBytes": 2059907072,
+          "postWorkRssBytes": 2059907072,
+          "postIdleRssBytes": 2059911168
+        },
+        "metricsBefore": {
+          "workers": 8,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 31216760,
+                "heapTotal": 60084224,
+                "external": 19664591,
+                "arrayBuffers": 25017276,
+                "completedJobs": 11,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              },
+              {
+                "heapUsed": 24712968,
+                "heapTotal": 37941248,
+                "external": 18206322,
+                "arrayBuffers": 14981575,
+                "completedJobs": 3,
+                "representedEmitterCacheEntries": 0,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 55929728,
+            "heapTotal": 98025472,
+            "external": 37870913,
+            "arrayBuffers": 39998851,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1865306,
+          "summaryCacheRetainedClusters": 6097,
+          "summaryCacheEvictions": 34748,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 0,
+          "workerRequests": 14,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0.05030485714220439,
+          "queueMsMax": 0.0913589999981923,
+          "runMsAvg": 304.7312286428579,
+          "runMsMax": 1794.1245020000001,
+          "totalMsAvg": 3302.479325071428,
+          "totalMsMax": 9157.970220999996
+        },
+        "metricsAfterWork": {
+          "workers": 8,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 12805520,
+                "heapTotal": 14929920,
+                "external": 7756382,
+                "arrayBuffers": 13501843,
+                "completedJobs": 12,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              },
+              {
+                "heapUsed": 24712968,
+                "heapTotal": 37941248,
+                "external": 18206322,
+                "arrayBuffers": 14981575,
+                "completedJobs": 3,
+                "representedEmitterCacheEntries": 0,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 37518488,
+            "heapTotal": 52871168,
+            "external": 25962704,
+            "arrayBuffers": 28483418,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1608087,
+          "summaryCacheRetainedClusters": 5211,
+          "summaryCacheEvictions": 38005,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 28,
+          "cacheHits": 13,
+          "workerRequests": 15,
+          "emptyResponses": 2,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0.04773386666714335,
+          "queueMsMax": 0.0913589999981923,
+          "runMsAvg": 285.1584589333351,
+          "runMsMax": 1794.1245020000001,
+          "totalMsAvg": 1657.7093199642838,
+          "totalMsMax": 9157.970220999996
+        },
+        "metricsAfterIdle": {
+          "workers": 8,
+          "workerRuntimeMode": "source",
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "workerDiagnostics": {
+            "slots": [
+              {
+                "heapUsed": 12805520,
+                "heapTotal": 14929920,
+                "external": 7756382,
+                "arrayBuffers": 13501843,
+                "completedJobs": 12,
+                "representedEmitterCacheEntries": 2,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              },
+              {
+                "heapUsed": 24712968,
+                "heapTotal": 37941248,
+                "external": 18206322,
+                "arrayBuffers": 14981575,
+                "completedJobs": 3,
+                "representedEmitterCacheEntries": 0,
+                "representedEmitterCacheSources": 0,
+                "representedEmitterInFlight": 0
+              }
+            ],
+            "heapUsed": 37518488,
+            "heapTotal": 52871168,
+            "external": 25962704,
+            "arrayBuffers": 28483418,
+            "representedEmitterCacheEntries": 2,
+            "representedEmitterCacheSources": 0,
+            "representedEmitterInFlight": 0,
+            "retirements": 0,
+            "retirementReasons": {}
+          },
+          "inFlightJobs": 0,
+          "cacheEntries": 13,
+          "cacheBytes": 11807965,
+          "cacheRawBytes": 10434148,
+          "cacheVariantBytes": 1373817,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 512,
+          "summaryCacheEstimatedBytes": 1608087,
+          "summaryCacheRetainedClusters": 5211,
+          "summaryCacheEvictions": 38005,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 28,
+          "cacheHits": 13,
+          "workerRequests": 15,
+          "emptyResponses": 2,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": 0.04773386666714335,
+          "queueMsMax": 0.0913589999981923,
+          "runMsAvg": 285.1584589333351,
+          "runMsMax": 1794.1245020000001,
+          "totalMsAvg": 1657.7093199642838,
+          "totalMsMax": 9157.970220999996
+        },
+        "metricDeltas": {
+          "workers": 0,
+          "queueDepth": 0,
+          "runningJobs": 0,
+          "inFlightJobs": 0,
+          "cacheEntries": 0,
+          "cacheBytes": 0,
+          "cacheRawBytes": 0,
+          "cacheVariantBytes": 0,
+          "cacheEvictions": 0,
+          "cacheOversizedSkips": 0,
+          "summaryCacheEntries": 0,
+          "summaryCacheEstimatedBytes": -257219,
+          "summaryCacheRetainedClusters": -886,
+          "summaryCacheEvictions": 3257,
+          "summaryCacheOversizedSkips": 0,
+          "summaryActiveWork": 0,
+          "requests": 14,
+          "cacheHits": 13,
+          "workerRequests": 1,
+          "emptyResponses": 1,
+          "staleDrops": 0,
+          "errors": 0,
+          "queueMsAvg": -0.0025709904750610413,
+          "queueMsMax": 0,
+          "runMsAvg": -19.572769709522788,
+          "runMsMax": 0,
+          "totalMsAvg": -1644.770005107144,
+          "totalMsMax": 0
+        }
+      }
+    }
+  ]
+}

@@ -31,6 +31,17 @@ const stats: VoxelGenerationStats = {
   maxWorldZ: 0,
 };
 
+const diagnostics = {
+  heapUsed: 0,
+  heapTotal: 0,
+  external: 0,
+  arrayBuffers: 0,
+  completedJobs: 1,
+  representedEmitterCacheEntries: 0,
+  representedEmitterCacheSources: 0,
+  representedEmitterInFlight: 0,
+};
+
 export class DeferredVoxelPool implements VoxelWorkerPoolLike {
   readonly jobs: VoxelJob[] = [];
   private readonly completions = new Map<
@@ -58,7 +69,22 @@ export class DeferredVoxelPool implements VoxelWorkerPoolLike {
           payload.byteOffset + payload.byteLength,
         ),
         runMs: 1,
+        diagnostics,
         stats,
+      },
+      queueMs: 0,
+      runMs: 1,
+    });
+  }
+
+  fail(job: VoxelJob, error = "generation failed"): void {
+    this.completions.get(job.id)?.resolve({
+      result: {
+        ...job,
+        status: "error",
+        error,
+        runMs: 1,
+        diagnostics,
       },
       queueMs: 0,
       runMs: 1,
@@ -87,6 +113,15 @@ export class RecordingEmitterSummaries
     regionX: number;
     regionY: number;
   }> = [];
+  clearCount = 0;
+  metrics = {
+    entries: 0,
+    estimatedBytes: 0,
+    retainedClusters: 0,
+    evictions: 0,
+    oversizedSkips: 0,
+    activeWork: 0,
+  };
 
   async getNode(): ReturnType<VoxelEmitterSummaryServiceLike["getNode"]> {
     throw new Error("LOD 1 tests do not request emitter summaries");
@@ -94,5 +129,13 @@ export class RecordingEmitterSummaries
 
   invalidate(lod: number, regionX: number, regionY: number): void {
     this.invalidations.push({ lod, regionX, regionY });
+  }
+
+  clear(): void {
+    this.clearCount++;
+  }
+
+  getMetricsSnapshot() {
+    return this.metrics;
   }
 }

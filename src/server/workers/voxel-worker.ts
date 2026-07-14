@@ -1,13 +1,39 @@
 import { parentPort, workerData } from "node:worker_threads";
 
-import { generateVoxelMesh } from "../services/voxel-generator.js";
+import {
+  configureRepresentedEmitterCache,
+  generateVoxelMesh,
+  getRepresentedEmitterCacheMetrics,
+} from "../services/voxel-generator.js";
 import type {
   VoxelJobResult,
   VoxelWorkerData,
+  VoxelWorkerDiagnostics,
   VoxelWorkerMessage,
 } from "./voxel-worker-protocol.js";
 
 const data = workerData as VoxelWorkerData;
+let completedJobs = 0;
+
+configureRepresentedEmitterCache(
+  data.representedEmitterCacheMaxEntries,
+  data.representedEmitterCacheMaxSources,
+);
+
+function getDiagnostics(): VoxelWorkerDiagnostics {
+  const memory = process.memoryUsage();
+  const cache = getRepresentedEmitterCacheMetrics();
+  return {
+    heapUsed: memory.heapUsed,
+    heapTotal: memory.heapTotal,
+    external: memory.external,
+    arrayBuffers: memory.arrayBuffers,
+    completedJobs,
+    representedEmitterCacheEntries: cache.entries,
+    representedEmitterCacheSources: cache.sources,
+    representedEmitterInFlight: cache.inFlight,
+  };
+}
 
 if (!parentPort) {
   throw new Error("Voxel worker started without parentPort");
@@ -36,6 +62,8 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
       },
     );
     const runMs = performance.now() - startedAt;
+    completedJobs++;
+    const diagnostics = getDiagnostics();
     const result: VoxelJobResult = generated.buffer
       ? generated.stats
         ? {
@@ -46,6 +74,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
             status: "ok",
             buffer: generated.buffer,
             runMs,
+            diagnostics,
             stats: generated.stats,
           }
         : {
@@ -56,6 +85,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
             status: "error",
             error: "Voxel mesh generation returned a buffer without stats",
             runMs,
+            diagnostics,
           }
       : {
           id: job.id,
@@ -64,6 +94,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
           keyEpoch: job.keyEpoch,
           status: "empty",
           runMs,
+          diagnostics,
           stats: generated.stats,
         };
     if (result.status === "ok") {
@@ -72,6 +103,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
       parentPort?.postMessage(result);
     }
   } catch (error) {
+    completedJobs++;
     const result: VoxelJobResult = {
       id: job.id,
       key: job.key,
@@ -80,6 +112,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
       status: "error",
       error: error instanceof Error ? error.message : String(error),
       runMs: performance.now() - startedAt,
+      diagnostics: getDiagnostics(),
     };
     parentPort?.postMessage(result);
   }
