@@ -6,6 +6,7 @@ import type {
   PendingVoxelMeshItem,
   VoxelRefreshState,
   WarmCachedVoxelTile,
+  WorkerMeshResult,
   WorkerOut,
 } from "./types.js";
 import {
@@ -15,6 +16,7 @@ import {
 import { voxelTileKey } from "./voxel-index.js";
 import { runVoxelLodSelection } from "./voxel-lod.js";
 import { compareVoxelFetchRequests } from "./voxel-requests.js";
+import type { VoxelViewClass, VoxelWorkPriority } from "./voxel-work.js";
 
 export function clearVoxelTiles(args: {
   preserveWarmCache?: boolean;
@@ -99,58 +101,52 @@ export function requestDirectVoxelRefresh(args: {
   regionX: number;
   regionY: number;
   version: number;
-  worker: Worker | null;
   failedVoxels: Map<string, number>;
   maxVoxelRetries: number;
-  voxelFetchControllers: Map<string, AbortController>;
-  activeVoxelFetchCountRef: { current: number };
   loadingVoxels: Set<string>;
-  fetchVoxelRegion: (
-    request: PendingVoxelFetchRequest,
-    controller: AbortController,
-  ) => void;
+  queueVoxelFetchRequest: (request: PendingVoxelFetchRequest) => void;
+  drainVoxelFetchQueue: () => void;
   activeVoxelRequestGeneration: number;
+  priority?: VoxelWorkPriority;
 }): void {
   const {
     lod,
     regionX,
     regionY,
     version,
-    worker,
     failedVoxels,
     maxVoxelRetries,
-    voxelFetchControllers,
-    activeVoxelFetchCountRef,
     loadingVoxels,
-    fetchVoxelRegion,
+    queueVoxelFetchRequest,
+    drainVoxelFetchQueue,
     activeVoxelRequestGeneration,
+    priority,
   } = args;
   const key = voxelTileKey(lod, regionX, regionY);
-  if (!worker) return;
-
   const retries = failedVoxels.get(key);
   if (retries !== undefined && retries >= maxVoxelRetries) return;
 
-  voxelFetchControllers.get(key)?.abort();
-  if (voxelFetchControllers.has(key)) return;
-
-  activeVoxelFetchCountRef.current++;
   loadingVoxels.add(key);
-  const controller = new AbortController();
-  voxelFetchControllers.set(key, controller);
-
-  void fetchVoxelRegion(
-    {
-      key,
-      lod,
-      regionX,
-      regionY,
-      priority: Number.NEGATIVE_INFINITY,
-      generation: activeVoxelRequestGeneration,
-      version,
-    },
-    controller,
-  );
+  queueVoxelFetchRequest({
+    key,
+    lod,
+    regionX,
+    regionY,
+    priority:
+      priority ??
+      ({
+        coverageClass: "detail",
+        viewClass: "forward",
+        projectedBenefit: Number.MAX_VALUE,
+        distance: 0,
+        lod,
+        generation: activeVoxelRequestGeneration,
+      } satisfies VoxelWorkPriority),
+    generation: activeVoxelRequestGeneration,
+    version,
+    selectedAt: performance.now(),
+  });
+  drainVoxelFetchQueue();
 }
 
 export function requestVoxelRegion(args: {
@@ -237,6 +233,7 @@ export function drainVoxelFetchQueue(args: {
     request: PendingVoxelFetchRequest,
     controller: AbortController,
   ) => void;
+  canStartFetch?: () => boolean;
 }): void {
   const {
     pendingVoxelFetchQueueRef,
@@ -251,16 +248,25 @@ export function drainVoxelFetchQueue(args: {
     voxelFetchControllers,
     loadingVoxels,
     fetchVoxelRegion,
+    canStartFetch = () => true,
   } = args;
   pendingVoxelFetchQueueRef.current.sort(compareVoxelFetchRequests);
 
   while (
     activeVoxelFetchCountRef.current < maxConcurrentVoxelFetches &&
+    canStartFetch() &&
     pendingVoxelFetchQueueRef.current.length > 0
   ) {
-    const next = pendingVoxelFetchQueueRef.current.shift();
+    const nextIndex = pendingVoxelFetchQueueRef.current.findIndex(
+      (request) => !voxelFetchControllers.has(request.key),
+    );
+    if (nextIndex < 0) break;
+    const [next] = pendingVoxelFetchQueueRef.current.splice(nextIndex, 1);
     if (!next) continue;
-    if (!activeVoxelRequestKeys.has(next.key)) {
+    if (
+      !activeVoxelRequestKeys.has(next.key) &&
+      !(loadedVoxels.has(next.key) && isVoxelTileStale(next.key))
+    ) {
       loadingVoxels.delete(next.key);
       continue;
     }
@@ -275,9 +281,6 @@ export function drainVoxelFetchQueue(args: {
     const retries = failedVoxels.get(next.key);
     if (retries !== undefined && retries >= maxVoxelRetries) {
       loadingVoxels.delete(next.key);
-      continue;
-    }
-    if (voxelFetchControllers.has(next.key)) {
       continue;
     }
     if (!loadingVoxels.has(next.key)) {
@@ -299,10 +302,12 @@ export function updateVoxelLod(args: {
   screenSpaceDistanceScale: number;
   cameraFov: number;
   viewportHeight: number;
+  viewportAspect: number;
   focusPoint: THREE.Vector3 | null;
   voxelRootEntries: ChunkIndexEntry[];
   availableVoxelKeys: Set<string>;
   loadedVoxels: Map<string, LoadedVoxelTile>;
+  warmCachedVoxels: Map<string, WarmCachedVoxelTile>;
   loadingVoxels: Set<string>;
   pendingVoxelMeshQueue: PendingVoxelMeshItem[];
   voxelUnloadGraceUntil: Map<string, number>;
@@ -310,6 +315,7 @@ export function updateVoxelLod(args: {
   renderDistance: number;
   minRenderedVoxelLod: number;
   activeVoxelRequestGenerationRef: { current: number };
+  voxelViewClasses: Map<string, VoxelViewClass>;
   voxelLastMotionAt: number;
   voxelDetailRequestDebounceMs: number;
   debugSettings: {
@@ -320,6 +326,8 @@ export function updateVoxelLod(args: {
     voxelTopAoIntensity: number;
     voxelWallAoIntensity: number;
     voxelUnloadGraceMs: number;
+    voxelViewEnterMarginDegrees: number;
+    voxelViewExitMarginDegrees: number;
   };
   pendingVoxelDetailRequestsRef: {
     current: Map<string, PendingVoxelFetchRequest>;
@@ -332,6 +340,7 @@ export function updateVoxelLod(args: {
   unloadVoxelTile: (key: string, preserveWarmCache?: boolean) => void;
   syncVoxelRequests: (requests: Map<string, PendingVoxelFetchRequest>) => void;
   debugLabelsDirtyRef: { current: boolean };
+  onVoxelVisible?: (key: string, visibleAt: number) => void;
 }): void {
   const {
     focusLod,
@@ -341,10 +350,12 @@ export function updateVoxelLod(args: {
     screenSpaceDistanceScale,
     cameraFov,
     viewportHeight,
+    viewportAspect,
     focusPoint,
     voxelRootEntries,
     availableVoxelKeys,
     loadedVoxels,
+    warmCachedVoxels,
     loadingVoxels,
     pendingVoxelMeshQueue,
     voxelUnloadGraceUntil,
@@ -352,6 +363,7 @@ export function updateVoxelLod(args: {
     renderDistance,
     minRenderedVoxelLod,
     activeVoxelRequestGenerationRef,
+    voxelViewClasses,
     voxelLastMotionAt,
     voxelDetailRequestDebounceMs,
     debugSettings,
@@ -362,9 +374,11 @@ export function updateVoxelLod(args: {
     unloadVoxelTile,
     syncVoxelRequests,
     debugLabelsDirtyRef,
+    onVoxelVisible,
   } = args;
 
   if (voxelRootEntries.length === 0) {
+    voxelViewClasses.clear();
     pendingVoxelDetailRequestsRef.current.clear();
     committedVoxelDetailRequestsRef.current.clear();
     syncVoxelRequests(new Map());
@@ -385,10 +399,12 @@ export function updateVoxelLod(args: {
     screenSpaceDistanceScale,
     cameraFov,
     viewportHeight,
+    viewportAspect,
     focusPoint,
     roots: voxelRootEntries,
     availableVoxelKeys,
     loadedVoxels,
+    warmCachedVoxels,
     loadingVoxels,
     pendingVoxelMeshQueue,
     voxelUnloadGraceUntil,
@@ -396,6 +412,7 @@ export function updateVoxelLod(args: {
     renderDistance,
     minRenderedVoxelLod,
     requestGeneration,
+    voxelViewClasses,
     now,
     stableForDetail,
     debugSettings,
@@ -403,6 +420,15 @@ export function updateVoxelLod(args: {
     isVoxelTileStale,
     unloadVoxelTile,
   });
+
+  for (const [key, tile] of loadedVoxels) {
+    if (
+      tile.subMeshes.some((subMesh) => subMesh.mesh.visible) ||
+      tile.transparentSubMeshes.some((subMesh) => subMesh.mesh.visible)
+    ) {
+      onVoxelVisible?.(key, now);
+    }
+  }
 
   pendingVoxelDetailRequestsRef.current = result.detailVoxelRequests;
   committedVoxelDetailRequestsRef.current = result.committedVoxelDetailRequests;
@@ -422,7 +448,10 @@ export function handleVoxelWorkerMessage(args: {
   failedVoxels: Map<string, number>;
   pendingVoxelMeshQueueRef: { current: PendingVoxelMeshItem[] };
   isVoxelTileStale: (key: string) => boolean;
-  onBenchmarkSample?: (sample: NonNullable<WorkerOut["benchmark"]>) => void;
+  onBenchmarkSample?: (
+    sample: NonNullable<WorkerMeshResult["benchmark"]>,
+  ) => void;
+  acceptMeshResult?: (item: PendingVoxelMeshItem, bytes: number) => boolean;
 }): void {
   const {
     data,
@@ -434,23 +463,19 @@ export function handleVoxelWorkerMessage(args: {
     pendingVoxelMeshQueueRef,
     isVoxelTileStale,
     onBenchmarkSample,
+    acceptMeshResult = () => true,
   } = args;
-  const {
-    lod,
-    regionX,
-    regionY,
-    version,
-    quadrantMeshes,
-    transparentQuadrantMeshes,
-    chunkCoverage,
-    chunkTopHeights,
-    voxelSize,
-    minZ,
-    maxZ,
-    emitterRecords,
-    benchmark,
-    error,
-  } = data;
+  const { lod, regionX, regionY, version } = data;
+
+  const resolvedLod = lod;
+  const key = voxelTileKey(resolvedLod, regionX, regionY);
+  const resolvedVersion = version;
+  if (data.type === "cancelled") {
+    loadingVoxels.delete(key);
+    return;
+  }
+
+  const { benchmark } = data;
 
   if (benchmark) {
     onBenchmarkSample?.({
@@ -459,10 +484,7 @@ export function handleVoxelWorkerMessage(args: {
     });
   }
 
-  const resolvedLod = lod ?? 1;
-  const key = voxelTileKey(resolvedLod, regionX, regionY);
-  const resolvedVersion = version ?? 0;
-  if (error || !quadrantMeshes) {
+  if (data.type === "error") {
     if (resolvedVersion < getVoxelRefreshVersion(key)) {
       loadingVoxels.delete(key);
       return;
@@ -475,6 +497,17 @@ export function handleVoxelWorkerMessage(args: {
     failedVoxels.set(key, (failedVoxels.get(key) ?? 0) + 1);
     return;
   }
+
+  const {
+    quadrantMeshes,
+    transparentQuadrantMeshes,
+    chunkCoverage,
+    chunkTopHeights,
+    voxelSize,
+    minZ,
+    maxZ,
+    emitterRecords,
+  } = data;
 
   if (
     !activeVoxelRequestKeys.has(key) &&
@@ -503,22 +536,45 @@ export function handleVoxelWorkerMessage(args: {
   const resolvedMaxZ =
     typeof maxZ === "number" && Number.isFinite(maxZ) ? maxZ : 0;
 
-  pendingVoxelMeshQueueRef.current.push({
+  const item: PendingVoxelMeshItem = {
+    jobId: data.jobId,
     key,
     lod: resolvedLod,
     regionX,
     regionY,
     quadrantMeshes,
-    transparentQuadrantMeshes: transparentQuadrantMeshes ?? [],
-    chunkCoverage: chunkCoverage ?? 0,
+    transparentQuadrantMeshes,
+    chunkCoverage,
     chunkTopHeights: topHeights,
-    voxelSize: voxelSize ?? resolvedLod,
+    voxelSize,
     minZ: resolvedMinZ,
     maxZ: resolvedMaxZ,
-    emitterRecords: emitterRecords ?? [],
+    emitterRecords,
     haloEmitterSourceKeys: [],
     version: resolvedVersion,
-  });
+  };
+  if (acceptMeshResult(item, getVoxelMeshOutputBytes(data))) {
+    pendingVoxelMeshQueueRef.current.push(item);
+  }
+}
+
+function getVoxelMeshOutputBytes(result: WorkerMeshResult): number {
+  if (result.benchmark) return result.benchmark.workerOutputBytes;
+  let bytes = result.chunkTopHeights.byteLength;
+  for (const quadrant of [
+    ...result.quadrantMeshes,
+    ...result.transparentQuadrantMeshes,
+  ]) {
+    bytes +=
+      quadrant.positions.byteLength +
+      quadrant.normals.byteLength +
+      quadrant.baseColors.byteLength +
+      quadrant.faceAo.byteLength +
+      quadrant.trianglePaletteIndices.byteLength +
+      quadrant.indices.byteLength +
+      (quadrant.emissiveColors?.byteLength ?? 0);
+  }
+  return bytes;
 }
 
 export function buildQueuedVoxelMeshes(args: {
@@ -545,6 +601,10 @@ export function buildQueuedVoxelMeshes(args: {
   biomeLabelsDirtyRef: { current: boolean };
   disposeVoxelTileResources: (tile: LoadedVoxelTile) => void;
   onVoxelTileLoaded?: (tile?: LoadedVoxelTile) => void;
+  onVoxelMeshFinished?: (
+    item: PendingVoxelMeshItem,
+    outcome: "loaded" | "discarded" | "error",
+  ) => void;
 }): boolean {
   const {
     pendingVoxelMeshQueueRef,
@@ -570,6 +630,7 @@ export function buildQueuedVoxelMeshes(args: {
     biomeLabelsDirtyRef,
     disposeVoxelTileResources,
     onVoxelTileLoaded,
+    onVoxelMeshFinished,
   } = args;
 
   let builtVoxelTile = false;
@@ -587,6 +648,7 @@ export function buildQueuedVoxelMeshes(args: {
     processedVoxelMeshes++;
     if (item.version < getVoxelRefreshVersion(item.key)) {
       loadingVoxels.delete(item.key);
+      onVoxelMeshFinished?.(item, "discarded");
       continue;
     }
     if (
@@ -594,6 +656,7 @@ export function buildQueuedVoxelMeshes(args: {
       !(loadedVoxels.has(item.key) && isVoxelTileStale(item.key))
     ) {
       loadingVoxels.delete(item.key);
+      onVoxelMeshFinished?.(item, "discarded");
       continue;
     }
 
@@ -602,73 +665,95 @@ export function buildQueuedVoxelMeshes(args: {
       ? isVoxelTileStale(item.key)
       : false;
     loadingVoxels.delete(item.key);
-    if ((!existingTile || canReplaceExisting) && voxelGroup) {
-      const built = buildVoxelQuadrantSubMeshes(
-        item,
-        voxelMaterial,
-        transparentVoxelMaterial,
-      );
-      if (built.subMeshes.length > 0 || built.transparentSubMeshes.length > 0) {
-        for (const sm of [...built.subMeshes, ...built.transparentSubMeshes]) {
-          preUploadScene.add(sm.mesh);
-        }
-        renderer.setRenderTarget(preUploadTarget);
-        renderer.render(preUploadScene, preUploadCamera);
-        renderer.setRenderTarget(null);
-        for (const sm of [...built.subMeshes, ...built.transparentSubMeshes]) {
-          preUploadScene.remove(sm.mesh);
-        }
-
-        const borderLines = buildVoxelBorderLines(
-          item.regionX,
-          item.regionY,
-          item.lod,
-          built.minZ,
-          built.maxZ,
+    let outcome: "loaded" | "discarded" | "error" = "discarded";
+    try {
+      if ((!existingTile || canReplaceExisting) && voxelGroup) {
+        const built = buildVoxelQuadrantSubMeshes(
+          item,
+          voxelMaterial,
+          transparentVoxelMaterial,
         );
-        borderLines.visible = false;
+        if (
+          built.subMeshes.length > 0 ||
+          built.transparentSubMeshes.length > 0
+        ) {
+          for (const sm of [
+            ...built.subMeshes,
+            ...built.transparentSubMeshes,
+          ]) {
+            preUploadScene.add(sm.mesh);
+          }
+          renderer.setRenderTarget(preUploadTarget);
+          renderer.render(preUploadScene, preUploadCamera);
+          renderer.setRenderTarget(null);
+          for (const sm of [
+            ...built.subMeshes,
+            ...built.transparentSubMeshes,
+          ]) {
+            preUploadScene.remove(sm.mesh);
+          }
 
-        for (const sm of [...built.subMeshes, ...built.transparentSubMeshes]) {
-          sm.mesh.visible = false;
-          sm.mesh.userData.voxelKey = item.key;
-          voxelGroup.add(sm.mesh);
+          const borderLines = buildVoxelBorderLines(
+            item.regionX,
+            item.regionY,
+            item.lod,
+            built.minZ,
+            built.maxZ,
+          );
+          borderLines.visible = false;
+
+          for (const sm of [
+            ...built.subMeshes,
+            ...built.transparentSubMeshes,
+          ]) {
+            sm.mesh.visible = false;
+            sm.mesh.userData.voxelKey = item.key;
+            voxelGroup.add(sm.mesh);
+          }
+          chunkBorderGroup?.add(borderLines);
+          const nextTile: LoadedVoxelTile = {
+            key: item.key,
+            lod: item.lod,
+            regionX: item.regionX,
+            regionY: item.regionY,
+            voxelSize: item.voxelSize,
+            subMeshes: built.subMeshes,
+            transparentSubMeshes: built.transparentSubMeshes,
+            minZ: built.minZ,
+            maxZ: built.maxZ,
+            chunkCoverage: item.chunkCoverage,
+            chunkTopHeights: item.chunkTopHeights,
+            emitterRecords: item.emitterRecords,
+            haloEmitterSourceKeys: item.haloEmitterSourceKeys,
+            borderLines,
+          };
+          loadedVoxels.set(item.key, nextTile);
+          if (existingTile && canReplaceExisting) {
+            disposeVoxelTileResources(existingTile);
+          }
+          markVoxelTileFresh(item.key, item.version);
+          failedVoxels.delete(item.key);
+          debugLabelsDirtyRef.current = true;
+          biomeLabelsDirtyRef.current = true;
+          onVoxelTileLoaded?.(nextTile);
+          builtVoxelTile = true;
+          outcome = "loaded";
+        } else {
+          if (existingTile && canReplaceExisting) {
+            loadedVoxels.delete(item.key);
+            disposeVoxelTileResources(existingTile);
+            onVoxelTileLoaded?.();
+          }
+          missingVoxels.add(item.key);
+          markVoxelTileFresh(item.key, item.version);
+          outcome = "loaded";
         }
-        chunkBorderGroup?.add(borderLines);
-        const nextTile: LoadedVoxelTile = {
-          key: item.key,
-          lod: item.lod,
-          regionX: item.regionX,
-          regionY: item.regionY,
-          voxelSize: item.voxelSize,
-          subMeshes: built.subMeshes,
-          transparentSubMeshes: built.transparentSubMeshes,
-          minZ: built.minZ,
-          maxZ: built.maxZ,
-          chunkCoverage: item.chunkCoverage,
-          chunkTopHeights: item.chunkTopHeights,
-          emitterRecords: item.emitterRecords,
-          haloEmitterSourceKeys: item.haloEmitterSourceKeys,
-          borderLines,
-        };
-        loadedVoxels.set(item.key, nextTile);
-        if (existingTile && canReplaceExisting) {
-          disposeVoxelTileResources(existingTile);
-        }
-        markVoxelTileFresh(item.key, item.version);
-        failedVoxels.delete(item.key);
-        debugLabelsDirtyRef.current = true;
-        biomeLabelsDirtyRef.current = true;
-        onVoxelTileLoaded?.(nextTile);
-        builtVoxelTile = true;
-      } else {
-        if (existingTile && canReplaceExisting) {
-          loadedVoxels.delete(item.key);
-          disposeVoxelTileResources(existingTile);
-          onVoxelTileLoaded?.();
-        }
-        missingVoxels.add(item.key);
-        markVoxelTileFresh(item.key, item.version);
       }
+    } catch (error) {
+      outcome = "error";
+      throw error;
+    } finally {
+      onVoxelMeshFinished?.(item, outcome);
     }
   }
 

@@ -22,6 +22,20 @@ function StatsSectionTitle({ children }: { children: React.ReactNode }) {
 }
 
 export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
+  const formatTiming = (key: keyof typeof chunkStats.voxelPipeline.timings) => {
+    const timing = chunkStats.voxelPipeline.timings[key];
+    return timing.averageMs === null
+      ? "n/a"
+      : `${timing.averageMs.toFixed(1)} ms (${timing.samples})`;
+  };
+  const formatOutcomes = (outcomes: Record<string, number>) => {
+    const entries = Object.entries(outcomes).sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+    return entries.length === 0
+      ? "none"
+      : entries.map(([key, count]) => `${key} ${count}`).join(" / ");
+  };
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <div>Focus LOD: {chunkStats.focusLod}</div>
@@ -34,6 +48,26 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       <div>Voxel loading: {chunkStats.loadingBreakdown.voxels}</div>
       <div>Fetch queue: {chunkStats.loadingBreakdown.fetchQueue}</div>
       <div>Mesh queue: {chunkStats.loadingBreakdown.meshQueue}</div>
+
+      <StatsSectionTitle>Voxel pipeline</StatsSectionTitle>
+      <div>
+        Compact input: {chunkStats.voxelPipeline.compactInput.jobs} jobs /{" "}
+        {formatMemoryBytes(chunkStats.voxelPipeline.compactInput.bytes)}
+      </div>
+      <div>
+        Expanded output: {chunkStats.voxelPipeline.expandedOutput.jobs} jobs /{" "}
+        {formatMemoryBytes(chunkStats.voxelPipeline.expandedOutput.bytes)}
+      </div>
+      <div>Avg fetch: {formatTiming("fetchMs")}</div>
+      <div>Avg compact wait: {formatTiming("compactQueueWaitMs")}</div>
+      <div>Avg worker: {formatTiming("workerExecutionMs")}</div>
+      <div>Avg result transfer: {formatTiming("resultTransferWaitMs")}</div>
+      <div>Avg scene wait: {formatTiming("sceneQueueWaitMs")}</div>
+      <div>Avg request to visible: {formatTiming("requestToVisibleMs")}</div>
+      <div>
+        Cancellations: {formatOutcomes(chunkStats.voxelPipeline.cancellations)}
+      </div>
+      <div>Discards: {formatOutcomes(chunkStats.voxelPipeline.discards)}</div>
 
       <StatsSectionTitle>Voxel health</StatsSectionTitle>
       <div>Missing regions: {chunkStats.voxelHealth.missing}</div>
@@ -160,10 +194,12 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       <div>
         Avg emissive grid:{" "}
         {formatNullableMs(chunkStats.voxelBenchmark.avgEmissiveGridBuildMs)}
+        {` (${chunkStats.voxelBenchmark.validSamples.emissiveGridBuild})`}
       </div>
       <div>
         Avg emissive bake:{" "}
         {formatNullableMs(chunkStats.voxelBenchmark.avgEmissiveBakeMs)}
+        {` (${chunkStats.voxelBenchmark.validSamples.emissiveBake})`}
       </div>
       <div>
         Avg emissive quads: eval{" "}
@@ -200,12 +236,14 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         {chunkStats.voxelBenchmark.avgServerRunMs === null
           ? "n/a"
           : `${chunkStats.voxelBenchmark.avgServerRunMs.toFixed(1)} ms`}
+        {` (${chunkStats.voxelBenchmark.validSamples.serverRun})`}
       </div>
       <div>
         Avg server halo:{" "}
         {chunkStats.voxelBenchmark.avgServerHaloMs === null
           ? "n/a"
           : `${chunkStats.voxelBenchmark.avgServerHaloMs.toFixed(1)} ms`}
+        {` (${chunkStats.voxelBenchmark.validSamples.serverHalo})`}
         {" (current generation only; cached halo timing is excluded)"}
       </div>
     </div>

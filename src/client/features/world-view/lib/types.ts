@@ -5,6 +5,7 @@ import type {
   MapDebugSettings,
 } from "../../../lib/world-view-debug.js";
 import type { InitialCameraState } from "../../../types/world-view.js";
+import type { VoxelWorkPriority } from "./voxel-work.js";
 
 export type { InitialCameraState } from "../../../types/world-view.js";
 
@@ -98,6 +99,7 @@ export interface VoxelEmitterRecord {
 }
 
 export interface PendingVoxelMeshItem {
+  jobId: number;
   key: string;
   lod: number;
   regionX: number;
@@ -119,19 +121,23 @@ export interface PendingVoxelFetchRequest {
   lod: number;
   regionX: number;
   regionY: number;
-  priority: number;
+  priority: VoxelWorkPriority;
   generation: number;
   version: number;
+  selectedAt: number;
 }
 
-export interface WorkerIn {
+export interface WorkerMeshRequest {
+  type: "mesh";
+  jobId: number;
   buffer: ArrayBuffer;
   lod: number;
   regionX: number;
   regionY: number;
   haloEmitterRecords?: VoxelEmitterRecord[];
   haloEmitterSourceKeys?: string[];
-  version?: number;
+  version: number;
+  cancellationCheckpointMs: number;
   bakeEmissiveAttributes?: boolean;
   benchmark?: {
     fetchCompletedAt: number;
@@ -152,20 +158,46 @@ export interface WorkerIn {
   };
 }
 
-export interface WorkerOut {
-  lod?: number;
+export interface PendingVoxelCompactInput {
+  buffer: ArrayBuffer;
+  lod: number;
   regionX: number;
   regionY: number;
-  version?: number;
-  quadrantMeshes?: WorkerQuadrantMesh[];
-  transparentQuadrantMeshes?: WorkerQuadrantMesh[];
-  chunkCoverage?: number;
-  chunkTopHeights?: Float32Array;
-  voxelSize?: number;
-  minZ?: number;
-  maxZ?: number;
-  emitterRecords?: VoxelEmitterRecord[];
-  haloEmitterSourceKeys?: string[];
+  bakeEmissiveAttributes: boolean;
+  benchmark: NonNullable<WorkerMeshRequest["benchmark"]>;
+}
+
+export interface WorkerCancelRequest {
+  type: "cancel";
+  jobId: number;
+  version: number;
+}
+
+export type WorkerIn = WorkerMeshRequest | WorkerCancelRequest;
+
+interface WorkerResponseIdentity {
+  jobId: number;
+  version: number;
+  timing: {
+    startedAt: number;
+    completedAt: number;
+  };
+}
+
+export interface WorkerMeshResult extends WorkerResponseIdentity {
+  type: "mesh-result";
+  lod: number;
+  regionX: number;
+  regionY: number;
+  quadrantMeshes: WorkerQuadrantMesh[];
+  transparentQuadrantMeshes: WorkerQuadrantMesh[];
+  chunkCoverage: number;
+  chunkTopHeights: Float32Array;
+  voxelSize: number;
+  minZ: number;
+  maxZ: number;
+  emitterRecords: VoxelEmitterRecord[];
+  haloEmitterSourceKeys: string[];
   benchmark?: {
     fetchMs: number;
     decodeMs: number;
@@ -180,12 +212,12 @@ export interface WorkerOut {
      * Time spent building the emitter-light lookup grid, in milliseconds.
      * `0` when emissive attributes are disabled or no emitters are present.
      */
-    emissiveGridBuildMs: number;
+    emissiveGridBuildMs: number | null;
     /**
      * Time spent baking per-vertex emitted light into quadrant writers, in
      * milliseconds. `0` when emissive attributes are disabled.
      */
-    emissiveBakeMs: number;
+    emissiveBakeMs: number | null;
     /**
      * Number of opaque quads whose emissive accumulation ran because the quad
      * could intersect at least one emitter radius.
@@ -207,8 +239,25 @@ export interface WorkerOut {
     emitterRadiusMax: number | null;
     cacheOutcome?: VoxelBenchmarkCacheOutcome;
   };
-  error?: string;
 }
+
+export interface WorkerCancelled extends WorkerResponseIdentity {
+  type: "cancelled";
+  lod: number;
+  regionX: number;
+  regionY: number;
+}
+
+export interface WorkerError extends WorkerResponseIdentity {
+  type: "error";
+  lod: number;
+  regionX: number;
+  regionY: number;
+  error: string;
+  benchmark?: WorkerMeshResult["benchmark"];
+}
+
+export type WorkerOut = WorkerMeshResult | WorkerCancelled | WorkerError;
 
 export interface LoadedTerrainTile {
   key: string;

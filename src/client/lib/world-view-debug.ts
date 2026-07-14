@@ -44,6 +44,21 @@ export type ChunkStats = {
     terrain: number;
     voxels: number;
   };
+  voxelPipeline: {
+    compactInput: { jobs: number; bytes: number };
+    expandedOutput: { jobs: number; bytes: number };
+    timings: Record<
+      | "fetchMs"
+      | "compactQueueWaitMs"
+      | "workerExecutionMs"
+      | "resultTransferWaitMs"
+      | "sceneQueueWaitMs"
+      | "requestToVisibleMs",
+      { averageMs: number | null; samples: number }
+    >;
+    cancellations: Record<string, number>;
+    discards: Record<string, number>;
+  };
   voxelBenchmark: {
     samples: number;
     contentEncoding: string | null;
@@ -68,6 +83,12 @@ export type ChunkStats = {
     avgEmitterRadiusMax: number | null;
     avgServerRunMs: number | null;
     avgServerHaloMs: number | null;
+    validSamples: {
+      emissiveGridBuild: number;
+      emissiveBake: number;
+      serverRun: number;
+      serverHalo: number;
+    };
     cacheHitSamples: number;
     cacheMissSamples: number;
     cacheUnknownSamples: number;
@@ -97,6 +118,11 @@ export interface MapDebugSettings {
   idleFrameRateCapFps: number;
   lodUnloadHysteresis: number;
   maxConcurrentVoxelFetches: number;
+  voxelCompactInputMaxJobs: number;
+  voxelCompactInputMaxBytes: number;
+  voxelExpandedOutputMaxJobs: number;
+  voxelExpandedOutputMaxBytes: number;
+  voxelCancellationCheckpointMs: number;
   maxConcurrentTerrainFetches: number;
   voxelTopAoIntensity: number;
   voxelWallAoIntensity: number;
@@ -110,6 +136,8 @@ export interface MapDebugSettings {
   terrainMeshBuildBudgetMs: number;
   maxTerrainMeshesPerFrame: number;
   voxelBehindCameraMaxMultiplier: number;
+  voxelViewEnterMarginDegrees: number;
+  voxelViewExitMarginDegrees: number;
   voxelDetailRequestDebounceMs: number;
   voxelUnloadGraceMs: number;
   voxelMeshBuildBudgetMs: number;
@@ -153,6 +181,11 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   terrainMeshBuildBudgetMs: 4,
   maxTerrainMeshesPerFrame: 2,
   maxConcurrentVoxelFetches: 8,
+  voxelCompactInputMaxJobs: 8,
+  voxelCompactInputMaxBytes: 32 * MB,
+  voxelExpandedOutputMaxJobs: 4,
+  voxelExpandedOutputMaxBytes: 96 * MB,
+  voxelCancellationCheckpointMs: 4,
   voxelTopAoIntensity: 1,
   voxelWallAoIntensity: 0.5,
   terrainLodHysteresisRatio: 0.12,
@@ -163,6 +196,8 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   lodUnloadHysteresis: 1.5,
   voxelBehindCameraDotStart: -0.5,
   voxelBehindCameraMaxMultiplier: 1.05,
+  voxelViewEnterMarginDegrees: 12,
+  voxelViewExitMarginDegrees: 18,
   lodReferenceFov: 60,
   lodReferenceViewportHeight: 2880,
   warmTerrainCacheMaxBytes: 256 * MB,
@@ -205,6 +240,20 @@ export function createEmptyChunkStats(): ChunkStats {
       terrain: 0,
       voxels: 0,
     },
+    voxelPipeline: {
+      compactInput: { jobs: 0, bytes: 0 },
+      expandedOutput: { jobs: 0, bytes: 0 },
+      timings: {
+        fetchMs: { averageMs: null, samples: 0 },
+        compactQueueWaitMs: { averageMs: null, samples: 0 },
+        workerExecutionMs: { averageMs: null, samples: 0 },
+        resultTransferWaitMs: { averageMs: null, samples: 0 },
+        sceneQueueWaitMs: { averageMs: null, samples: 0 },
+        requestToVisibleMs: { averageMs: null, samples: 0 },
+      },
+      cancellations: {},
+      discards: {},
+    },
     voxelBenchmark: {
       samples: 0,
       contentEncoding: null,
@@ -229,6 +278,12 @@ export function createEmptyChunkStats(): ChunkStats {
       avgEmitterRadiusMax: null,
       avgServerRunMs: null,
       avgServerHaloMs: null,
+      validSamples: {
+        emissiveGridBuild: 0,
+        emissiveBake: 0,
+        serverRun: 0,
+        serverHalo: 0,
+      },
       cacheHitSamples: 0,
       cacheMissSamples: 0,
       cacheUnknownSamples: 0,
@@ -337,6 +392,68 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.maxConcurrentVoxelFetches,
   },
   {
+    key: "voxelCompactInputMaxJobs",
+    section: "Loading",
+    label: "Compact Input Jobs",
+    description:
+      "Maximum fetched voxel payloads retained while waiting for worker dispatch.",
+    min: 1,
+    max: 64,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelCompactInputMaxJobs,
+  },
+  {
+    key: "voxelCompactInputMaxBytes",
+    section: "Loading",
+    label: "Compact Input Memory",
+    description:
+      "Byte budget for fetched voxel payloads retained before worker dispatch.",
+    min: MB,
+    max: 512 * MB,
+    step: MB,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelCompactInputMaxBytes,
+    toDisplay: (value) => value / MB,
+    fromDisplay: (value) => value * MB,
+    formatDisplay: (value) => `${Math.round(value)} MiB`,
+  },
+  {
+    key: "voxelExpandedOutputMaxJobs",
+    section: "Loading",
+    label: "Expanded Output Jobs",
+    description:
+      "Maximum worker mesh results retained while waiting for scene insertion.",
+    min: 1,
+    max: 32,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelExpandedOutputMaxJobs,
+  },
+  {
+    key: "voxelExpandedOutputMaxBytes",
+    section: "Loading",
+    label: "Expanded Output Memory",
+    description:
+      "Byte budget for expanded worker mesh arrays waiting for scene insertion.",
+    min: MB,
+    max: 1024 * MB,
+    step: MB,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelExpandedOutputMaxBytes,
+    toDisplay: (value) => value / MB,
+    fromDisplay: (value) => value * MB,
+    formatDisplay: (value) => `${Math.round(value)} MiB`,
+  },
+  {
+    key: "voxelCancellationCheckpointMs",
+    section: "Loading",
+    label: "Cancellation Checkpoint",
+    description:
+      "Worker time budget between cooperative yields that can observe cancellation.",
+    min: 1,
+    max: 20,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelCancellationCheckpointMs,
+    formatDisplay: (value) => `${Math.round(value)} ms`,
+  },
+  {
     key: "voxelDetailRequestDebounceMs",
     section: "Loading",
     label: "Detail Debounce",
@@ -442,6 +559,30 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     step: 0.05,
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelBehindCameraMaxMultiplier,
     decimals: 2,
+  },
+  {
+    key: "voxelViewEnterMarginDegrees",
+    section: "LOD",
+    label: "View Detail Enter Margin",
+    description:
+      "Angular margin outside the camera frustum where tiles may enter forward detail. Larger values refine more edge-adjacent geometry.",
+    min: 0,
+    max: 45,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelViewEnterMarginDegrees,
+    formatDisplay: (value) => `${Math.round(value)}°`,
+  },
+  {
+    key: "voxelViewExitMarginDegrees",
+    section: "LOD",
+    label: "View Detail Exit Margin",
+    description:
+      "Retained angular margin for the previous view class. Keep this at or above the enter margin to prevent refinement churn during rotation.",
+    min: 0,
+    max: 60,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelViewExitMarginDegrees,
+    formatDisplay: (value) => `${Math.round(value)}°`,
   },
   {
     key: "lodReferenceFov",

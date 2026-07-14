@@ -423,7 +423,6 @@ export function initializeSceneRuntime(args: {
       debugLabelsDirtyRef.current ||
       biomeLabelsDirtyRef.current;
     const idleEligible =
-      !isPointerOverCanvas &&
       !isPointerInteracting &&
       keysHeldRef.current.size === 0 &&
       !hasPendingWork &&
@@ -648,6 +647,12 @@ export function initializeSceneRuntime(args: {
     }
   }
 
+  function onPointerMove(e: PointerEvent) {
+    markActive();
+    cursorHandlers.onPointerMove(e);
+    updateTapPointerMovement(e);
+  }
+
   function onPointerUp(e: PointerEvent) {
     const tapPointer = activeTapPointers.get(e.pointerId);
     activeTapPointers.delete(e.pointerId);
@@ -703,11 +708,7 @@ export function initializeSceneRuntime(args: {
   document.addEventListener("visibilitychange", onVisibilityChange);
   controls.addEventListener("change", onControlsChange);
   renderer.domElement.addEventListener("pointerenter", onPointerEnter);
-  renderer.domElement.addEventListener(
-    "pointermove",
-    cursorHandlers.onPointerMove,
-  );
-  renderer.domElement.addEventListener("pointermove", updateTapPointerMovement);
+  renderer.domElement.addEventListener("pointermove", onPointerMove);
   renderer.domElement.addEventListener("pointerdown", onPointerDown);
   renderer.domElement.addEventListener("pointerup", onPointerUp);
   renderer.domElement.addEventListener("pointercancel", onPointerCancel);
@@ -724,14 +725,7 @@ export function initializeSceneRuntime(args: {
     document.removeEventListener("visibilitychange", onVisibilityChange);
     controls.removeEventListener("change", onControlsChange);
     renderer.domElement.removeEventListener("pointerenter", onPointerEnter);
-    renderer.domElement.removeEventListener(
-      "pointermove",
-      cursorHandlers.onPointerMove,
-    );
-    renderer.domElement.removeEventListener(
-      "pointermove",
-      updateTapPointerMovement,
-    );
+    renderer.domElement.removeEventListener("pointermove", onPointerMove);
     renderer.domElement.removeEventListener("pointerdown", onPointerDown);
     renderer.domElement.removeEventListener("pointerup", onPointerUp);
     renderer.domElement.removeEventListener("pointercancel", onPointerCancel);

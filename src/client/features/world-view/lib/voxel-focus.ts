@@ -132,7 +132,8 @@ function findNearestLoadedVoxelFocus(
     point: THREE.Vector3;
     distance: number;
   } | null = null;
-  const hasForward = cameraForward.lengthSq() > 1e-6;
+  const forwardHorizontalLength = Math.hypot(cameraForward.x, cameraForward.y);
+  const hasForward = forwardHorizontalLength > 1e-6;
 
   for (const tile of loadedVoxels.values()) {
     const candidate = getLoadedTileFocusPoint(tile, cameraPosition);
@@ -147,7 +148,7 @@ function findNearestLoadedVoxelFocus(
       if (horizontalLen > 1e-6) {
         const dot =
           (cameraForward.x * toCandidateX + cameraForward.y * toCandidateY) /
-          horizontalLen;
+          (forwardHorizontalLength * horizontalLen);
         if (dot < voxelBehindCameraDotStart) {
           weightedDistance = applyBehindCameraDistanceBias({
             effectiveDist: weightedDistance,

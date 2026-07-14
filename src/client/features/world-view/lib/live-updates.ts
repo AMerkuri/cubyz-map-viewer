@@ -93,6 +93,7 @@ export function handleVoxelRegionUpdate(args: {
   pendingVoxelMeshQueueRef: { current: PendingVoxelMeshItem[] };
   markVoxelTileStale: (key: string) => number;
   getVoxelRefreshVersion: (key: string) => number;
+  cancelVoxelWork?: (key: string, olderThanVersion: number) => void;
   evictWarmCachedVoxelTile: (key: string) => void;
   requestDirectVoxelRefresh: (
     lod: number,
@@ -122,6 +123,7 @@ export function handleVoxelRegionUpdate(args: {
     pendingVoxelMeshQueueRef,
     markVoxelTileStale,
     getVoxelRefreshVersion,
+    cancelVoxelWork,
     evictWarmCachedVoxelTile,
     requestDirectVoxelRefresh,
     checkAndUpdateLOD,
@@ -133,6 +135,7 @@ export function handleVoxelRegionUpdate(args: {
   for (const region of affectedRegions) {
     const key = voxelTileKey(region.lod, region.regionX, region.regionY);
     const version = markVoxelTileStale(key);
+    cancelVoxelWork?.(key, version);
     missingVoxels.delete(key);
     failedVoxels.delete(key);
     evictWarmCachedVoxelTile(key);

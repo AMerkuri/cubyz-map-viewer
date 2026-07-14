@@ -4,7 +4,17 @@ import {
   VOXEL_EMITTED_LIGHT,
   VOXEL_FACE_SHADING,
 } from "../lib/daylight.js";
-import type { EmissiveColorArray, WorkerIn, WorkerOut } from "../lib/types.js";
+import type {
+  EmissiveColorArray,
+  WorkerIn,
+  WorkerMeshRequest,
+  WorkerOut,
+} from "../lib/types.js";
+import {
+  runCancellableWorkerTask,
+  type WorkerCheckpoint,
+  type WorkerCheckpointPhase,
+} from "../lib/voxel-worker-mechanics.js";
 
 const MAIN_SUN_DIRECTION = normalizeDirection(DAYLIGHT_MAIN_SUN_POSITION);
 const VOXEL_POSITION_FIXED_SCALE = 4096;
@@ -169,93 +179,133 @@ interface EmitterLightGrid {
  *   The client always rebuilds triangle indices from the winding section.
  */
 
-self.onmessage = (e: MessageEvent<WorkerIn>) => {
+const workerGlobal = globalThis as unknown as {
+  postMessage(message: WorkerOut, transfer?: Transferable[]): void;
+};
+const meshQueue: WorkerMeshRequest[] = [];
+const cancelledJobs = new Set<string>();
+let activeRequest: WorkerMeshRequest | null = null;
+
+function workerJobKey(jobId: number, version: number): string {
+  return `${jobId}:${version}`;
+}
+
+self.onmessage = (event: MessageEvent<WorkerIn>) => {
+  const message = event.data;
+  if (message.type === "cancel") {
+    const key = workerJobKey(message.jobId, message.version);
+    const queuedIndex = meshQueue.findIndex(
+      (request) => workerJobKey(request.jobId, request.version) === key,
+    );
+    if (queuedIndex >= 0) {
+      const [request] = meshQueue.splice(queuedIndex, 1);
+      if (request) postCancelled(request);
+    } else if (
+      activeRequest &&
+      workerJobKey(activeRequest.jobId, activeRequest.version) === key
+    ) {
+      cancelledJobs.add(key);
+    }
+    return;
+  }
+
+  meshQueue.push(message);
+  void drainMeshQueue();
+};
+
+async function drainMeshQueue(): Promise<void> {
+  if (activeRequest) return;
+  let request = meshQueue.shift();
+  while (request) {
+    activeRequest = request;
+    await processMeshRequest(request);
+    cancelledJobs.delete(workerJobKey(request.jobId, request.version));
+    activeRequest = null;
+    request = meshQueue.shift();
+  }
+}
+
+async function processMeshRequest(request: WorkerMeshRequest): Promise<void> {
   const {
     buffer,
+    jobId,
     lod,
     regionX,
     regionY,
     version,
     bakeEmissiveAttributes,
     benchmark,
-  } = e.data;
-  const workerGlobal = globalThis as unknown as {
-    postMessage(message: WorkerOut, transfer?: Transferable[]): void;
-  };
-  const startedAt = performance.now();
+  } = request;
+  const startedAt = performance.timeOrigin + performance.now();
 
   try {
-    const result = buildMeshArrays(buffer, bakeEmissiveAttributes !== false);
-    const transferables: Transferable[] = [result.chunkTopHeights.buffer];
-    for (const quadrant of result.quadrantMeshes) {
-      transferables.push(
-        quadrant.positions.buffer,
-        quadrant.normals.buffer,
-        quadrant.baseColors.buffer,
-        quadrant.faceAo.buffer,
-        quadrant.trianglePaletteIndices.buffer,
-        quadrant.indices.buffer,
-      );
-      if (quadrant.emissiveColors) {
-        transferables.push(quadrant.emissiveColors.buffer);
-      }
-    }
-    for (const quadrant of result.transparentQuadrantMeshes) {
-      transferables.push(
-        quadrant.positions.buffer,
-        quadrant.normals.buffer,
-        quadrant.baseColors.buffer,
-        quadrant.faceAo.buffer,
-        quadrant.trianglePaletteIndices.buffer,
-        quadrant.indices.buffer,
-      );
-    }
-    const out: WorkerOut = {
-      lod,
-      regionX,
-      regionY,
-      version,
-      ...result,
-      haloEmitterSourceKeys: [],
-      benchmark: benchmark
-        ? {
-            fetchMs: benchmark.fetchMs,
-            decodeMs: performance.now() - startedAt,
-            totalMs: 0,
-            transferBytes: benchmark.transferBytes,
-            encodedBodyBytes: benchmark.encodedBodyBytes,
-            decodedBodyBytes: benchmark.decodedBodyBytes,
-            rawBufferBytes: benchmark.rawBufferBytes,
-            workerOutputBytes: getWorkerOutputBytes(result),
-            emissiveBytes: getEmissiveOutputBytes(result),
-            emissiveGridBuildMs: result.emissivePhase.gridBuildMs,
-            emissiveBakeMs: result.emissivePhase.bakeMs,
-            emissiveQuadsEvaluated: result.emissivePhase.quadsEvaluated,
-            emissiveQuadsCulled: result.emissivePhase.quadsCulled,
-            emissiveCandidateVisits: result.emissivePhase.candidateVisits,
-            contentEncoding: benchmark.contentEncoding,
-            serverRunMs: benchmark.serverRunMs,
-            serverHaloMs: benchmark.serverHaloMs,
-            emitterMetadataBytes: benchmark.emitterMetadataBytes,
-            emitterPowerMin: benchmark.emitterPowerMin,
-            emitterPowerMax: benchmark.emitterPowerMax,
-            emitterRadiusMin: benchmark.emitterRadiusMin,
-            emitterRadiusMax: benchmark.emitterRadiusMax,
-            cacheOutcome: benchmark.cacheOutcome,
-          }
-        : undefined,
-    };
-    workerGlobal.postMessage(out, transferables);
+    const outcome = await runCancellableWorkerTask({
+      budgetMs: Math.max(0, request.cancellationCheckpointMs),
+      isCancelled: () => cancelledJobs.has(workerJobKey(jobId, version)),
+      build: (checkpoint) =>
+        buildMeshArraysAsync(
+          buffer,
+          bakeEmissiveAttributes !== false,
+          checkpoint,
+        ),
+      commit: (result) => {
+        const completedAt = performance.timeOrigin + performance.now();
+        const out: WorkerOut = {
+          type: "mesh-result",
+          jobId,
+          lod,
+          regionX,
+          regionY,
+          version,
+          timing: { startedAt, completedAt },
+          ...result,
+          haloEmitterSourceKeys: [],
+          benchmark: benchmark
+            ? {
+                fetchMs: benchmark.fetchMs,
+                decodeMs: completedAt - startedAt,
+                totalMs: 0,
+                transferBytes: benchmark.transferBytes,
+                encodedBodyBytes: benchmark.encodedBodyBytes,
+                decodedBodyBytes: benchmark.decodedBodyBytes,
+                rawBufferBytes: benchmark.rawBufferBytes,
+                workerOutputBytes: getWorkerOutputBytes(result),
+                emissiveBytes: getEmissiveOutputBytes(result),
+                emissiveGridBuildMs: result.emissivePhase.gridBuildMs,
+                emissiveBakeMs: result.emissivePhase.bakeMs,
+                emissiveQuadsEvaluated: result.emissivePhase.quadsEvaluated,
+                emissiveQuadsCulled: result.emissivePhase.quadsCulled,
+                emissiveCandidateVisits: result.emissivePhase.candidateVisits,
+                contentEncoding: benchmark.contentEncoding,
+                serverRunMs: benchmark.serverRunMs,
+                serverHaloMs: benchmark.serverHaloMs,
+                emitterMetadataBytes: benchmark.emitterMetadataBytes,
+                emitterPowerMin: benchmark.emitterPowerMin,
+                emitterPowerMax: benchmark.emitterPowerMax,
+                emitterRadiusMin: benchmark.emitterRadiusMin,
+                emitterRadiusMax: benchmark.emitterRadiusMax,
+                cacheOutcome: benchmark.cacheOutcome,
+              }
+            : undefined,
+        };
+        workerGlobal.postMessage(out, getMeshTransferables(result));
+      },
+    });
+    if (outcome.type === "cancelled") postCancelled(request);
   } catch (err) {
+    const completedAt = performance.timeOrigin + performance.now();
     const out: WorkerOut = {
+      type: "error",
+      jobId,
       regionX,
       regionY,
       lod,
       version,
+      timing: { startedAt, completedAt },
       benchmark: benchmark
         ? {
             fetchMs: benchmark.fetchMs,
-            decodeMs: performance.now() - startedAt,
+            decodeMs: completedAt - startedAt,
             totalMs: 0,
             transferBytes: benchmark.transferBytes,
             encodedBodyBytes: benchmark.encodedBodyBytes,
@@ -283,7 +333,43 @@ self.onmessage = (e: MessageEvent<WorkerIn>) => {
     };
     workerGlobal.postMessage(out);
   }
-};
+}
+
+function postCancelled(request: WorkerMeshRequest): void {
+  const completedAt = performance.timeOrigin + performance.now();
+  workerGlobal.postMessage({
+    type: "cancelled",
+    jobId: request.jobId,
+    version: request.version,
+    lod: request.lod,
+    regionX: request.regionX,
+    regionY: request.regionY,
+    timing: { startedAt: completedAt, completedAt },
+  });
+}
+
+function getMeshTransferables(
+  result: ReturnType<typeof buildMeshArrays>,
+): Transferable[] {
+  const transferables: Transferable[] = [result.chunkTopHeights.buffer];
+  for (const quadrant of [
+    ...result.quadrantMeshes,
+    ...result.transparentQuadrantMeshes,
+  ]) {
+    transferables.push(
+      quadrant.positions.buffer,
+      quadrant.normals.buffer,
+      quadrant.baseColors.buffer,
+      quadrant.faceAo.buffer,
+      quadrant.trianglePaletteIndices.buffer,
+      quadrant.indices.buffer,
+    );
+    if (quadrant.emissiveColors) {
+      transferables.push(quadrant.emissiveColors.buffer);
+    }
+  }
+  return transferables;
+}
 
 function getWorkerOutputBytes(
   result: ReturnType<typeof buildMeshArrays>,
@@ -371,10 +457,12 @@ export function buildMeshArrays(
     (buf.byteLength >= 32 &&
       view.getUint32(0, true) === PRE_EMITTER_VOXEL_BINARY_MAGIC)
   ) {
-    return buildOptimizedMeshArrays(
-      view,
-      buf.byteLength,
-      bakeEmissiveAttributes,
+    return drainMeshBuildSteps(
+      buildOptimizedMeshArraySteps(
+        view,
+        buf.byteLength,
+        bakeEmissiveAttributes,
+      ),
     );
   }
   const hasVersionedHeader =
@@ -800,11 +888,53 @@ export function buildMeshArrays(
   };
 }
 
-function buildOptimizedMeshArrays(
+async function buildMeshArraysAsync(
+  buf: ArrayBuffer,
+  bakeEmissiveAttributes: boolean,
+  checkpoint: WorkerCheckpoint,
+): Promise<ReturnType<typeof buildMeshArrays>> {
+  if (buf.byteLength < 20) throw new Error("buffer too small for header");
+  const view = new DataView(buf);
+  if (
+    (buf.byteLength >= 44 && view.getUint32(0, true) === VOXEL_BINARY_MAGIC) ||
+    (buf.byteLength >= 36 &&
+      (view.getUint32(0, true) === INT32_EMITTER_VOXEL_BINARY_MAGIC ||
+        view.getUint32(0, true) === UINT16_EMITTER_VOXEL_BINARY_MAGIC)) ||
+    (buf.byteLength >= 32 &&
+      view.getUint32(0, true) === PRE_EMITTER_VOXEL_BINARY_MAGIC)
+  ) {
+    const steps = buildOptimizedMeshArraySteps(
+      view,
+      buf.byteLength,
+      bakeEmissiveAttributes,
+    );
+    let step = steps.next();
+    while (!step.done) {
+      await checkpoint(step.value);
+      step = steps.next();
+    }
+    return step.value;
+  }
+  return buildMeshArrays(buf, bakeEmissiveAttributes);
+}
+
+function drainMeshBuildSteps(
+  steps: Generator<
+    WorkerCheckpointPhase,
+    ReturnType<typeof buildMeshArrays>,
+    void
+  >,
+): ReturnType<typeof buildMeshArrays> {
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+function* buildOptimizedMeshArraySteps(
   view: DataView,
   byteLength: number,
   bakeEmissiveAttributes: boolean,
-): ReturnType<typeof buildMeshArrays> {
+): Generator<WorkerCheckpointPhase, ReturnType<typeof buildMeshArrays>, void> {
   const worldX = view.getInt32(4, true);
   const worldY = view.getInt32(8, true);
   const worldZ = view.getInt32(12, true);
@@ -881,7 +1011,7 @@ function buildOptimizedMeshArrays(
     byteLength >= trailerOffset + 4
       ? view.getUint32(trailerOffset, true)
       : 0xffff;
-  const emitterRecords = readEmitterRecords(
+  const emitterRecords = yield* readEmitterRecordSteps(
     view,
     emitterRecordOffset,
     emitterRecordCount,
@@ -892,6 +1022,7 @@ function buildOptimizedMeshArrays(
     emitterRecordBytes,
     emitterMetadataCount > 0 ? emitterMetadataOffset : undefined,
   );
+  yield "before-allocation";
   const regionWorldSize = 128 * voxelSize;
   const chunkWorldSize = 32 * voxelSize;
   const chunkTopHeights = new Float32Array(16);
@@ -901,7 +1032,8 @@ function buildOptimizedMeshArrays(
   let minZ = Number.POSITIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
 
-  forEachOptimizedQuad(
+  let decodedQuadCount = 0;
+  for (const quad of iterateOptimizedQuads(
     view,
     quadCount,
     greedyRecordCount,
@@ -916,34 +1048,35 @@ function buildOptimizedMeshArrays(
     renderKindOffset,
     greedyRecordOffset,
     modelRecordOffset,
-    (quad) => {
-      const normal = computeQuadNormal(quad.positions, quad.dir);
-      for (let i = 2; i < quad.positions.length; i += 3) {
-        minZ = Math.min(minZ, quad.positions[i] ?? 0);
-        maxZ = Math.max(maxZ, quad.positions[i] ?? 0);
-      }
-      updateChunkTopHeights(
-        chunkTopHeights,
-        quad.positions,
-        normal,
-        quad.renderKind,
-        worldX,
-        worldY,
-        regionWorldSize,
-        chunkWorldSize,
-      );
-      const quadrant = getQuadQuadrant(
-        quad.positions,
-        worldX,
-        worldY,
-        regionWorldSize,
-      );
-      const counts = quad.renderKind === 2 ? transparentCounts : opaqueCounts;
-      counts[quadrant].vertices += 4;
-      counts[quadrant].indices += 6;
-      counts[quadrant].triangles += 2;
-    },
-  );
+  )) {
+    const normal = computeQuadNormal(quad.positions, quad.dir);
+    for (let i = 2; i < quad.positions.length; i += 3) {
+      minZ = Math.min(minZ, quad.positions[i] ?? 0);
+      maxZ = Math.max(maxZ, quad.positions[i] ?? 0);
+    }
+    updateChunkTopHeights(
+      chunkTopHeights,
+      quad.positions,
+      normal,
+      quad.renderKind,
+      worldX,
+      worldY,
+      regionWorldSize,
+      chunkWorldSize,
+    );
+    const quadrant = getQuadQuadrant(
+      quad.positions,
+      worldX,
+      worldY,
+      regionWorldSize,
+    );
+    const counts = quad.renderKind === 2 ? transparentCounts : opaqueCounts;
+    counts[quadrant].vertices += 4;
+    counts[quadrant].indices += 6;
+    counts[quadrant].triangles += 2;
+    decodedQuadCount++;
+    if (decodedQuadCount % 256 === 0) yield "optimized-decode";
+  }
 
   if (!Number.isFinite(minZ)) minZ = 0;
   if (!Number.isFinite(maxZ)) maxZ = 0;
@@ -961,16 +1094,18 @@ function buildOptimizedMeshArrays(
   const gridBuildStart = performance.now();
   const emitterGrid =
     bakeEmissiveAttributes && meshEmitterRecords.length > 0
-      ? buildEmitterLightGrid(meshEmitterRecords, voxelSize)
+      ? yield* buildEmitterLightGridSteps(meshEmitterRecords, voxelSize)
       : null;
   if (emitterGrid) {
     emissivePhase.gridBuildMs = performance.now() - gridBuildStart;
   }
+  yield "before-allocation";
   const opaqueWriters = createQuadrantWriters(opaqueCounts, emitterGrid);
   const transparentWriters = createQuadrantWriters(transparentCounts, null);
   const depthCueRange = Math.max(maxZ - minZ, voxelSize);
   const bakeStart = emitterGrid ? performance.now() : 0;
-  forEachOptimizedQuad(
+  let writtenQuadCount = 0;
+  for (const quad of iterateOptimizedQuads(
     view,
     quadCount,
     greedyRecordCount,
@@ -985,39 +1120,42 @@ function buildOptimizedMeshArrays(
     renderKindOffset,
     greedyRecordOffset,
     modelRecordOffset,
-    (quad) => {
-      const quadrant = getQuadQuadrant(
+  )) {
+    const quadrant = getQuadQuadrant(
+      quad.positions,
+      worldX,
+      worldY,
+      regionWorldSize,
+    );
+    const writers = quad.renderKind === 2 ? transparentWriters : opaqueWriters;
+    // Conservative quad-level culling: opaque quads that cannot intersect any
+    // emitter radius skip per-vertex accumulation entirely. Transparent quads
+    // never carry emissive attributes, so they are unaffected.
+    let bakeEmissiveForQuad = false;
+    if (emitterGrid !== null && quad.renderKind !== 2) {
+      bakeEmissiveForQuad = quadCanReceiveEmitterLight(
+        emitterGrid,
         quad.positions,
-        worldX,
-        worldY,
-        regionWorldSize,
       );
-      const writers =
-        quad.renderKind === 2 ? transparentWriters : opaqueWriters;
-      // Conservative quad-level culling: opaque quads that cannot intersect any
-      // emitter radius skip per-vertex accumulation entirely. Transparent quads
-      // never carry emissive attributes, so they are unaffected.
-      let bakeEmissiveForQuad = false;
-      if (emitterGrid !== null && quad.renderKind !== 2) {
-        bakeEmissiveForQuad = quadCanReceiveEmitterLight(
-          emitterGrid,
-          quad.positions,
-        );
-        if (bakeEmissiveForQuad) {
-          emissivePhase.quadsEvaluated++;
-        } else {
-          emissivePhase.quadsCulled++;
-        }
+      if (bakeEmissiveForQuad) {
+        emissivePhase.quadsEvaluated++;
+      } else {
+        emissivePhase.quadsCulled++;
       }
-      writeQuadToQuadrant(
-        writers[quadrant],
-        quad,
-        minZ,
-        depthCueRange,
-        bakeEmissiveForQuad,
-      );
-    },
-  );
+    }
+    writeQuadToQuadrant(
+      writers[quadrant],
+      quad,
+      minZ,
+      depthCueRange,
+      bakeEmissiveForQuad,
+    );
+    writtenQuadCount++;
+    if (writtenQuadCount % 128 === 0) {
+      yield "quad-writing";
+      if (emitterGrid) yield "emissive-bake";
+    }
+  }
   if (emitterGrid) {
     emissivePhase.bakeMs = performance.now() - bakeStart;
     emissivePhase.candidateVisits = emitterGrid.candidateVisits;
@@ -1036,7 +1174,7 @@ function buildOptimizedMeshArrays(
   };
 }
 
-function readEmitterRecords(
+function* readEmitterRecordSteps(
   view: DataView,
   offset: number,
   count: number,
@@ -1046,7 +1184,11 @@ function readEmitterRecords(
   voxelSize: number,
   recordBytes: number,
   metadataOffset?: number,
-): ReturnType<typeof buildMeshArrays>["emitterRecords"] {
+): Generator<
+  WorkerCheckpointPhase,
+  ReturnType<typeof buildMeshArrays>["emitterRecords"],
+  void
+> {
   const records: ReturnType<typeof buildMeshArrays>["emitterRecords"] = [];
   let off = offset;
   for (let i = 0; i < count; i++) {
@@ -1099,16 +1241,17 @@ function readEmitterRecords(
       power,
       radius,
     });
+    if ((i + 1) % 128 === 0) yield "optimized-decode";
   }
   return records;
 }
 
 const EMITTER_LIGHT_SCRATCH = new Float32Array(3);
 
-function buildEmitterLightGrid(
+function* buildEmitterLightGridSteps(
   emitterRecords: ReturnType<typeof buildMeshArrays>["emitterRecords"],
   voxelSize: number,
-): EmitterLightGrid {
+): Generator<WorkerCheckpointPhase, EmitterLightGrid, void> {
   const count = emitterRecords.length;
   const cellSize = VOXEL_EMITTED_LIGHT.radius;
   const bounds: Array<{
@@ -1135,6 +1278,7 @@ function buildEmitterLightGrid(
       EMITTER_MAX_RADIUS,
       record.radius + quantizationPadding,
     );
+    if ((i + 1) % 128 === 0) yield "emissive-bake";
   }
 
   // Compute the numeric cell extent so dense allocation can be bounded and the
@@ -1178,6 +1322,7 @@ function buildEmitterLightGrid(
     if (maxX > maxCellX) maxCellX = maxX;
     if (maxY > maxCellY) maxCellY = maxY;
     if (maxZ > maxCellZ) maxCellZ = maxZ;
+    if ((i + 1) % 128 === 0) yield "emissive-bake";
   }
   if (!Number.isFinite(minCellX)) {
     minCellX = 0;
@@ -1267,13 +1412,17 @@ function buildEmitterLightGrid(
       grid.broadEmitterIndices.push(i);
       continue;
     }
+    let insertedCells = 0;
     for (let ix = emitterBounds.minX; ix <= emitterBounds.maxX; ix++) {
       for (let iy = emitterBounds.minY; iy <= emitterBounds.maxY; iy++) {
         for (let iz = emitterBounds.minZ; iz <= emitterBounds.maxZ; iz++) {
           addEmitterToGridCell(grid, ix, iy, iz, i);
+          insertedCells++;
+          if (insertedCells % 1024 === 0) yield "emissive-bake";
         }
       }
     }
+    if ((i + 1) % 64 === 0) yield "emissive-bake";
   }
   return grid;
 }
@@ -1630,7 +1779,7 @@ function getAxisTransmission(
   return (openFaces & faceMask) !== 0 ? 1 : blockedTransmission;
 }
 
-function forEachOptimizedQuad(
+function* iterateOptimizedQuads(
   view: DataView,
   quadCount: number,
   greedyRecordCount: number,
@@ -1645,8 +1794,7 @@ function forEachOptimizedQuad(
   renderKindOffset: number,
   greedyRecordOffset: number,
   modelRecordOffset: number,
-  visit: (quad: DecodedQuad) => void,
-): void {
+): Generator<DecodedQuad, void, void> {
   for (let qi = 0; qi < quadCount; qi++) {
     const colorOff = colorOffset + qi * 3;
     const paletteIndex = view.getUint16(paletteOffset + qi * 2, true);
@@ -1683,7 +1831,7 @@ function forEachOptimizedQuad(
       renderKind: view.getUint8(renderKindOffset + qi) === 2 ? 2 : 1,
       sourceKind: qi < greedyRecordCount ? "greedy" : "model",
     };
-    visit(quad);
+    yield quad;
   }
 }
 

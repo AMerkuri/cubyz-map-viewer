@@ -14,6 +14,7 @@ import type {
   PendingVoxelMeshItem,
 } from "../../../src/client/features/world-view/lib/types.js";
 import { voxelTileKey } from "../../../src/client/features/world-view/lib/voxel-index.js";
+import type { VoxelWorkPriority } from "../../../src/client/features/world-view/lib/voxel-work.js";
 
 function queryClientRecorder(): { client: QueryClient; keys: unknown[][] } {
   const keys: unknown[][] = [];
@@ -63,6 +64,14 @@ test("terrain changes evict the complete gutter neighborhood and reload only whe
 });
 
 test("voxel changes floor-align negative halo leaves and ancestors while cancelling stale work", () => {
+  const priority: VoxelWorkPriority = {
+    coverageClass: "detail",
+    viewClass: "forward",
+    projectedBenefit: 1,
+    distance: 1,
+    lod: 1,
+    generation: 0,
+  };
   const staleVersions = new Map<string, number>();
   const affectedKey = voxelTileKey(1, -256, -128);
   const unrelatedKey = voxelTileKey(1, 512, 0);
@@ -73,18 +82,20 @@ test("voxel changes floor-align negative halo leaves and ancestors while cancell
       lod: 1,
       regionX: -256,
       regionY: -128,
-      priority: 0,
+      priority,
       generation: 0,
       version: 0,
+      selectedAt: 0,
     },
     {
       key: unrelatedKey,
       lod: 1,
       regionX: 512,
       regionY: 0,
-      priority: 0,
+      priority,
       generation: 0,
       version: 0,
+      selectedAt: 0,
     },
   ];
   const meshQueue: PendingVoxelMeshItem[] = [

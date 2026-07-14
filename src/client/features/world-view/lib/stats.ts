@@ -13,7 +13,33 @@ import type {
   PerformanceMemoryInfo,
   WarmCachedTerrainTile,
   WarmCachedVoxelTile,
+  WorkerMeshResult,
 } from "./types.js";
+import type { VoxelWorkScheduler } from "./voxel-work.js";
+
+const OPTIONAL_BENCHMARK_METRICS = [
+  ["avgTransferBytes", "transferBytes"],
+  ["avgEncodedBodyBytes", "encodedBodyBytes"],
+  ["avgDecodedBodyBytes", "decodedBodyBytes"],
+  ["avgRawBufferBytes", "rawBufferBytes"],
+  ["avgWorkerOutputBytes", "workerOutputBytes"],
+  ["avgEmissiveBytes", "emissiveBytes"],
+  ["avgEmissiveGridBuildMs", "emissiveGridBuildMs"],
+  ["avgEmissiveBakeMs", "emissiveBakeMs"],
+  ["avgEmissiveQuadsEvaluated", "emissiveQuadsEvaluated"],
+  ["avgEmissiveQuadsCulled", "emissiveQuadsCulled"],
+  ["avgEmissiveCandidateVisits", "emissiveCandidateVisits"],
+  ["avgEmitterMetadataBytes", "emitterMetadataBytes"],
+  ["avgEmitterPowerMin", "emitterPowerMin"],
+  ["avgEmitterPowerMax", "emitterPowerMax"],
+  ["avgEmitterRadiusMin", "emitterRadiusMin"],
+  ["avgEmitterRadiusMax", "emitterRadiusMax"],
+  ["avgServerRunMs", "serverRunMs"],
+  ["avgServerHaloMs", "serverHaloMs"],
+] as const;
+
+type OptionalBenchmarkAverage = (typeof OPTIONAL_BENCHMARK_METRICS)[number][0];
+type OptionalMetricAggregate = { sum: number; count: number };
 
 export interface RollingVoxelBenchmarkStats {
   samples: number;
@@ -39,6 +65,16 @@ export interface RollingVoxelBenchmarkStats {
   avgEmitterRadiusMax: number | null;
   avgServerRunMs: number | null;
   avgServerHaloMs: number | null;
+  validSamples: {
+    emissiveGridBuild: number;
+    emissiveBake: number;
+    serverRun: number;
+    serverHalo: number;
+  };
+  optionalMetricAggregates: Record<
+    OptionalBenchmarkAverage,
+    OptionalMetricAggregate
+  >;
   cacheHitSamples: number;
   cacheMissSamples: number;
   cacheUnknownSamples: number;
@@ -50,6 +86,12 @@ export function createEmptyVoxelBenchmarkStats(
   haloEmittersEnabled: boolean,
   emissiveAttributesEnabled: boolean,
 ): RollingVoxelBenchmarkStats {
+  const optionalMetricAggregates = Object.fromEntries(
+    OPTIONAL_BENCHMARK_METRICS.map(([average]) => [
+      average,
+      { sum: 0, count: 0 },
+    ]),
+  ) as Record<OptionalBenchmarkAverage, OptionalMetricAggregate>;
   return {
     samples: 0,
     contentEncoding: null,
@@ -74,11 +116,62 @@ export function createEmptyVoxelBenchmarkStats(
     avgEmitterRadiusMax: null,
     avgServerRunMs: null,
     avgServerHaloMs: null,
+    validSamples: {
+      emissiveGridBuild: 0,
+      emissiveBake: 0,
+      serverRun: 0,
+      serverHalo: 0,
+    },
+    optionalMetricAggregates,
     cacheHitSamples: 0,
     cacheMissSamples: 0,
     cacheUnknownSamples: 0,
     haloEmittersEnabled,
     emissiveAttributesEnabled,
+  };
+}
+
+export function addVoxelBenchmarkSample(
+  current: RollingVoxelBenchmarkStats,
+  sample: NonNullable<WorkerMeshResult["benchmark"]>,
+): RollingVoxelBenchmarkStats {
+  const nextSamples = current.samples + 1;
+  const aggregates = { ...current.optionalMetricAggregates };
+  const averages = {} as Record<OptionalBenchmarkAverage, number | null>;
+  for (const [averageKey, sampleKey] of OPTIONAL_BENCHMARK_METRICS) {
+    const previous = current.optionalMetricAggregates[averageKey];
+    const value = sample[sampleKey];
+    const next =
+      value === null
+        ? previous
+        : { sum: previous.sum + value, count: previous.count + 1 };
+    aggregates[averageKey] = next;
+    averages[averageKey] = next.count === 0 ? null : next.sum / next.count;
+  }
+  const cacheOutcome = sample.cacheOutcome ?? "unknown";
+  return {
+    ...current,
+    samples: nextSamples,
+    contentEncoding: sample.contentEncoding,
+    avgFetchMs:
+      (current.avgFetchMs * current.samples + sample.fetchMs) / nextSamples,
+    avgDecodeMs:
+      (current.avgDecodeMs * current.samples + sample.decodeMs) / nextSamples,
+    avgTotalMs:
+      (current.avgTotalMs * current.samples + sample.totalMs) / nextSamples,
+    ...averages,
+    validSamples: {
+      emissiveGridBuild: aggregates.avgEmissiveGridBuildMs.count,
+      emissiveBake: aggregates.avgEmissiveBakeMs.count,
+      serverRun: aggregates.avgServerRunMs.count,
+      serverHalo: aggregates.avgServerHaloMs.count,
+    },
+    optionalMetricAggregates: aggregates,
+    cacheHitSamples: current.cacheHitSamples + (cacheOutcome === "hit" ? 1 : 0),
+    cacheMissSamples:
+      current.cacheMissSamples + (cacheOutcome === "miss" ? 1 : 0),
+    cacheUnknownSamples:
+      current.cacheUnknownSamples + (cacheOutcome === "unknown" ? 1 : 0),
   };
 }
 
@@ -97,6 +190,10 @@ export function publishChunkStats(args: {
   warmCachedVoxels: Map<string, WarmCachedVoxelTile>;
   voxelBenchmark: RollingVoxelBenchmarkStats;
   blockLightStats: BlockLightRuntimeStats;
+  voxelPipeline: {
+    snapshot: ReturnType<VoxelWorkScheduler["snapshot"]>;
+    diagnostics: VoxelWorkScheduler["diagnostics"];
+  };
   lastChunkStatsRef: { current: string };
   onChunkStatsChange: (stats: ChunkStats) => void;
 }): void {
@@ -115,6 +212,7 @@ export function publishChunkStats(args: {
     warmCachedVoxels,
     voxelBenchmark,
     blockLightStats,
+    voxelPipeline,
     lastChunkStatsRef,
     onChunkStatsChange,
   } = args;
@@ -190,12 +288,25 @@ export function publishChunkStats(args: {
     cachedTerrainMemoryBytes +
     cachedVoxelMemoryBytes +
     queuedMemoryBytes +
+    voxelPipeline.snapshot.compactInput.bytes +
     blockLightStats.poolMemoryBytes;
   const perfWithMemory = performance as Performance & {
     memory?: PerformanceMemoryInfo;
   };
   const jsHeapBytes = perfWithMemory.memory?.usedJSHeapSize ?? null;
 
+  const { optionalMetricAggregates: _, ...publishedVoxelBenchmark } =
+    voxelBenchmark;
+  const averageTiming = (
+    key: keyof typeof voxelPipeline.diagnostics.timings,
+  ) => {
+    const aggregate = voxelPipeline.diagnostics.timings[key];
+    return {
+      averageMs:
+        aggregate.samples === 0 ? null : aggregate.sumMs / aggregate.samples,
+      samples: aggregate.samples,
+    };
+  };
   const statsPayload: ChunkStats = {
     loading: loadingCount,
     loaded: loadedCount,
@@ -221,7 +332,7 @@ export function publishChunkStats(args: {
       cachedTerrain: cachedTerrainMemoryBytes,
       cachedVoxels: cachedVoxelMemoryBytes,
       warmVoxels: cachedVoxelByLodBytes,
-      queued: queuedMemoryBytes,
+      queued: queuedMemoryBytes + voxelPipeline.snapshot.compactInput.bytes,
       queuedVoxelOutput: queuedMemoryBytes,
       blockLightPool: blockLightStats.poolMemoryBytes,
     },
@@ -231,7 +342,21 @@ export function publishChunkStats(args: {
       terrain: warmCachedTerrain.size,
       voxels: warmCachedVoxels.size,
     },
-    voxelBenchmark,
+    voxelPipeline: {
+      compactInput: voxelPipeline.snapshot.compactInput,
+      expandedOutput: voxelPipeline.snapshot.expandedOutput,
+      timings: {
+        fetchMs: averageTiming("fetchMs"),
+        compactQueueWaitMs: averageTiming("compactQueueWaitMs"),
+        workerExecutionMs: averageTiming("workerExecutionMs"),
+        resultTransferWaitMs: averageTiming("resultTransferWaitMs"),
+        sceneQueueWaitMs: averageTiming("sceneQueueWaitMs"),
+        requestToVisibleMs: averageTiming("requestToVisibleMs"),
+      },
+      cancellations: { ...voxelPipeline.diagnostics.cancellations },
+      discards: { ...voxelPipeline.diagnostics.discards },
+    },
+    voxelBenchmark: publishedVoxelBenchmark,
     blockLight: blockLightStats,
   };
   const statsKey = JSON.stringify(statsPayload);

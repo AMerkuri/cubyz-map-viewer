@@ -78,11 +78,54 @@ At a high level:
 - coarser payload emitters come from a persisted hierarchy of bounded, represented LOD `1` source summaries aligned to LOD `1, 2, 4, 8, 16, 32` region footprints. Coarse generation retains qualified source energy, including small source models replaced by air, only when the representative radius reaches generated opaque geometry at the requested LOD; neighbor-owned records remain payload-local halos for equivalent boundary baking without duplicate runtime accents
 - the VXM6 header optionally identifies one four-byte metadata entry per emitter (`u16` Q8.8 source-equivalent power, `u8` world radius, zero reserved byte); absent metadata means power `1` and radius `12`, which keeps ordinary LOD `1` records compact and behaviorally unchanged; metadata count/offset/bounds are validated independently
 - the browser worker decodes selected payload emitters and bakes their bounded, reachability-filtered contribution into mesh-local emissive attributes; halo records participate only in that payload-local bake, while loaded LOD 1 tiles retain own-emitter metadata for runtime accents. Coarse aggregate centroids participate in mesh-local illumination but never create glow sprites or point lights because they are not physical source blocks. On rendered frames that pass the active/idle cap, a loaded-voxel revision gates region reconciliation and the main thread uses bounded deterministic nearest selection to assign a fixed global glow pool and bounded point-light pool. The shared shader uniform drives the baked day-floor-to-night emissive result independently; glow sprites and dynamic Lambert point lights are optional accents and are hidden transition-safely when inactive
+- the browser mesh-worker contract is a discriminated `mesh`/`cancel` request and `mesh-result`/`cancelled`/`error` response protocol. Every variant carries a stable job ID and refresh version. Optimized decode, output writing, and emissive baking cooperatively yield and check cancellation; an observed pre-transfer cancellation returns only `cancelled`, while the main thread retains key/version validation for a result whose transfer committed before cancellation was observed
 - seam-affecting server changes cross this payload/cache/worker boundary and therefore require the hermetic `node:test` matrix (`npm test`, or focused voxel and core service/API, watcher, client, and terrain commands) for X/Y edges, corners, vertical extremes, dense own and both-side pressure, missing/special neighbors, coarse summary halos, live invalidation, and terrain gutters. Tests use isolated generated `.surface`/`.region` saves or fakes, decode retained records deterministically, and invoke the production worker and terrain builder to compare normalized emissive attributes or terrain normals at matching world positions. Opt-in benchmarks are not correctness gates. `bench:voxel:real-save` starts isolated one-worker and eight-worker servers against an explicit real save, uses separate temporary persistent-cache roots, repeats one checked request manifest for cold and warm phases, drains compressed payloads, and records process RSS plus mesh/worker/summary metrics as JSON and a table for reproducible retention comparisons.
 - LOD `1` model/semantic geometry has a high per-region safety ceiling that only bounds pathological payloads; ordinary dense decorative regions (spawn areas, sign-heavy plots, forests) render their full model geometry, and the dropped model-quad count is reported in service metrics only when the ceiling is exceeded
 - debug-only voxel-lighting diagnostics: the client may request `/api/voxels/...?halo=0` to receive a payload generated without neighboring-region halo emitter records; such diagnostic payloads are cached and ETagged separately from normal payloads, and voxel responses expose cache/timing, own/halo/coarse representative counts, metadata bytes, encoded power/radius ranges, and summary cache/build/leaf/source/retention metrics; the client additionally reports emissive grid-build, bake, and evaluated/culled quad metrics; default behavior (no query parameter) is unchanged
 - the client uses loaded voxel mesh bounds to keep nearby visible geometry detailed, while unloaded regions still rely on cheap region-aligned distance heuristics from the chunk index
 - the client may apply final visibility-dependent shading after LOD coverage is resolved, so the payload structure and face-data semantics must stay aligned across both sides
+
+### Client Voxel Pipeline
+
+The voxel HTTP route and binary payload are unchanged by client scheduling. `World3DView` owns a ref-backed `VoxelWorkScheduler` and moves each accepted tile/version through an explicit pipeline instead of allowing completed responses to accumulate in the browser worker's message queue:
+
+```text
+selected request
+  -> fetching
+  -> compact input
+  -> active mesh worker
+  -> expanded output
+  -> scene inserted
+  -> first visible / loaded
+```
+
+Cancellation, discard, and error are terminal exits from the applicable stage. A work record is identified by a monotonically increasing client `jobId`, tile key, and refresh `version`; it also retains the latest coverage/view priority, compact and expanded byte counts, and stage timestamps. Terminal processing removes the record and releases its accounting exactly once, so a duplicate worker response or terminal event cannot free the same capacity twice.
+
+Backpressure is applied at every asynchronous ownership boundary:
+
+- fetch admission is limited first by `maxConcurrentVoxelFetches` and also stops whenever the compact-input stage has no job or byte capacity
+- response sizes are unknown when HTTP work starts, so requests already in flight may complete after the compact-input limit is reached; one item larger than the complete byte limit can occupy an otherwise empty stage, after which further fetch admission remains blocked until it drains
+- completed `ArrayBuffer` responses stay on the main thread in the prioritized compact-input stage; they are not posted eagerly to the worker
+- worker dispatch requires the compact input with the best current priority, no active worker job, and available expanded-output job and byte capacity; the single active worker job is accounted separately from both queues
+- one expanded result may exceed the output byte limit when that stage was otherwise empty; no subsequent worker job is dispatched until frame-budgeted scene insertion drains enough output capacity
+- scene insertion is independently bounded by `maxVoxelMeshesPerFrame` and `voxelMeshBuildBudgetMs`; expanded-output bytes are released when an item is inserted, rejected as stale/obsolete, or fails during scene construction
+- completion, cancellation acknowledgement, and worker error all release the one active-worker slot and immediately retry worker dispatch and fetch admission
+
+Priority is recomputed as camera generations change while work remains queued. Work is compared lexicographically by coverage necessity, view class, projected refinement benefit, distance, LOD, and request generation. This makes missing fallback coverage outrank optional detail regardless of LOD; within equal coverage, focus then forward then peripheral then rear wins, followed by larger projected benefit, shorter distance, finer LOD number, and newer generation.
+
+### Cancellable Browser Worker Protocol
+
+Main-thread and browser-worker messages use the shared `WorkerIn` and `WorkerOut` discriminated unions:
+
+- `mesh` carries `jobId`, refresh `version`, transferred compact `buffer`, LOD/region coordinates, emissive-bake selection, and optional benchmark metadata
+- `cancel` carries the exact `jobId` and refresh `version` to stop
+- `mesh-result` carries that identity and version, LOD/region coordinates, worker start/completion timestamps, transferable expanded mesh arrays, coverage/top-height data, emitter records, and optional benchmark data
+- `cancelled` carries the identity/version, coordinates, and timing but no expanded arrays
+- `error` carries the identity/version, coordinates, timing, an error string, and optional benchmark data
+
+The main thread normally dispatches only one mesh job at a time. The worker still has an internal FIFO and can remove a queued matching job immediately; for the active job it records cancellation by the combined `jobId:version` identity. Optimized decode checks cancellation before allocation, during record decoding and quad writing, during emissive work, and at a forced-yield boundary immediately before transfer. Long loops yield to the worker event loop on the worker's bounded time budget so a `cancel` message can be observed. Cancellation seen before commit abandons partial arrays and emits only `cancelled`.
+
+Cancellation remains cooperative, not transactional. If `mesh-result` commits before the worker observes `cancel`, the transferred result can arrive after demand removal or refresh supersession. The main thread therefore accepts a worker message only when its `jobId` still names the active meshing record, its version matches that record and the tile's current refresh version, and the tile is still demanded (or is a loaded stale tile being refreshed). A result that loses this race is counted as a discard such as `cancel-race` or `result-validation`; stale expanded output is never inserted, and terminal accounting is still released once. Fetches are aborted and queued compact/expanded records are removed synchronously where their stage permits; shutdown uses the same cancellation path for all records.
 
 ### Sign Text Contract
 

@@ -24,6 +24,7 @@ export function checkAndUpdateLod(args: {
   referenceSurfaceZ: number;
   screenSpaceDistanceScale: number;
   viewportHeight: number;
+  viewportAspect: number;
   syncTerrainLod: (target: THREE.Vector3, camDist: number) => void;
   updateTerrainVisibility: (target: THREE.Vector3, camDist: number) => void;
   terrainVisibilityDirtyRef: { current: boolean };
@@ -44,6 +45,7 @@ export function checkAndUpdateLod(args: {
     screenSpaceDistanceScale: number,
     cameraFov: number,
     viewportHeight: number,
+    viewportAspect: number,
     focusPoint: THREE.Vector3 | null,
   ) => void;
   debugLabelsDirtyRef: { current: boolean };
@@ -73,6 +75,7 @@ export function checkAndUpdateLod(args: {
     referenceSurfaceZ,
     screenSpaceDistanceScale,
     viewportHeight,
+    viewportAspect,
     syncTerrainLod,
     updateTerrainVisibility,
     terrainVisibilityDirtyRef,
@@ -120,11 +123,11 @@ export function checkAndUpdateLod(args: {
     terrainVisibilityDirtyRef.current = false;
   }
 
-  const cameraForward = target.clone().sub(camera.position);
-  cameraForward.z = 0;
-  const forwardLenSq = cameraForward.lengthSq();
-  if (forwardLenSq > 1e-6) {
-    cameraForward.multiplyScalar(1 / Math.sqrt(forwardLenSq));
+  const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+  const cameraForward = cameraDirection.clone().setZ(0);
+  const forwardLengthSquared = cameraForward.lengthSq();
+  if (forwardLengthSquared > 1e-6) {
+    cameraForward.multiplyScalar(1 / Math.sqrt(forwardLengthSquared));
   } else {
     cameraForward.set(0, 0, 0);
   }
@@ -153,10 +156,11 @@ export function checkAndUpdateLod(args: {
     focusLod,
     camera.position,
     referenceSurfaceZ,
-    cameraForward,
+    cameraDirection,
     screenSpaceDistanceScale,
     camera.fov,
     viewportHeight,
+    viewportAspect,
     focus.point,
   );
 

@@ -1,18 +1,18 @@
 import type {
   LoadedVoxelTile,
+  PendingVoxelCompactInput,
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
   VoxelBenchmarkCacheOutcome,
   VoxelRefreshState,
-  WorkerIn,
 } from "./types.js";
+import { compareVoxelWorkPriority } from "./voxel-work.js";
 
 export function compareVoxelFetchRequests(
   a: PendingVoxelFetchRequest,
   b: PendingVoxelFetchRequest,
 ): number {
-  if (a.priority !== b.priority) return a.priority - b.priority;
-  return b.generation - a.generation;
+  return compareVoxelWorkPriority(a.priority, b.priority);
 }
 
 export function getVoxelRefreshVersion(
@@ -167,7 +167,6 @@ function readCacheOutcome(res: Response): VoxelBenchmarkCacheOutcome {
 export async function fetchVoxelRegion(args: {
   request: PendingVoxelFetchRequest;
   controller: AbortController;
-  workerRef: { current: Worker | null };
   activeVoxelRequestKeysRef: { current: Set<string> };
   loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
   loadingVoxelsRef: { current: Set<string> };
@@ -175,13 +174,16 @@ export async function fetchVoxelRegion(args: {
   failedVoxelsRef: { current: Map<string, number> };
   isVoxelTileStale: (key: string) => boolean;
   onFinally: (key: string) => void;
+  onCompactInput: (
+    request: PendingVoxelFetchRequest,
+    input: PendingVoxelCompactInput,
+  ) => void;
   includeHaloEmitters?: boolean;
   bakeEmissiveAttributes?: boolean;
 }): Promise<void> {
   const {
     request,
     controller,
-    workerRef,
     activeVoxelRequestKeysRef,
     loadedVoxelsRef,
     loadingVoxelsRef,
@@ -189,10 +191,11 @@ export async function fetchVoxelRegion(args: {
     failedVoxelsRef,
     isVoxelTileStale,
     onFinally,
+    onCompactInput,
     includeHaloEmitters = true,
     bakeEmissiveAttributes = true,
   } = args;
-  const { key, lod, regionX, regionY, version } = request;
+  const { key, lod, regionX, regionY } = request;
 
   try {
     const requestStartedAt = performance.now();
@@ -238,57 +241,46 @@ export async function fetchVoxelRegion(args: {
       }
     }
     if (
-      !workerRef.current ||
-      (!activeVoxelRequestKeysRef.current.has(key) &&
-        !(loadedVoxelsRef.current.has(key) && isVoxelTileStale(key)))
+      !activeVoxelRequestKeysRef.current.has(key) &&
+      !(loadedVoxelsRef.current.has(key) && isVoxelTileStale(key))
     ) {
       loadingVoxelsRef.current.delete(key);
       return;
     }
 
-    workerRef.current.postMessage(
-      {
-        buffer,
-        lod,
-        regionX,
-        regionY,
-        version,
-        bakeEmissiveAttributes,
-        benchmark: {
-          fetchCompletedAt: performance.now(),
-          fetchMs,
-          transferBytes: resourceTiming?.transferSize ?? null,
-          encodedBodyBytes: resourceTiming?.encodedBodySize ?? null,
-          decodedBodyBytes: resourceTiming?.decodedBodySize ?? null,
-          rawBufferBytes: buffer.byteLength,
-          contentEncoding: res.headers.get("content-encoding"),
-          serverRunMs: readNullableHeaderMs(res, "x-voxel-run-ms"),
-          serverHaloMs: readNullableHeaderMs(res, "x-voxel-halo-ms"),
-          emitterMetadataBytes: readNullableHeaderMs(
-            res,
-            "x-voxel-emitter-metadata-bytes",
-          ),
-          emitterPowerMin: readNullableHeaderMs(
-            res,
-            "x-voxel-emitter-power-min",
-          ),
-          emitterPowerMax: readNullableHeaderMs(
-            res,
-            "x-voxel-emitter-power-max",
-          ),
-          emitterRadiusMin: readNullableHeaderMs(
-            res,
-            "x-voxel-emitter-radius-min",
-          ),
-          emitterRadiusMax: readNullableHeaderMs(
-            res,
-            "x-voxel-emitter-radius-max",
-          ),
-          cacheOutcome: readCacheOutcome(res),
-        },
-      } satisfies WorkerIn,
-      [buffer],
-    );
+    onCompactInput(request, {
+      buffer,
+      lod,
+      regionX,
+      regionY,
+      bakeEmissiveAttributes,
+      benchmark: {
+        fetchCompletedAt: performance.now(),
+        fetchMs,
+        transferBytes: resourceTiming?.transferSize ?? null,
+        encodedBodyBytes: resourceTiming?.encodedBodySize ?? null,
+        decodedBodyBytes: resourceTiming?.decodedBodySize ?? null,
+        rawBufferBytes: buffer.byteLength,
+        contentEncoding: res.headers.get("content-encoding"),
+        serverRunMs: readNullableHeaderMs(res, "x-voxel-run-ms"),
+        serverHaloMs: readNullableHeaderMs(res, "x-voxel-halo-ms"),
+        emitterMetadataBytes: readNullableHeaderMs(
+          res,
+          "x-voxel-emitter-metadata-bytes",
+        ),
+        emitterPowerMin: readNullableHeaderMs(res, "x-voxel-emitter-power-min"),
+        emitterPowerMax: readNullableHeaderMs(res, "x-voxel-emitter-power-max"),
+        emitterRadiusMin: readNullableHeaderMs(
+          res,
+          "x-voxel-emitter-radius-min",
+        ),
+        emitterRadiusMax: readNullableHeaderMs(
+          res,
+          "x-voxel-emitter-radius-max",
+        ),
+        cacheOutcome: readCacheOutcome(res),
+      },
+    });
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") {
       loadingVoxelsRef.current.delete(key);

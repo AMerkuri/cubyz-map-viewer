@@ -56,6 +56,7 @@ import {
 import { SignLayerManager } from "../lib/sign-layer.js";
 import type { RollingVoxelBenchmarkStats } from "../lib/stats.js";
 import {
+  addVoxelBenchmarkSample,
   createEmptyVoxelBenchmarkStats,
   publishChunkStats,
 } from "../lib/stats.js";
@@ -84,6 +85,7 @@ import type {
   LoadedVoxelTile,
   PendingTerrainFetchRequest,
   PendingTerrainMeshItem,
+  PendingVoxelCompactInput,
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
   VoxelFocusState,
@@ -110,7 +112,7 @@ import {
   restoreVoxelTileFromWarmCache as restoreVoxelTileFromWarmCacheManaged,
 } from "../lib/voxel-cache.js";
 import { resolveVoxelLodFocus } from "../lib/voxel-focus.js";
-import { rebuildVoxelIndex } from "../lib/voxel-index.js";
+import { rebuildVoxelIndex, voxelTileKey } from "../lib/voxel-index.js";
 import {
   fetchVoxelRegion as fetchVoxelRegionManaged,
   finishVoxelFetch as finishVoxelFetchManaged,
@@ -130,6 +132,11 @@ import {
   requestVoxelRegion as requestVoxelRegionManaged,
   updateVoxelLod as updateVoxelLodManaged,
 } from "../lib/voxel-runtime.js";
+import {
+  classifyVoxelView,
+  getReferenceVoxelViewBounds,
+} from "../lib/voxel-view.js";
+import { type VoxelViewClass, VoxelWorkScheduler } from "../lib/voxel-work.js";
 
 const PLAYER_MARKER_BASE_SCALE = 4;
 const PLAYER_MARKER_SCALE_REFERENCE_DISTANCE = 200;
@@ -275,7 +282,32 @@ export function World3DView({
     target: THREE.Vector3;
   } | null>(null);
   const voxelLastMotionAtRef = useRef(0);
+  const voxelViewClassesRef = useRef(new Map<string, VoxelViewClass>());
   const pendingVoxelMeshQueueRef = useRef<PendingVoxelMeshItem[]>([]);
+  const voxelWorkSchedulerRef = useRef<
+    VoxelWorkScheduler<PendingVoxelCompactInput, PendingVoxelMeshItem>
+  >(
+    new VoxelWorkScheduler(
+      {
+        maxJobs: debugSettings.voxelCompactInputMaxJobs,
+        maxBytes: debugSettings.voxelCompactInputMaxBytes,
+      },
+      {
+        maxJobs: debugSettings.voxelExpandedOutputMaxJobs,
+        maxBytes: debugSettings.voxelExpandedOutputMaxBytes,
+      },
+    ),
+  );
+  voxelWorkSchedulerRef.current.setLimits(
+    {
+      maxJobs: debugSettings.voxelCompactInputMaxJobs,
+      maxBytes: debugSettings.voxelCompactInputMaxBytes,
+    },
+    {
+      maxJobs: debugSettings.voxelExpandedOutputMaxJobs,
+      maxBytes: debugSettings.voxelExpandedOutputMaxBytes,
+    },
+  );
   const workerRef = useRef<Worker | null>(null);
   const pendingInitialSurfaceRetargetRef = useRef<InitialCameraState | null>(
     null,
@@ -692,6 +724,16 @@ export function World3DView({
   }
 
   function clearVoxelTiles(preserveWarmCache = false) {
+    voxelViewClassesRef.current.clear();
+    for (const record of voxelWorkSchedulerRef.current.cancelAll("shutdown")) {
+      if (record.stage === "meshing") {
+        workerRef.current?.postMessage({
+          type: "cancel",
+          jobId: record.jobId,
+          version: record.version,
+        });
+      }
+    }
     clearVoxelTilesManaged({
       preserveWarmCache,
       loadedVoxels: loadedVoxelsRef.current,
@@ -782,6 +824,14 @@ export function World3DView({
   }
 
   function finishVoxelFetch(key: string) {
+    for (const record of voxelWorkSchedulerRef.current.getByKey(key)) {
+      if (record.stage === "fetching") {
+        voxelWorkSchedulerRef.current.finish(
+          record.jobId,
+          record.cancellationReason ? "cancelled" : "error",
+        );
+      }
+    }
     finishVoxelFetchManaged(
       key,
       voxelFetchControllersRef,
@@ -796,21 +846,78 @@ export function World3DView({
     regionY: number,
     version: number,
   ) {
+    const key = voxelTileKey(lod, regionX, regionY);
+    const loadedTile = loadedVoxelsRef.current.get(key);
+    const scene = sceneRef.current;
+    const worldSize = regionWorldSize(lod);
+    const cameraPosition = scene?.camera.position ?? new THREE.Vector3();
+    const bounds = loadedTile
+      ? {
+          minX: regionX,
+          maxX: regionX + worldSize,
+          minY: regionY,
+          maxY: regionY + worldSize,
+          minZ: loadedTile.minZ,
+          maxZ: loadedTile.maxZ,
+        }
+      : getReferenceVoxelViewBounds({
+          regionX,
+          regionY,
+          worldSize,
+          referenceSurfaceZ: getReferenceSurfaceZ(
+            cameraPosition,
+            loadedVoxelsRef.current,
+            worldDataRef.current.worldData?.spawn?.[2],
+          ),
+        });
+    const center = new THREE.Vector3(
+      (bounds.minX + bounds.maxX) / 2,
+      (bounds.minY + bounds.maxY) / 2,
+      (bounds.minZ + bounds.maxZ) / 2,
+    );
+    const distance = cameraPosition.distanceTo(center);
+    const viewportHeight = containerRef.current?.clientHeight ?? 0;
+    const viewportAspect =
+      (containerRef.current?.clientWidth ?? 0) / Math.max(1, viewportHeight);
+    const viewClass = scene
+      ? classifyVoxelView({
+          cameraPosition,
+          cameraDirection: scene.camera.getWorldDirection(new THREE.Vector3()),
+          verticalFovDegrees: scene.camera.fov,
+          viewportAspect,
+          bounds,
+          enterMarginDegrees:
+            debugSettingsRef.current.voxelViewEnterMarginDegrees,
+          exitMarginDegrees:
+            debugSettingsRef.current.voxelViewExitMarginDegrees,
+          previousClass: voxelViewClassesRef.current.get(key),
+        })
+      : (voxelViewClassesRef.current.get(key) ?? "rear");
+    voxelViewClassesRef.current.set(key, viewClass);
+    const projectedBenefit =
+      distance > 0 && viewportHeight > 0 && scene
+        ? (worldSize / distance) *
+          (viewportHeight / (2 * Math.tan((scene.camera.fov * Math.PI) / 360)))
+        : 0;
     requestDirectVoxelRefreshManaged({
       lod,
       regionX,
       regionY,
       version,
-      worker: workerRef.current,
       failedVoxels: failedVoxelsRef.current,
       maxVoxelRetries: MAX_VOXEL_RETRIES,
-      voxelFetchControllers: voxelFetchControllersRef.current,
-      activeVoxelFetchCountRef,
       loadingVoxels: loadingVoxelsRef.current,
-      fetchVoxelRegion: (request, controller) => {
-        void fetchVoxelRegion(request, controller);
-      },
+      queueVoxelFetchRequest,
+      drainVoxelFetchQueue,
       activeVoxelRequestGeneration: activeVoxelRequestGenerationRef.current,
+      priority: {
+        coverageClass: loadedTile ? "detail" : "coverage",
+        viewClass,
+        projectedBenefit,
+        distance,
+        lod,
+        generation: activeVoxelRequestGenerationRef.current,
+      },
     });
   }
 
@@ -850,13 +957,98 @@ export function World3DView({
       maxVoxelRetries: MAX_VOXEL_RETRIES,
       voxelFetchControllers: voxelFetchControllersRef.current,
       loadingVoxels: loadingVoxelsRef.current,
+      canStartFetch: () => voxelWorkSchedulerRef.current.canStartFetch(),
       fetchVoxelRegion: (request, controller) => {
+        voxelWorkSchedulerRef.current.createFetching({
+          key: request.key,
+          version: request.version,
+          priority: request.priority,
+          selectedAt: request.selectedAt,
+          fetchStartedAt: performance.now(),
+        });
         void fetchVoxelRegion(request, controller);
       },
     });
   }
 
+  function dispatchNextVoxelWork() {
+    const worker = workerRef.current;
+    if (!worker) return;
+    const record = voxelWorkSchedulerRef.current.dispatchNext(
+      performance.now(),
+    );
+    const input = record?.compact;
+    if (!record || !input) return;
+    worker.postMessage(
+      {
+        type: "mesh",
+        jobId: record.jobId,
+        buffer: input.buffer,
+        lod: input.lod,
+        regionX: input.regionX,
+        regionY: input.regionY,
+        version: record.version,
+        cancellationCheckpointMs:
+          debugSettingsRef.current.voxelCancellationCheckpointMs,
+        bakeEmissiveAttributes: input.bakeEmissiveAttributes,
+        benchmark: input.benchmark,
+      },
+      [input.buffer],
+    );
+    drainVoxelFetchQueue();
+  }
+
+  function cancelVoxelWork(
+    key: string,
+    reason: "demand-removed" | "refresh-superseded",
+    olderThanVersion = Number.POSITIVE_INFINITY,
+  ) {
+    const cancelled = voxelWorkSchedulerRef.current.cancelKey(
+      key,
+      reason,
+      olderThanVersion,
+    );
+    for (const record of cancelled) {
+      if (reason === "demand-removed") {
+        loadingVoxelsRef.current.delete(record.key);
+      }
+      if (record.stage === "fetching") {
+        voxelFetchControllersRef.current.get(key)?.abort();
+      } else if (record.stage === "meshing") {
+        workerRef.current?.postMessage({
+          type: "cancel",
+          jobId: record.jobId,
+          version: record.version,
+        });
+      } else if (record.stage === "expanded-output") {
+        pendingVoxelMeshQueueRef.current =
+          pendingVoxelMeshQueueRef.current.filter(
+            (item) => item.jobId !== record.jobId,
+          );
+      }
+    }
+    dispatchNextVoxelWork();
+    drainVoxelFetchQueue();
+  }
+
   function syncVoxelRequests(requests: Map<string, PendingVoxelFetchRequest>) {
+    for (const record of [...voxelWorkSchedulerRef.current.records.values()]) {
+      const updated = requests.get(record.key);
+      const refreshRequired =
+        loadedVoxelsRef.current.has(record.key) && isVoxelTileStale(record.key);
+      if (!updated && !refreshRequired) {
+        cancelVoxelWork(record.key, "demand-removed");
+      } else if (updated && record.version < updated.version) {
+        cancelVoxelWork(record.key, "refresh-superseded", updated.version);
+        loadingVoxelsRef.current.add(updated.key);
+        queueVoxelFetchRequest(updated);
+      } else if (updated) {
+        voxelWorkSchedulerRef.current.reprioritize(
+          record.jobId,
+          updated.priority,
+        );
+      }
+    }
     syncVoxelRequestsManaged({
       requests,
       activeVoxelRequestKeysRef,
@@ -870,6 +1062,7 @@ export function World3DView({
       requestVoxelRegion,
       drainVoxelFetchQueue,
     });
+    dispatchNextVoxelWork();
   }
 
   async function fetchVoxelRegion(
@@ -879,7 +1072,6 @@ export function World3DView({
     await fetchVoxelRegionManaged({
       request,
       controller,
-      workerRef,
       activeVoxelRequestKeysRef,
       loadedVoxelsRef,
       loadingVoxelsRef,
@@ -887,6 +1079,26 @@ export function World3DView({
       failedVoxelsRef,
       isVoxelTileStale,
       onFinally: finishVoxelFetch,
+      onCompactInput: (completedRequest, input) => {
+        const record = voxelWorkSchedulerRef.current
+          .getByKey(completedRequest.key)
+          .find(
+            (candidate) =>
+              candidate.stage === "fetching" &&
+              candidate.version === completedRequest.version,
+          );
+        if (
+          record &&
+          voxelWorkSchedulerRef.current.acceptCompact(
+            record.jobId,
+            input,
+            input.buffer.byteLength,
+            performance.now(),
+          )
+        ) {
+          dispatchNextVoxelWork();
+        }
+      },
       includeHaloEmitters:
         debugSettingsRef.current.voxelHaloEmittersEnabled > 0,
       bakeEmissiveAttributes:
@@ -902,6 +1114,7 @@ export function World3DView({
     screenSpaceDistanceScale: number,
     cameraFov: number,
     viewportHeight: number,
+    viewportAspect: number,
     focusPoint: THREE.Vector3 | null,
   ) {
     updateVoxelLodManaged({
@@ -912,10 +1125,12 @@ export function World3DView({
       screenSpaceDistanceScale,
       cameraFov,
       viewportHeight,
+      viewportAspect,
       focusPoint,
       voxelRootEntries: voxelRootEntriesRef.current,
       availableVoxelKeys: availableVoxelKeysRef.current,
       loadedVoxels: loadedVoxelsRef.current,
+      warmCachedVoxels: warmCachedVoxelsRef.current,
       loadingVoxels: loadingVoxelsRef.current,
       pendingVoxelMeshQueue: pendingVoxelMeshQueueRef.current,
       voxelUnloadGraceUntil: voxelUnloadGraceUntilRef.current,
@@ -937,7 +1152,12 @@ export function World3DView({
         voxelTopAoIntensity: debugSettingsRef.current.voxelTopAoIntensity,
         voxelWallAoIntensity: debugSettingsRef.current.voxelWallAoIntensity,
         voxelUnloadGraceMs: debugSettingsRef.current.voxelUnloadGraceMs,
+        voxelViewEnterMarginDegrees:
+          debugSettingsRef.current.voxelViewEnterMarginDegrees,
+        voxelViewExitMarginDegrees:
+          debugSettingsRef.current.voxelViewExitMarginDegrees,
       },
+      voxelViewClasses: voxelViewClassesRef.current,
       pendingVoxelDetailRequestsRef,
       committedVoxelDetailRequestsRef,
       getVoxelRefreshVersion,
@@ -945,6 +1165,17 @@ export function World3DView({
       unloadVoxelTile,
       syncVoxelRequests,
       debugLabelsDirtyRef,
+      onVoxelVisible: (key, visibleAt) => {
+        const record = voxelWorkSchedulerRef.current
+          .getByKey(key)
+          .find((candidate) => candidate.stage === "inserted");
+        if (record) {
+          voxelWorkSchedulerRef.current.markFirstVisible(
+            record.jobId,
+            visibleAt,
+          );
+        }
+      },
     });
   }
 
@@ -1116,6 +1347,9 @@ export function World3DView({
       pendingVoxelMeshQueueRef,
       markVoxelTileStale,
       getVoxelRefreshVersion,
+      cancelVoxelWork: (key, olderThanVersion) => {
+        cancelVoxelWork(key, "refresh-superseded", olderThanVersion);
+      },
       evictWarmCachedVoxelTile,
       requestDirectVoxelRefresh,
       checkAndUpdateLOD,
@@ -1134,6 +1368,8 @@ export function World3DView({
       worldDataRef.current.worldData?.spawn?.[2],
     );
     const viewportHeight = containerRef.current?.clientHeight ?? 0;
+    const viewportAspect =
+      (containerRef.current?.clientWidth ?? 0) / Math.max(1, viewportHeight);
     const screenSpaceDistanceScale = computeScreenSpaceDistanceScale(
       camera.fov,
       viewportHeight,
@@ -1154,6 +1390,7 @@ export function World3DView({
       referenceSurfaceZ,
       screenSpaceDistanceScale,
       viewportHeight,
+      viewportAspect,
       syncTerrainLod,
       updateTerrainVisibility,
       terrainVisibilityDirtyRef,
@@ -1216,6 +1453,37 @@ export function World3DView({
   }
 
   function handleWorkerMessage(data: WorkerOut) {
+    const resultReceivedAt = performance.now();
+    const record = voxelWorkSchedulerRef.current.records.get(data.jobId);
+    if (
+      !record ||
+      record.stage !== "meshing" ||
+      record.version !== data.version ||
+      record.cancellationReason
+    ) {
+      if (record) {
+        if (record.cancellationReason === "demand-removed") {
+          loadingVoxelsRef.current.delete(record.key);
+        }
+        const cancelledResultRace =
+          data.type === "mesh-result" &&
+          record.cancellationReason !== undefined;
+        voxelWorkSchedulerRef.current.finish(
+          record.jobId,
+          cancelledResultRace
+            ? "discarded"
+            : record.cancellationReason
+              ? "cancelled"
+              : "discarded",
+          cancelledResultRace
+            ? "cancel-race"
+            : (record.cancellationReason ?? "result-validation"),
+        );
+      }
+      dispatchNextVoxelWork();
+      drainVoxelFetchQueue();
+      return;
+    }
     handleVoxelWorkerMessage({
       data,
       getVoxelRefreshVersion,
@@ -1225,141 +1493,37 @@ export function World3DView({
       failedVoxels: failedVoxelsRef.current,
       pendingVoxelMeshQueueRef,
       isVoxelTileStale,
+      acceptMeshResult: (item, bytes) =>
+        voxelWorkSchedulerRef.current.completeWorker(item.jobId, item, bytes, {
+          workerStartedAt: data.timing.startedAt - performance.timeOrigin,
+          workerCompletedAt: data.timing.completedAt - performance.timeOrigin,
+          resultReceivedAt,
+        }),
       onBenchmarkSample: (sample) => {
-        const current = voxelBenchmarkRef.current;
-        const nextSamples = current.samples + 1;
-        const cacheOutcome = sample.cacheOutcome ?? "unknown";
-        voxelBenchmarkRef.current = {
-          samples: nextSamples,
-          contentEncoding: sample.contentEncoding,
-          avgFetchMs:
-            (current.avgFetchMs * current.samples + sample.fetchMs) /
-            nextSamples,
-          avgDecodeMs:
-            (current.avgDecodeMs * current.samples + sample.decodeMs) /
-            nextSamples,
-          avgTotalMs:
-            (current.avgTotalMs * current.samples + sample.totalMs) /
-            nextSamples,
-          avgTransferBytes: averageNullableMetric(
-            current.avgTransferBytes,
-            current.samples,
-            sample.transferBytes,
-            nextSamples,
-          ),
-          avgEncodedBodyBytes: averageNullableMetric(
-            current.avgEncodedBodyBytes,
-            current.samples,
-            sample.encodedBodyBytes,
-            nextSamples,
-          ),
-          avgDecodedBodyBytes: averageNullableMetric(
-            current.avgDecodedBodyBytes,
-            current.samples,
-            sample.decodedBodyBytes,
-            nextSamples,
-          ),
-          avgRawBufferBytes: averageNullableMetric(
-            current.avgRawBufferBytes,
-            current.samples,
-            sample.rawBufferBytes,
-            nextSamples,
-          ),
-          avgWorkerOutputBytes: averageNullableMetric(
-            current.avgWorkerOutputBytes,
-            current.samples,
-            sample.workerOutputBytes,
-            nextSamples,
-          ),
-          avgEmissiveBytes: averageNullableMetric(
-            current.avgEmissiveBytes,
-            current.samples,
-            sample.emissiveBytes,
-            nextSamples,
-          ),
-          avgEmissiveGridBuildMs: averageNullableMetric(
-            current.avgEmissiveGridBuildMs,
-            current.samples,
-            sample.emissiveGridBuildMs,
-            nextSamples,
-          ),
-          avgEmissiveBakeMs: averageNullableMetric(
-            current.avgEmissiveBakeMs,
-            current.samples,
-            sample.emissiveBakeMs,
-            nextSamples,
-          ),
-          avgEmissiveQuadsEvaluated: averageNullableMetric(
-            current.avgEmissiveQuadsEvaluated,
-            current.samples,
-            sample.emissiveQuadsEvaluated,
-            nextSamples,
-          ),
-          avgEmissiveQuadsCulled: averageNullableMetric(
-            current.avgEmissiveQuadsCulled,
-            current.samples,
-            sample.emissiveQuadsCulled,
-            nextSamples,
-          ),
-          avgEmissiveCandidateVisits: averageNullableMetric(
-            current.avgEmissiveCandidateVisits,
-            current.samples,
-            sample.emissiveCandidateVisits,
-            nextSamples,
-          ),
-          avgEmitterMetadataBytes: averageNullableMetric(
-            current.avgEmitterMetadataBytes,
-            current.samples,
-            sample.emitterMetadataBytes,
-            nextSamples,
-          ),
-          avgEmitterPowerMin: averageNullableMetric(
-            current.avgEmitterPowerMin,
-            current.samples,
-            sample.emitterPowerMin,
-            nextSamples,
-          ),
-          avgEmitterPowerMax: averageNullableMetric(
-            current.avgEmitterPowerMax,
-            current.samples,
-            sample.emitterPowerMax,
-            nextSamples,
-          ),
-          avgEmitterRadiusMin: averageNullableMetric(
-            current.avgEmitterRadiusMin,
-            current.samples,
-            sample.emitterRadiusMin,
-            nextSamples,
-          ),
-          avgEmitterRadiusMax: averageNullableMetric(
-            current.avgEmitterRadiusMax,
-            current.samples,
-            sample.emitterRadiusMax,
-            nextSamples,
-          ),
-          avgServerRunMs: averageNullableMetric(
-            current.avgServerRunMs,
-            current.samples,
-            sample.serverRunMs,
-            nextSamples,
-          ),
-          avgServerHaloMs: averageNullableMetric(
-            current.avgServerHaloMs,
-            current.samples,
-            sample.serverHaloMs,
-            nextSamples,
-          ),
-          cacheHitSamples:
-            current.cacheHitSamples + (cacheOutcome === "hit" ? 1 : 0),
-          cacheMissSamples:
-            current.cacheMissSamples + (cacheOutcome === "miss" ? 1 : 0),
-          cacheUnknownSamples:
-            current.cacheUnknownSamples + (cacheOutcome === "unknown" ? 1 : 0),
-          haloEmittersEnabled: current.haloEmittersEnabled,
-          emissiveAttributesEnabled: current.emissiveAttributesEnabled,
-        };
+        voxelBenchmarkRef.current = addVoxelBenchmarkSample(
+          voxelBenchmarkRef.current,
+          sample,
+        );
       },
     });
+    if (
+      data.type === "mesh-result" &&
+      voxelWorkSchedulerRef.current.records.get(data.jobId)?.stage === "meshing"
+    ) {
+      voxelWorkSchedulerRef.current.finish(
+        data.jobId,
+        "discarded",
+        "result-validation",
+      );
+    }
+    if (data.type === "cancelled" || data.type === "error") {
+      voxelWorkSchedulerRef.current.finish(
+        data.jobId,
+        data.type === "cancelled" ? "cancelled" : "error",
+      );
+    }
+    dispatchNextVoxelWork();
+    drainVoxelFetchQueue();
   }
 
   function buildQueuedVoxelMeshesForFrame(
@@ -1398,6 +1562,25 @@ export function World3DView({
         );
       },
       onVoxelTileLoaded: () => loadedVoxelsRevisionRef.current++,
+      onVoxelMeshFinished: (item, outcome) => {
+        if (outcome === "loaded") {
+          voxelWorkSchedulerRef.current.markSceneInserted(
+            item.jobId,
+            performance.now(),
+          );
+          if (!loadedVoxelsRef.current.has(item.key)) {
+            voxelWorkSchedulerRef.current.finish(item.jobId, "loaded");
+          }
+        } else {
+          voxelWorkSchedulerRef.current.finish(
+            item.jobId,
+            outcome,
+            outcome === "error" ? "scene-error" : "scene-validation",
+          );
+        }
+        dispatchNextVoxelWork();
+        drainVoxelFetchQueue();
+      },
     });
   }
 
@@ -1416,6 +1599,10 @@ export function World3DView({
       warmCachedTerrain: warmCachedTerrainRef.current,
       warmCachedVoxels: warmCachedVoxelsRef.current,
       voxelBenchmark: voxelBenchmarkRef.current,
+      voxelPipeline: {
+        snapshot: voxelWorkSchedulerRef.current.snapshot(),
+        diagnostics: voxelWorkSchedulerRef.current.diagnostics,
+      },
       blockLightStats: blockLightStatsRef.current,
       lastChunkStatsRef,
       onChunkStatsChange: (stats) => {
@@ -1653,19 +1840,4 @@ function getReferenceSurfaceZ(
   return typeof fallbackZ === "number" && Number.isFinite(fallbackZ)
     ? fallbackZ
     : 0;
-}
-
-function averageNullableMetric(
-  currentAverage: number | null,
-  currentSamples: number,
-  nextValue: number | null,
-  nextSamples: number,
-): number | null {
-  if (nextValue === null) {
-    return currentAverage;
-  }
-  if (currentAverage === null || currentSamples === 0) {
-    return nextValue;
-  }
-  return (currentAverage * currentSamples + nextValue) / nextSamples;
 }
