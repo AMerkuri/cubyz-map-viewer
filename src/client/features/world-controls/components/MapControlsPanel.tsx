@@ -1,4 +1,5 @@
 import { OverlayPanel } from "../../../components/OverlayPanel.js";
+import type { MapDebugSettings } from "../../../lib/world-view-debug.js";
 import type { GraphicsPreset } from "../../../lib/world-view-graphics-presets.js";
 import type { LayerVisibility } from "../../../types/world-view.js";
 import { MapControlsContent } from "./MapControlsContent.js";
@@ -8,6 +9,8 @@ interface MapControlsPanelProps {
   applyGraphicsPreset: (preset: GraphicsPreset) => void;
   layerVisibility: LayerVisibility;
   handleLayerVisibilityChange: (visibility: LayerVisibility) => void;
+  mapDebugSettings: MapDebugSettings;
+  updateMapDebugSettings: (next: MapDebugSettings) => void;
 }
 
 export function MapControlsPanel({
@@ -15,6 +18,8 @@ export function MapControlsPanel({
   applyGraphicsPreset,
   layerVisibility,
   handleLayerVisibilityChange,
+  mapDebugSettings,
+  updateMapDebugSettings,
 }: MapControlsPanelProps) {
   return (
     <OverlayPanel
@@ -30,6 +35,8 @@ export function MapControlsPanel({
         applyGraphicsPreset={applyGraphicsPreset}
         layerVisibility={layerVisibility}
         handleLayerVisibilityChange={handleLayerVisibilityChange}
+        mapDebugSettings={mapDebugSettings}
+        updateMapDebugSettings={updateMapDebugSettings}
       />
     </OverlayPanel>
   );

@@ -23,6 +23,7 @@ function ToggleButton({
     <button
       type="button"
       onClick={onToggle}
+      aria-pressed={active}
       style={{
         display: "flex",
         alignItems: "center",
@@ -71,7 +72,13 @@ export function LayerControls({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gap: 6,
+      }}
+    >
       <ToggleButton
         label="Biome Labels"
         active={visibility.biomeLabels}

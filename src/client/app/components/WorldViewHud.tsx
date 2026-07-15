@@ -100,6 +100,8 @@ export function WorldViewHud({
               applyGraphicsPreset={applyGraphicsPreset}
               layerVisibility={state.layerVisibility}
               handleLayerVisibilityChange={updateLayerVisibility}
+              mapDebugSettings={state.mapDebugSettings}
+              updateMapDebugSettings={updateMapDebugSettings}
               compact={true}
             />
           }
@@ -139,6 +141,8 @@ export function WorldViewHud({
           applyGraphicsPreset={applyGraphicsPreset}
           layerVisibility={state.layerVisibility}
           handleLayerVisibilityChange={updateLayerVisibility}
+          mapDebugSettings={state.mapDebugSettings}
+          updateMapDebugSettings={updateMapDebugSettings}
         />
       )}
 
