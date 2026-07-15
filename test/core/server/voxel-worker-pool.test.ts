@@ -12,6 +12,7 @@ import type {
   VoxelJobResult,
   VoxelWorkerDiagnostics,
   VoxelWorkerMessage,
+  VoxelWorkerResponseMessage,
 } from "../../../src/server/workers/voxel-worker-protocol.js";
 
 const blockColors = { signature: "colors" } as BlockColorTable;
@@ -42,6 +43,7 @@ function diagnostics(
     representedEmitterCacheSources: 3,
     representedEmitterInFlight: 0,
     ...overrides,
+    phase: overrides.phase ?? "idle",
   };
 }
 
@@ -49,7 +51,7 @@ class FakeWorker implements VoxelWorkerLike {
   readonly messages: VoxelWorkerMessage[] = [];
   terminateCalls = 0;
   private readonly listeners = {
-    message: [] as Array<(result: VoxelJobResult) => void>,
+    message: [] as Array<(result: VoxelWorkerResponseMessage) => void>,
     error: [] as Array<(error: Error) => void>,
     exit: [] as Array<(code: number) => void>,
   };
@@ -73,13 +75,16 @@ class FakeWorker implements VoxelWorkerLike {
     this.terminateResolve?.(0);
   }
 
-  on(event: "message", listener: (result: VoxelJobResult) => void): this;
+  on(
+    event: "message",
+    listener: (result: VoxelWorkerResponseMessage) => void,
+  ): this;
   on(event: "error", listener: (error: Error) => void): this;
   on(event: "exit", listener: (code: number) => void): this;
   on(
     event: "message" | "error" | "exit",
     listener:
-      | ((result: VoxelJobResult) => void)
+      | ((result: VoxelWorkerResponseMessage) => void)
       | ((error: Error) => void)
       | ((code: number) => void),
   ): this {
@@ -87,7 +92,7 @@ class FakeWorker implements VoxelWorkerLike {
     return this;
   }
 
-  complete(id: number, memory = diagnostics()): void {
+  completeResult(id: number, memory = diagnostics()): void {
     const request = this.messages.find(
       (message) => message.type === "job" && message.job.id === id,
     );
@@ -99,9 +104,24 @@ class FakeWorker implements VoxelWorkerLike {
       keyEpoch: 0,
       status: "empty",
       runMs: 1,
-      diagnostics: memory,
+      preTransferDiagnostics: { ...memory, phase: "pre-transfer" },
     };
     for (const listener of this.listeners.message) listener(result);
+  }
+
+  becomeIdle(id: number, memory = diagnostics()): void {
+    for (const listener of this.listeners.message) {
+      listener({
+        type: "idle",
+        id,
+        diagnostics: { ...memory, phase: "idle" },
+      });
+    }
+  }
+
+  complete(id: number, memory = diagnostics()): void {
+    this.completeResult(id, memory);
+    this.becomeIdle(id, memory);
   }
 
   fail(error = new Error("worker failed")): void {
@@ -144,8 +164,45 @@ test("retires an idle worker after it crosses a configured threshold", async () 
   await pool.destroy();
 });
 
+test("waits for the post-transfer idle boundary before settlement and reuse", async () => {
+  const { pool, workers } = createPool(1, {
+    recycleArrayBufferBytes: 500,
+  });
+  await pool.start();
+  const first = pool.run(job(1));
+  const second = pool.run(job(2));
+  let settled = false;
+  void first.then(() => {
+    settled = true;
+  });
+
+  workers[0].completeResult(1, diagnostics({ arrayBuffers: 900 }));
+  await turn();
+  assert.equal(settled, false);
+  assert.equal(workers[0].messages.length, 1);
+
+  workers[0].becomeIdle(1, diagnostics({ arrayBuffers: 40 }));
+  await first;
+  assert.equal(workers[0].messages.length, 2);
+  const snapshot = pool.getDiagnosticsSnapshot();
+  assert.equal(snapshot.preTransferArrayBuffers, 900);
+  assert.equal(snapshot.arrayBuffers, 40);
+  assert.equal(snapshot.preTransferSlots[0]?.phase, "pre-transfer");
+  assert.equal(snapshot.slots[0]?.phase, "idle");
+  assert.equal(snapshot.retirements, 0);
+
+  workers[0].complete(2);
+  await second;
+  await pool.destroy();
+});
+
 test("keeps workers reusable when recycling thresholds are disabled", async () => {
-  const { pool, workers } = createPool(1);
+  const { pool, workers } = createPool(1, {
+    recycleHeapBytes: 0,
+    recycleExternalBytes: 0,
+    recycleArrayBufferBytes: 0,
+    recycleCompletedJobs: 0,
+  });
   await pool.start();
   const first = pool.run(job(1));
   workers[0].complete(1);
@@ -155,6 +212,32 @@ test("keeps workers reusable when recycling thresholds are disabled", async () =
   await second;
   assert.equal(workers.length, 1);
   assert.equal(pool.getDiagnosticsSnapshot().retirements, 0);
+  await pool.destroy();
+});
+
+test("uses deterministic retirement threshold precedence", async () => {
+  const { pool, workers } = createPool(1, {
+    recycleHeapBytes: 100,
+    recycleExternalBytes: 100,
+    recycleArrayBufferBytes: 100,
+    recycleCompletedJobs: 1,
+  });
+  await pool.start();
+  const result = pool.run(job(1));
+  workers[0].complete(
+    1,
+    diagnostics({
+      heapUsed: 100,
+      external: 100,
+      arrayBuffers: 100,
+      completedJobs: 1,
+    }),
+  );
+  await result;
+  await turn();
+  assert.deepEqual(pool.getDiagnosticsSnapshot().retirementReasons, {
+    heap: 1,
+  });
   await pool.destroy();
 });
 
@@ -211,4 +294,49 @@ test("shutdown rejects both running and queued jobs", async () => {
   await assert.rejects(running, /shut down/);
   await assert.rejects(queued, /shut down/);
   await assert.rejects(pool.run(job(3)), /shut down/);
+});
+
+test("bounds queued jobs while running work does not consume queue capacity", async () => {
+  const { pool, workers } = createPool(1, { queueLimit: 2 });
+  await pool.start();
+  const running = pool.run(job(1));
+  const queuedFirst = pool.run(job(2));
+  const queuedSecond = pool.run(job(3));
+
+  assert.equal(pool.getQueueLimit(), 2);
+  assert.equal(pool.getQueueDepth(), 2);
+  await assert.rejects(pool.run(job(4)), /queue is full/);
+  assert.deepEqual(pool.getAdmissionMetrics(), {
+    accepted: 3,
+    rejected: 1,
+    queuedCancelled: 0,
+  });
+
+  workers[0].complete(1);
+  await running;
+  workers[0].complete(2);
+  await queuedFirst;
+  workers[0].complete(3);
+  await queuedSecond;
+  await pool.destroy();
+});
+
+test("removes a queued job without disturbing FIFO dispatch or settling twice", async () => {
+  const { pool, workers } = createPool(1, { queueLimit: 2 });
+  await pool.start();
+  const running = pool.run(job(1));
+  const removed = pool.run(job(2));
+  const retained = pool.run(job(3));
+
+  assert.equal(pool.cancelQueued(2), true);
+  assert.equal(pool.cancelQueued(2), false);
+  await assert.rejects(removed, /was cancelled/);
+  assert.equal(pool.getAdmissionMetrics().queuedCancelled, 1);
+  workers[0].complete(1);
+  await running;
+  const dispatched = workers[0].messages.at(-1);
+  assert.equal(dispatched?.type === "job" ? dispatched.job.id : undefined, 3);
+  workers[0].complete(3);
+  await retained;
+  await pool.destroy();
 });

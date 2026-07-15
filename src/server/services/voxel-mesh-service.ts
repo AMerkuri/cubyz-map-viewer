@@ -21,6 +21,8 @@ import { computeVoxelSourceSignature } from "./voxel-source-signature.js";
 import { resolveVoxelWorkerCount } from "./voxel-worker-config.js";
 import {
   type InstrumentedPoolResult,
+  VoxelQueuedJobCancelledError,
+  type VoxelWorkerAdmissionMetrics,
   VoxelWorkerPool,
   type VoxelWorkerPoolDiagnostics,
   type VoxelWorkerPoolOptions,
@@ -28,6 +30,8 @@ import {
 
 interface CachedVoxelMesh {
   key: string;
+  globalEpoch: number;
+  keyEpoch: number;
   buf: Buffer;
   sourceSignature: string;
   cacheTier: VoxelGenerationStats["cacheTier"];
@@ -96,7 +100,18 @@ export interface VoxelMeshResponse {
 
 interface InFlightJob {
   versionedKey: string;
-  promise: Promise<InstrumentedPoolResult>;
+  jobId: number;
+  consumers: number;
+  queuedCancelled: boolean;
+  orphaned: boolean;
+  invalidated: boolean;
+  settled: boolean;
+  promise: Promise<PipelineResult>;
+}
+
+interface PipelineResult {
+  instrumented?: InstrumentedPoolResult;
+  cachedMesh?: CachedVoxelMesh;
 }
 
 interface RollingMetric {
@@ -173,9 +188,26 @@ export interface VoxelServiceMetricsSnapshot {
   workers: number;
   workerRuntimeMode: "source" | "dist";
   queueDepth: number;
+  queueLimit: number;
+  admissionAccepted: number;
+  admissionRejected: number;
+  queuedCancellations: number;
   runningJobs: number;
   workerDiagnostics?: VoxelWorkerPoolDiagnostics | null;
   inFlightJobs: number;
+  inFlightConsumers: number;
+  sharedPipelineConsumers: number;
+  consumerCancellations: number;
+  runningOrphans: number;
+  orphanRejoins: number;
+  orphanCompletions: number;
+  mainProcessMemory: {
+    rss: number;
+    heapUsed: number;
+    heapTotal: number;
+    external: number;
+    arrayBuffers: number;
+  };
   cacheEntries: number;
   cacheBytes: number;
   cacheRawBytes: number;
@@ -188,6 +220,15 @@ export interface VoxelServiceMetricsSnapshot {
   summaryCacheEvictions: number;
   summaryCacheOversizedSkips: number;
   summaryActiveWork: number;
+  summaryNodeRequests: number;
+  summaryNodeMemoryHits: number;
+  summaryNodeDiskHits: number;
+  summaryNodeBuilds: number;
+  summaryLeafExtractions: number;
+  summaryExtractedSources: number;
+  summaryLeafBuildLimit: number;
+  summaryLeafBuildActive: number;
+  summaryLeafBuildQueued: number;
   requests: number;
   cacheHits: number;
   workerRequests: number;
@@ -208,9 +249,12 @@ export interface VoxelWorkerPoolLike {
   run(
     request: Parameters<VoxelWorkerPool["run"]>[0],
   ): Promise<InstrumentedPoolResult>;
+  cancelQueued(jobId: number): boolean;
   getWorkerCount(): number;
   getRuntimeMode(): "source" | "dist";
   getQueueDepth(): number;
+  getQueueLimit(): number;
+  getAdmissionMetrics(): VoxelWorkerAdmissionMetrics;
   getRunningCount(): number;
   getDiagnosticsSnapshot?(): VoxelWorkerPoolDiagnostics;
 }
@@ -245,6 +289,7 @@ export interface VoxelMeshServiceApi {
     regionY: number,
     contentEncoding: VoxelContentEncoding,
     includeHaloEmitters?: boolean,
+    signal?: AbortSignal,
   ): Promise<VoxelMeshResponse>;
   getMetricsSnapshot(): VoxelServiceMetricsSnapshot;
   benchmarkVoxelMesh(
@@ -276,6 +321,11 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
   private emptyResponses = 0;
   private staleDrops = 0;
   private errors = 0;
+  private sharedPipelineConsumers = 0;
+  private consumerCancellations = 0;
+  private runningOrphans = 0;
+  private orphanRejoins = 0;
+  private orphanCompletions = 0;
   private readonly queueMetric: RollingMetric = { sum: 0, max: 0, count: 0 };
   private readonly runMetric: RollingMetric = { sum: 0, max: 0, count: 0 };
   private readonly totalMetric: RollingMetric = { sum: 0, max: 0, count: 0 };
@@ -336,12 +386,14 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
   clear(key: string): void {
     this.cache.delete(key);
     this.keyEpochs.set(key, (this.keyEpochs.get(key) ?? 0) + 1);
+    this.invalidateInFlight(key);
   }
 
   clearAll(): void {
     this.cache.clear();
     this.emitterSummaries.clear();
     this.globalEpoch++;
+    for (const key of this.inFlight.keys()) this.invalidateInFlight(key);
   }
 
   invalidateLod1EmitterColumn(regionX: number, regionY: number): void {
@@ -362,13 +414,35 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
 
   getMetricsSnapshot(): VoxelServiceMetricsSnapshot {
     const summaryMetrics = this.emitterSummaries.getMetricsSnapshot();
+    const admissionMetrics = this.pool.getAdmissionMetrics();
+    const memory = process.memoryUsage();
     return {
       workers: this.pool.getWorkerCount(),
       workerRuntimeMode: this.pool.getRuntimeMode(),
       queueDepth: this.pool.getQueueDepth(),
+      queueLimit: this.pool.getQueueLimit(),
+      admissionAccepted: admissionMetrics.accepted,
+      admissionRejected: admissionMetrics.rejected,
+      queuedCancellations: admissionMetrics.queuedCancelled,
       runningJobs: this.pool.getRunningCount(),
       workerDiagnostics: this.pool.getDiagnosticsSnapshot?.() ?? null,
       inFlightJobs: this.inFlight.size,
+      inFlightConsumers: [...this.inFlight.values()].reduce(
+        (sum, operation) => sum + operation.consumers,
+        0,
+      ),
+      sharedPipelineConsumers: this.sharedPipelineConsumers,
+      consumerCancellations: this.consumerCancellations,
+      runningOrphans: this.runningOrphans,
+      orphanRejoins: this.orphanRejoins,
+      orphanCompletions: this.orphanCompletions,
+      mainProcessMemory: {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        external: memory.external,
+        arrayBuffers: memory.arrayBuffers,
+      },
       cacheEntries: this.cache.size,
       cacheBytes: this.cache.weight,
       cacheRawBytes: this.getCacheBufferBytes("identity"),
@@ -382,6 +456,15 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
       summaryCacheEvictions: summaryMetrics.evictions,
       summaryCacheOversizedSkips: summaryMetrics.oversizedSkips,
       summaryActiveWork: summaryMetrics.activeWork,
+      summaryNodeRequests: summaryMetrics.nodeRequests,
+      summaryNodeMemoryHits: summaryMetrics.nodeMemoryHits,
+      summaryNodeDiskHits: summaryMetrics.nodeDiskHits,
+      summaryNodeBuilds: summaryMetrics.nodeBuilds,
+      summaryLeafExtractions: summaryMetrics.leafExtractions,
+      summaryExtractedSources: summaryMetrics.extractedSources,
+      summaryLeafBuildLimit: summaryMetrics.leafBuildLimit,
+      summaryLeafBuildActive: summaryMetrics.leafBuildActive,
+      summaryLeafBuildQueued: summaryMetrics.leafBuildQueued,
       requests: this.requests,
       cacheHits: this.cacheHits,
       workerRequests: this.workerRequests,
@@ -438,80 +521,89 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     regionY: number,
     contentEncoding: VoxelContentEncoding,
     includeHaloEmitters = true,
+    signal?: AbortSignal,
   ): Promise<VoxelMeshResponse> {
+    if (signal?.aborted) throw this.createAbortError();
     this.requests++;
     const startedAt = performance.now();
     const cached = this.cache.get(key);
     if (cached) {
-      const variant = await this.getVariant(cached, contentEncoding);
+      const variant = await this.waitForConsumer(
+        this.getVariant(cached, contentEncoding),
+        signal,
+      );
       this.cacheHits++;
       const totalMs = performance.now() - startedAt;
       this.recordMetric(this.totalMetric, totalMs);
+      const metrics: VoxelRequestMetrics = {
+        source: "cache",
+        cacheOutcome: "hit",
+        queueMs: 0,
+        runMs: 0,
+        totalMs,
+        queueDepth: this.pool.getQueueDepth(),
+        runningJobs: this.pool.getRunningCount(),
+        inFlightJobs: this.inFlight.size,
+        byteLength: variant.buf.byteLength,
+        cacheTier: cached.cacheTier,
+        quadCount: cached.stats?.quadCount,
+        greedyCubeQuads: cached.stats?.greedyCubeQuads,
+        modelQuads: cached.stats?.modelQuads,
+        droppedModelQuads: cached.stats?.droppedModelQuads,
+        modelQuadBudget: cached.stats?.modelQuadBudget,
+        transparentQuads: cached.stats?.transparentQuads,
+        rawPayloadBytes: cached.stats?.rawPayloadBytes,
+        greedyRecordBytes: cached.stats?.greedyRecordBytes,
+        modelRecordBytes: cached.stats?.modelRecordBytes,
+        emitterRecords: cached.stats?.emitterRecords,
+        ownEmitterRecords: cached.stats?.ownEmitterRecords,
+        haloEmitterRecords: cached.stats?.haloEmitterRecords,
+        aggregatedEmitterRecords: cached.stats?.aggregatedEmitterRecords,
+        cachedHaloMs: cached.stats?.haloMs,
+        emitterRecordBytes: cached.stats?.emitterRecordBytes,
+        emitterMetadataBytes: cached.stats?.emitterMetadataBytes,
+        emitterPowerMin: cached.stats?.emitterPowerMin,
+        emitterPowerMax: cached.stats?.emitterPowerMax,
+        emitterRadiusMin: cached.stats?.emitterRadiusMin,
+        emitterRadiusMax: cached.stats?.emitterRadiusMax,
+        summaryCacheOutcome: cached.stats?.summaryCacheOutcome,
+        summaryBuildMs: cached.stats?.summaryBuildMs,
+        summaryLeafParses: cached.stats?.summaryLeafParses,
+        summaryRawSourceCount: cached.stats?.summaryRawSourceCount,
+        summaryRetainedClusterCount: cached.stats?.summaryRetainedClusterCount,
+        summaryCappedClusterCount: cached.stats?.summaryCappedClusterCount,
+        chunkColumns: cached.stats?.chunkColumns,
+        externalRegionParses: cached.stats?.externalRegionParses,
+        externalRegionCacheHits: cached.stats?.externalRegionCacheHits,
+        externalRegionMisses: cached.stats?.externalRegionMisses,
+        externalRegionParseErrors: cached.stats?.externalRegionParseErrors,
+        minWorldZ: cached.stats?.minWorldZ,
+        maxWorldZ: cached.stats?.maxWorldZ,
+      };
+      if (!this.isCurrentEpoch(key, cached.globalEpoch, cached.keyEpoch)) {
+        this.staleDrops++;
+        return { status: "empty", metrics };
+      }
       return {
         status: "ok",
         buf: variant.buf,
         etag: variant.etag,
         contentEncoding:
           contentEncoding === "identity" ? undefined : contentEncoding,
-        metrics: {
-          source: "cache",
-          cacheOutcome: "hit",
-          queueMs: 0,
-          runMs: 0,
-          totalMs,
-          queueDepth: this.pool.getQueueDepth(),
-          runningJobs: this.pool.getRunningCount(),
-          inFlightJobs: this.inFlight.size,
-          byteLength: variant.buf.byteLength,
-          cacheTier: cached.cacheTier,
-          quadCount: cached.stats?.quadCount,
-          greedyCubeQuads: cached.stats?.greedyCubeQuads,
-          modelQuads: cached.stats?.modelQuads,
-          droppedModelQuads: cached.stats?.droppedModelQuads,
-          modelQuadBudget: cached.stats?.modelQuadBudget,
-          transparentQuads: cached.stats?.transparentQuads,
-          rawPayloadBytes: cached.stats?.rawPayloadBytes,
-          greedyRecordBytes: cached.stats?.greedyRecordBytes,
-          modelRecordBytes: cached.stats?.modelRecordBytes,
-          emitterRecords: cached.stats?.emitterRecords,
-          ownEmitterRecords: cached.stats?.ownEmitterRecords,
-          haloEmitterRecords: cached.stats?.haloEmitterRecords,
-          aggregatedEmitterRecords: cached.stats?.aggregatedEmitterRecords,
-          cachedHaloMs: cached.stats?.haloMs,
-          emitterRecordBytes: cached.stats?.emitterRecordBytes,
-          emitterMetadataBytes: cached.stats?.emitterMetadataBytes,
-          emitterPowerMin: cached.stats?.emitterPowerMin,
-          emitterPowerMax: cached.stats?.emitterPowerMax,
-          emitterRadiusMin: cached.stats?.emitterRadiusMin,
-          emitterRadiusMax: cached.stats?.emitterRadiusMax,
-          summaryCacheOutcome: cached.stats?.summaryCacheOutcome,
-          summaryBuildMs: cached.stats?.summaryBuildMs,
-          summaryLeafParses: cached.stats?.summaryLeafParses,
-          summaryRawSourceCount: cached.stats?.summaryRawSourceCount,
-          summaryRetainedClusterCount:
-            cached.stats?.summaryRetainedClusterCount,
-          summaryCappedClusterCount: cached.stats?.summaryCappedClusterCount,
-          chunkColumns: cached.stats?.chunkColumns,
-          externalRegionParses: cached.stats?.externalRegionParses,
-          externalRegionCacheHits: cached.stats?.externalRegionCacheHits,
-          externalRegionMisses: cached.stats?.externalRegionMisses,
-          externalRegionParseErrors: cached.stats?.externalRegionParseErrors,
-          minWorldZ: cached.stats?.minWorldZ,
-          maxWorldZ: cached.stats?.maxWorldZ,
-        },
+        metrics,
       };
     }
 
     const globalEpoch = this.globalEpoch;
     const keyEpoch = this.keyEpochs.get(key) ?? 0;
     const versionedKey = `${key}@${globalEpoch}:${keyEpoch}`;
-    const emitterSummary =
-      lod > 1 ? await this.getEmitterSummary(lod, regionX, regionY) : undefined;
     const existing = this.inFlight.get(key);
-    const promise =
-      existing && existing.versionedKey === versionedKey
-        ? existing.promise
-        : this.enqueueJob(
+    const operation =
+      existing &&
+      existing.versionedKey === versionedKey &&
+      !existing.queuedCancelled
+        ? existing
+        : this.createInFlightOperation(
             key,
             lod,
             regionX,
@@ -520,12 +612,39 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
             keyEpoch,
             versionedKey,
             includeHaloEmitters,
-            emitterSummary,
           );
+    if (operation === existing) {
+      operation.consumers++;
+      this.sharedPipelineConsumers++;
+      if (operation.orphaned) this.orphanRejoins++;
+    }
+    operation.orphaned = false;
 
-    const { result, queueMs, runMs } = await promise;
-    const safeQueueMs = Number.isFinite(queueMs) ? queueMs : 0;
-    const safeRunMs = Number.isFinite(runMs) ? runMs : 0;
+    let outcome: PipelineResult;
+    try {
+      outcome = await this.waitForConsumer(operation.promise, signal);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        this.consumerCancellations++;
+      }
+      throw error;
+    } finally {
+      operation.consumers--;
+      if (operation.consumers === 0 && !operation.settled) {
+        if (this.pool.cancelQueued(operation.jobId)) {
+          operation.queuedCancelled = true;
+        } else {
+          if (!operation.orphaned) this.runningOrphans++;
+          operation.orphaned = true;
+        }
+      }
+      this.releaseInFlight(key, operation);
+    }
+    const { result, queueMs, runMs } = outcome.instrumented ?? {};
+    const safeQueueMs =
+      typeof queueMs === "number" && Number.isFinite(queueMs) ? queueMs : 0;
+    const safeRunMs =
+      typeof runMs === "number" && Number.isFinite(runMs) ? runMs : 0;
     this.workerRequests++;
     this.recordMetric(this.queueMetric, safeQueueMs);
     this.recordMetric(this.runMetric, safeRunMs);
@@ -533,7 +652,7 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     this.recordMetric(this.totalMetric, totalMs);
     const metrics: VoxelRequestMetrics = {
       source: "worker",
-      cacheOutcome: result.stats
+      cacheOutcome: result?.stats
         ? result.stats.cacheTier === "worker"
           ? "miss"
           : "hit"
@@ -544,51 +663,53 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
       queueDepth: this.pool.getQueueDepth(),
       runningJobs: this.pool.getRunningCount(),
       inFlightJobs: this.inFlight.size,
-      byteLength: result.status === "ok" ? result.buffer.byteLength : 0,
-      cacheTier: result.stats?.cacheTier,
-      quadCount: result.stats?.quadCount,
-      greedyCubeQuads: result.stats?.greedyCubeQuads,
-      modelQuads: result.stats?.modelQuads,
-      droppedModelQuads: result.stats?.droppedModelQuads,
-      modelQuadBudget: result.stats?.modelQuadBudget,
-      transparentQuads: result.stats?.transparentQuads,
-      rawPayloadBytes: result.stats?.rawPayloadBytes,
-      greedyRecordBytes: result.stats?.greedyRecordBytes,
-      modelRecordBytes: result.stats?.modelRecordBytes,
-      emitterRecords: result.stats?.emitterRecords,
-      ownEmitterRecords: result.stats?.ownEmitterRecords,
-      haloEmitterRecords: result.stats?.haloEmitterRecords,
-      aggregatedEmitterRecords: result.stats?.aggregatedEmitterRecords,
+      byteLength: result?.status === "ok" ? result.buffer.byteLength : 0,
+      cacheTier: result?.stats?.cacheTier,
+      quadCount: result?.stats?.quadCount,
+      greedyCubeQuads: result?.stats?.greedyCubeQuads,
+      modelQuads: result?.stats?.modelQuads,
+      droppedModelQuads: result?.stats?.droppedModelQuads,
+      modelQuadBudget: result?.stats?.modelQuadBudget,
+      transparentQuads: result?.stats?.transparentQuads,
+      rawPayloadBytes: result?.stats?.rawPayloadBytes,
+      greedyRecordBytes: result?.stats?.greedyRecordBytes,
+      modelRecordBytes: result?.stats?.modelRecordBytes,
+      emitterRecords: result?.stats?.emitterRecords,
+      ownEmitterRecords: result?.stats?.ownEmitterRecords,
+      haloEmitterRecords: result?.stats?.haloEmitterRecords,
+      aggregatedEmitterRecords: result?.stats?.aggregatedEmitterRecords,
       haloMs:
-        result.stats?.cacheTier === "worker" ? result.stats?.haloMs : undefined,
+        result?.stats?.cacheTier === "worker"
+          ? result.stats?.haloMs
+          : undefined,
       cachedHaloMs:
-        result.stats?.cacheTier === "disk" ? result.stats.haloMs : undefined,
-      emitterRecordBytes: result.stats?.emitterRecordBytes,
-      emitterMetadataBytes: result.stats?.emitterMetadataBytes,
-      emitterPowerMin: result.stats?.emitterPowerMin,
-      emitterPowerMax: result.stats?.emitterPowerMax,
-      emitterRadiusMin: result.stats?.emitterRadiusMin,
-      emitterRadiusMax: result.stats?.emitterRadiusMax,
-      summaryCacheOutcome: result.stats?.summaryCacheOutcome,
-      summaryBuildMs: result.stats?.summaryBuildMs,
-      summaryLeafParses: result.stats?.summaryLeafParses,
-      summaryRawSourceCount: result.stats?.summaryRawSourceCount,
-      summaryRetainedClusterCount: result.stats?.summaryRetainedClusterCount,
-      summaryCappedClusterCount: result.stats?.summaryCappedClusterCount,
-      chunkColumns: result.stats?.chunkColumns,
-      regionsParsed: result.stats?.regionsParsed,
-      chunksMeshed: result.stats?.chunksMeshed,
-      visitedAirCells: result.stats?.visitedAirCells,
-      facesBeforeMerge: result.stats?.facesBeforeMerge,
-      externalRegionParses: result.stats?.externalRegionParses,
-      externalRegionCacheHits: result.stats?.externalRegionCacheHits,
-      externalRegionMisses: result.stats?.externalRegionMisses,
-      externalRegionParseErrors: result.stats?.externalRegionParseErrors,
-      minWorldZ: result.stats?.minWorldZ,
-      maxWorldZ: result.stats?.maxWorldZ,
+        result?.stats?.cacheTier === "disk" ? result.stats.haloMs : undefined,
+      emitterRecordBytes: result?.stats?.emitterRecordBytes,
+      emitterMetadataBytes: result?.stats?.emitterMetadataBytes,
+      emitterPowerMin: result?.stats?.emitterPowerMin,
+      emitterPowerMax: result?.stats?.emitterPowerMax,
+      emitterRadiusMin: result?.stats?.emitterRadiusMin,
+      emitterRadiusMax: result?.stats?.emitterRadiusMax,
+      summaryCacheOutcome: result?.stats?.summaryCacheOutcome,
+      summaryBuildMs: result?.stats?.summaryBuildMs,
+      summaryLeafParses: result?.stats?.summaryLeafParses,
+      summaryRawSourceCount: result?.stats?.summaryRawSourceCount,
+      summaryRetainedClusterCount: result?.stats?.summaryRetainedClusterCount,
+      summaryCappedClusterCount: result?.stats?.summaryCappedClusterCount,
+      chunkColumns: result?.stats?.chunkColumns,
+      regionsParsed: result?.stats?.regionsParsed,
+      chunksMeshed: result?.stats?.chunksMeshed,
+      visitedAirCells: result?.stats?.visitedAirCells,
+      facesBeforeMerge: result?.stats?.facesBeforeMerge,
+      externalRegionParses: result?.stats?.externalRegionParses,
+      externalRegionCacheHits: result?.stats?.externalRegionCacheHits,
+      externalRegionMisses: result?.stats?.externalRegionMisses,
+      externalRegionParseErrors: result?.stats?.externalRegionParseErrors,
+      minWorldZ: result?.stats?.minWorldZ,
+      maxWorldZ: result?.stats?.maxWorldZ,
     };
 
-    if (result.status === "empty") {
+    if (!result || result.status === "empty") {
       this.emptyResponses++;
       return { status: "empty", metrics };
     }
@@ -597,46 +718,19 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
       throw new Error(result.error);
     }
 
-    if (!this.isCurrentEpoch(key, result.globalEpoch, result.keyEpoch)) {
+    const cachedMesh = outcome.cachedMesh;
+    if (!cachedMesh) return { status: "empty", metrics };
+    const variant = await this.waitForConsumer(
+      this.getVariant(cachedMesh, contentEncoding),
+      signal,
+    );
+    if (
+      operation.invalidated ||
+      !this.isCurrentEpoch(key, cachedMesh.globalEpoch, cachedMesh.keyEpoch)
+    ) {
       this.staleDrops++;
       return { status: "empty", metrics };
     }
-
-    const sourceSignature = await this.computeSourceSignature({
-      savePath: this.savePath,
-      blockShapeSignature: this.blockShapeSignature,
-      blockColorSignature: this.blockColorSignature,
-      lod,
-      regionX,
-      regionY,
-      emitterSummarySignature: emitterSummary?.node.signature,
-    });
-    if (!sourceSignature) {
-      this.emptyResponses++;
-      return { status: "empty", metrics };
-    }
-    if (!this.isCurrentEpoch(key, result.globalEpoch, result.keyEpoch)) {
-      this.staleDrops++;
-      return { status: "empty", metrics };
-    }
-
-    const responseBuffer = Buffer.from(result.buffer);
-    const variants = new Map<VoxelContentEncoding, CachedVoxelVariant>();
-    variants.set("identity", {
-      buf: responseBuffer,
-      etag: this.buildVariantEtag(key, sourceSignature, "identity"),
-    });
-    const cachedMesh: CachedVoxelMesh = {
-      key,
-      buf: responseBuffer,
-      sourceSignature,
-      cacheTier: result.stats?.cacheTier ?? "worker",
-      stats: result.stats,
-      variants,
-      variantJobs: new Map(),
-    };
-    this.cache.set(key, cachedMesh);
-    const variant = await this.getVariant(cachedMesh, contentEncoding);
     return {
       status: "ok",
       buf: variant.buf,
@@ -763,7 +857,7 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     };
   }
 
-  private enqueueJob(
+  private createInFlightOperation(
     key: string,
     lod: number,
     regionX: number,
@@ -772,11 +866,53 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     keyEpoch: number,
     versionedKey: string,
     includeHaloEmitters = true,
-    emitterSummary?: EmitterSummaryResult,
-  ): Promise<InstrumentedPoolResult> {
-    const promise = this.pool
-      .run({
-        id: this.nextJobId++,
+  ): InFlightJob {
+    const jobId = this.nextJobId++;
+    const operation: InFlightJob = {
+      versionedKey,
+      jobId,
+      consumers: 1,
+      queuedCancelled: false,
+      orphaned: false,
+      invalidated: false,
+      settled: false,
+      promise: Promise.resolve({}),
+    };
+    operation.promise = this.runPipeline(
+      operation,
+      key,
+      lod,
+      regionX,
+      regionY,
+      globalEpoch,
+      keyEpoch,
+      includeHaloEmitters,
+    ).finally(() => {
+      operation.settled = true;
+      this.releaseInFlight(key, operation);
+    });
+    this.inFlight.set(key, operation);
+    return operation;
+  }
+
+  private async runPipeline(
+    operation: InFlightJob,
+    key: string,
+    lod: number,
+    regionX: number,
+    regionY: number,
+    globalEpoch: number,
+    keyEpoch: number,
+    includeHaloEmitters: boolean,
+  ): Promise<PipelineResult> {
+    const emitterSummary =
+      lod > 1 ? await this.getEmitterSummary(lod, regionX, regionY) : undefined;
+    if (operation.invalidated || operation.consumers === 0) return {};
+
+    let instrumented: InstrumentedPoolResult;
+    try {
+      instrumented = await this.pool.run({
+        id: operation.jobId,
         key,
         lod,
         regionX,
@@ -786,15 +922,112 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
         includeHaloEmitters,
         emitterSummary: emitterSummary?.node,
         emitterSummaryMetrics: emitterSummary?.metrics,
-      })
-      .finally(() => {
-        const inFlight = this.inFlight.get(key);
-        if (inFlight?.versionedKey === versionedKey) {
-          this.inFlight.delete(key);
-        }
       });
-    this.inFlight.set(key, { versionedKey, promise });
-    return promise;
+    } catch (error) {
+      if (
+        error instanceof VoxelQueuedJobCancelledError &&
+        (operation.invalidated || operation.consumers === 0)
+      ) {
+        return {};
+      }
+      throw error;
+    }
+
+    const { result } = instrumented;
+    if (operation.orphaned && operation.consumers === 0) {
+      this.orphanCompletions++;
+    }
+    if (
+      result.status !== "ok" ||
+      operation.invalidated ||
+      operation.orphaned ||
+      operation.consumers === 0 ||
+      !this.isCurrentEpoch(key, result.globalEpoch, result.keyEpoch)
+    ) {
+      if (
+        result.status === "ok" &&
+        (operation.invalidated ||
+          !this.isCurrentEpoch(key, result.globalEpoch, result.keyEpoch))
+      ) {
+        this.staleDrops++;
+      }
+      return { instrumented };
+    }
+
+    const sourceSignature = await this.computeSourceSignature({
+      savePath: this.savePath,
+      blockShapeSignature: this.blockShapeSignature,
+      blockColorSignature: this.blockColorSignature,
+      lod,
+      regionX,
+      regionY,
+      emitterSummarySignature: emitterSummary?.node.signature,
+    });
+    if (
+      !sourceSignature ||
+      operation.invalidated ||
+      operation.orphaned ||
+      operation.consumers === 0 ||
+      !this.isCurrentEpoch(key, result.globalEpoch, result.keyEpoch)
+    ) {
+      if (!sourceSignature) this.emptyResponses++;
+      else this.staleDrops++;
+      return { instrumented };
+    }
+
+    const responseBuffer = Buffer.from(result.buffer);
+    const variants = new Map<VoxelContentEncoding, CachedVoxelVariant>();
+    variants.set("identity", {
+      buf: responseBuffer,
+      etag: this.buildVariantEtag(key, sourceSignature, "identity"),
+    });
+    const cachedMesh: CachedVoxelMesh = {
+      key,
+      globalEpoch,
+      keyEpoch,
+      buf: responseBuffer,
+      sourceSignature,
+      cacheTier: result.stats?.cacheTier ?? "worker",
+      stats: result.stats,
+      variants,
+      variantJobs: new Map(),
+    };
+    this.cache.set(key, cachedMesh);
+    return { instrumented, cachedMesh };
+  }
+
+  private invalidateInFlight(key: string): void {
+    const operation = this.inFlight.get(key);
+    if (!operation) return;
+    operation.invalidated = true;
+    if (this.pool.cancelQueued(operation.jobId))
+      operation.queuedCancelled = true;
+  }
+
+  private releaseInFlight(key: string, operation: InFlightJob): void {
+    if (!operation.settled || operation.consumers > 0) return;
+    if (this.inFlight.get(key) === operation) this.inFlight.delete(key);
+  }
+
+  private waitForConsumer<T>(
+    promise: Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (!signal) return promise;
+    if (signal.aborted) return Promise.reject(this.createAbortError());
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(this.createAbortError());
+      signal.addEventListener("abort", abort, { once: true });
+      promise.then(resolve, reject).finally(() => {
+        signal.removeEventListener("abort", abort);
+      });
+    });
+  }
+
+  private createAbortError(): Error {
+    const error = new Error("Voxel request aborted");
+    error.name = "AbortError";
+    return error;
   }
 
   private async getEmitterSummary(
@@ -926,7 +1159,11 @@ export class VoxelMeshService implements VoxelMeshServiceApi {
     const job = this.compressVariant(cached, contentEncoding)
       .then((variant) => {
         cached.variants.set(contentEncoding, variant);
-        this.cache.set(cached.key, cached);
+        if (
+          this.isCurrentEpoch(cached.key, cached.globalEpoch, cached.keyEpoch)
+        ) {
+          this.cache.set(cached.key, cached);
+        }
         cached.variantJobs.delete(contentEncoding);
         return variant;
       })

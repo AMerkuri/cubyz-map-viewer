@@ -41,7 +41,10 @@ import { logger } from "./services/logger.js";
 import { EMITTER_MAX_SUMMARY_RADIUS } from "./services/voxel-emitter-aggregation.js";
 import { readVoxelMemoryCacheConfig } from "./services/voxel-memory-config.js";
 import { VoxelMeshService } from "./services/voxel-mesh-service.js";
-import { resolveVoxelWorkerCount } from "./services/voxel-worker-config.js";
+import {
+  resolveVoxelQueueLimit,
+  resolveVoxelWorkerCount,
+} from "./services/voxel-worker-config.js";
 import { SaveWatcher, type WatchEvent } from "./services/watcher.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -50,6 +53,7 @@ const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const VOXEL_MEMORY_CACHE = readVoxelMemoryCacheConfig(process.env);
 const VOXEL_WORKERS = resolveVoxelWorkerCount(process.env.VOXEL_WORKERS);
+const VOXEL_QUEUE_LIMIT = resolveVoxelQueueLimit(process.env.VOXEL_QUEUE_LIMIT);
 const VOXEL_BROTLI_QUALITY = parseIntegerEnv(
   process.env.VOXEL_BROTLI_QUALITY,
   6,
@@ -418,6 +422,7 @@ async function main() {
     },
     {
       workerPoolOptions: {
+        queueLimit: VOXEL_QUEUE_LIMIT,
         representedEmitterCacheMaxEntries:
           VOXEL_MEMORY_CACHE.workerEmitterEntryLimit,
         representedEmitterCacheMaxSources:
@@ -438,7 +443,15 @@ async function main() {
   const voxelMetrics = voxelMeshService.getMetricsSnapshot();
   logger.info("Voxel worker runtime", {
     mode: voxelMetrics.workerRuntimeMode,
-    workers: voxelMetrics.workers,
+    limits: {
+      workers: voxelMetrics.workers,
+      summaryLeafExtractions: voxelMetrics.summaryLeafBuildLimit,
+      queuedJobs: voxelMetrics.queueLimit,
+      recycleHeapBytes: VOXEL_MEMORY_CACHE.recycleHeapBytes,
+      recycleExternalBytes: VOXEL_MEMORY_CACHE.recycleExternalBytes,
+      recycleArrayBufferBytes: VOXEL_MEMORY_CACHE.recycleArrayBufferBytes,
+      recycleCompletedJobs: VOXEL_MEMORY_CACHE.recycleCompletedJobs,
+    },
     compression: {
       brotliQuality: VOXEL_BROTLI_QUALITY,
       brotliLgwin: VOXEL_BROTLI_LGWIN,

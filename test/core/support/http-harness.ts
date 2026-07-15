@@ -49,3 +49,33 @@ export async function requestVoxels(
     );
   }
 }
+
+export async function abortVoxelsRequest(
+  service: VoxelMeshServiceApi,
+  path: string,
+): Promise<void> {
+  const app = express();
+  app.use("/api/voxels", createVoxelsRouter(service, "br"));
+  app.use(errorHandler);
+  const server = app.listen(0);
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("No test port");
+    await new Promise<void>((resolve) => {
+      const req = request({
+        host: "127.0.0.1",
+        port: address.port,
+        path,
+        headers: { "accept-encoding": "br" },
+      });
+      req.on("error", () => resolve());
+      req.end();
+      setTimeout(() => req.destroy(), 10);
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+}

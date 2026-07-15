@@ -8,6 +8,9 @@ import {
   DEFAULT_VOXEL_MEMORY_CACHE_SIZE,
   DEFAULT_VOXEL_WORKER_EMITTER_CACHE_SIZE,
   DEFAULT_VOXEL_WORKER_EMITTER_CACHE_SOURCES,
+  DEFAULT_VOXEL_WORKER_RECYCLE_ARRAY_BUFFER_BYTES,
+  DEFAULT_VOXEL_WORKER_RECYCLE_EXTERNAL_BYTES,
+  DEFAULT_VOXEL_WORKER_RECYCLE_JOBS,
   readVoxelMemoryCacheConfig,
 } from "../../../src/server/services/voxel-memory-config.js";
 
@@ -67,10 +70,10 @@ test("voxel memory cache configuration uses only positive integer values", () =>
     workerEmitterSourceLimit: DEFAULT_VOXEL_WORKER_EMITTER_CACHE_SOURCES,
     emitterSummaryEntryLimit: DEFAULT_VOXEL_EMITTER_SUMMARY_CACHE_SIZE,
     emitterSummaryByteLimit: DEFAULT_VOXEL_EMITTER_SUMMARY_CACHE_BYTES,
-    recycleHeapBytes: undefined,
-    recycleExternalBytes: undefined,
-    recycleArrayBufferBytes: undefined,
-    recycleCompletedJobs: undefined,
+    recycleHeapBytes: 0,
+    recycleExternalBytes: DEFAULT_VOXEL_WORKER_RECYCLE_EXTERNAL_BYTES,
+    recycleArrayBufferBytes: DEFAULT_VOXEL_WORKER_RECYCLE_ARRAY_BUFFER_BYTES,
+    recycleCompletedJobs: DEFAULT_VOXEL_WORKER_RECYCLE_JOBS,
   });
   for (const invalid of ["0", "-1", "1.5", "nope", "Infinity"]) {
     const config = readVoxelMemoryCacheConfig({
@@ -124,4 +127,29 @@ test("voxel memory cache configuration uses only positive integer values", () =>
       recycleCompletedJobs: 100,
     },
   );
+
+  const disabled = readVoxelMemoryCacheConfig({
+    VOXEL_WORKER_RECYCLE_HEAP_BYTES: "0",
+    VOXEL_WORKER_RECYCLE_EXTERNAL_BYTES: "0",
+    VOXEL_WORKER_RECYCLE_ARRAY_BUFFER_BYTES: "0",
+    VOXEL_WORKER_RECYCLE_JOBS: "0",
+  });
+  assert.equal(disabled.recycleHeapBytes, 0);
+  assert.equal(disabled.recycleExternalBytes, 0);
+  assert.equal(disabled.recycleArrayBufferBytes, 0);
+  assert.equal(disabled.recycleCompletedJobs, 0);
+
+  for (const name of [
+    "VOXEL_WORKER_RECYCLE_HEAP_BYTES",
+    "VOXEL_WORKER_RECYCLE_EXTERNAL_BYTES",
+    "VOXEL_WORKER_RECYCLE_ARRAY_BUFFER_BYTES",
+    "VOXEL_WORKER_RECYCLE_JOBS",
+  ]) {
+    for (const value of ["", "-1", "1.5", "nope", "Infinity"]) {
+      assert.throws(
+        () => readVoxelMemoryCacheConfig({ [name]: value }),
+        new RegExp(name),
+      );
+    }
+  }
 });

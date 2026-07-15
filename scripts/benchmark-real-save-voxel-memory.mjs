@@ -22,6 +22,7 @@ const MEMORY_ENV_KEYS = [
   "VOXEL_EMITTER_SUMMARY_CACHE_BYTES",
   "VOXEL_WORKER_EMITTER_CACHE_SIZE",
   "VOXEL_WORKER_EMITTER_CACHE_SOURCES",
+  "VOXEL_QUEUE_LIMIT",
   "VOXEL_WORKER_RECYCLE_HEAP_BYTES",
   "VOXEL_WORKER_RECYCLE_EXTERNAL_BYTES",
   "VOXEL_WORKER_RECYCLE_ARRAY_BUFFER_BYTES",
@@ -72,6 +73,7 @@ const result = {
 for (const workers of options.workers) {
   result.runs.push(await runConfiguration(workers));
 }
+result.payloadEquivalence = comparePayloads(result.runs);
 
 await writeFile(options.json, `${JSON.stringify(result, null, 2)}\n`);
 printTable(result.runs);
@@ -181,6 +183,19 @@ async function runPhase(port, pid, phaseName, samples) {
     requests: responses.length,
     outcomes,
     wireBytes: responses.reduce((sum, response) => sum + response.wireBytes, 0),
+    requestLatencyMs: summarizeLatency(
+      responses.map((response) => response.durationMs),
+    ),
+    payloads: responses.map(
+      ({ lod, regionX, regionY, status, wireBytes, bodySha256 }) => ({
+        lod,
+        regionX,
+        regionY,
+        status,
+        wireBytes,
+        bodySha256,
+      }),
+    ),
     rss: {
       peakRssBytes: peakRss([...workSamples, { rssBytes: postWorkRssBytes }]),
       postWorkRssBytes,
@@ -194,19 +209,26 @@ async function runPhase(port, pid, phaseName, samples) {
 }
 
 async function requestVoxel(port, request, encoding) {
+  const startedAt = performance.now();
   return requestRaw(
     port,
     `/api/voxels/${request.lod}/${request.regionX}/${request.regionY}`,
     { "accept-encoding": encoding },
     false,
-  ).then(({ status, headers, wireBytes }) => {
+  ).then(({ status, headers, wireBytes, bodySha256 }) => {
     if (status !== 200 && status !== 204) {
       throw new Error(`Voxel request returned HTTP ${status}`);
     }
     if (status === 200 && headers["content-encoding"] !== encoding) {
       throw new Error(`Voxel request did not return ${encoding} encoding`);
     }
-    return { ...request, status, wireBytes };
+    return {
+      ...request,
+      status,
+      wireBytes,
+      bodySha256,
+      durationMs: performance.now() - startedAt,
+    };
   });
 }
 
@@ -218,14 +240,17 @@ function requestRaw(port, path, headers = {}, collectBody = true) {
         try {
           let wireBytes = 0;
           const chunks = [];
+          const bodyHash = createHash("sha256");
           for await (const chunk of response) {
             wireBytes += chunk.byteLength;
+            bodyHash.update(chunk);
             if (collectBody) chunks.push(chunk);
           }
           resolveRequest({
             status: response.statusCode ?? 0,
             headers: response.headers,
             wireBytes,
+            bodySha256: bodyHash.digest("hex"),
             body: collectBody ? Buffer.concat(chunks).toString("utf8") : "",
           });
         } catch (error) {
@@ -235,6 +260,61 @@ function requestRaw(port, path, headers = {}, collectBody = true) {
     );
     request.on("error", reject);
   });
+}
+
+function summarizeLatency(values) {
+  const sorted = values.toSorted((left, right) => left - right);
+  const percentile = (fraction) =>
+    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] ??
+    0;
+  return {
+    min: sorted[0] ?? 0,
+    p50: percentile(0.5),
+    p95: percentile(0.95),
+    max: sorted.at(-1) ?? 0,
+    average: values.reduce((sum, value) => sum + value, 0) / values.length,
+  };
+}
+
+function comparePayloads(runs) {
+  const phases = runs.flatMap((run) =>
+    [run.cold, run.warm].map((phase) => ({
+      workers: run.workers,
+      phase: phase.phase,
+      payloads: phase.payloads,
+    })),
+  );
+  const baseline = phases[0];
+  if (!baseline) return { equivalent: true, comparedPhases: 0, mismatches: [] };
+  const mismatches = [];
+  for (const candidate of phases.slice(1)) {
+    for (let index = 0; index < baseline.payloads.length; index++) {
+      const expected = baseline.payloads[index];
+      const actual = candidate.payloads[index];
+      if (
+        expected?.status === actual?.status &&
+        expected?.bodySha256 === actual?.bodySha256
+      )
+        continue;
+      mismatches.push({
+        workers: candidate.workers,
+        phase: candidate.phase,
+        lod: expected?.lod,
+        regionX: expected?.regionX,
+        regionY: expected?.regionY,
+        expectedStatus: expected?.status,
+        actualStatus: actual?.status,
+        expectedSha256: expected?.bodySha256,
+        actualSha256: actual?.bodySha256,
+      });
+    }
+  }
+  return {
+    equivalent: mismatches.length === 0,
+    comparedPhases: phases.length,
+    requestsPerPhase: baseline.payloads.length,
+    mismatches,
+  };
 }
 
 async function requestJson(port, path) {

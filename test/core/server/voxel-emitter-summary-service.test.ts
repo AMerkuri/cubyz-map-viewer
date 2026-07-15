@@ -136,6 +136,8 @@ test("limits distinct cold leaf builds and dispatches queued builds FIFO", async
   await waitForStarts(service, 2);
   assert.deepEqual(service.started, ["0/0", "256/0"]);
   assert.equal(service.maxActiveBuilds, 2);
+  assert.equal(service.getMetricsSnapshot().leafBuildActive, 2);
+  assert.equal(service.getMetricsSnapshot().leafBuildQueued, 1);
 
   service.complete(0);
   await waitForStarts(service, 3);
@@ -145,6 +147,27 @@ test("limits distinct cold leaf builds and dispatches queued builds FIFO", async
   service.complete(256);
   service.complete(512);
   await Promise.all([first, second, third]);
+});
+
+test("distinguishes node traversal from cold leaf extraction", async () => {
+  const service = new ControlledSummaryService(4);
+  const root = service.getNode(2, 0, 0);
+  await waitForStarts(service, 4);
+  for (const regionX of [0, 128]) {
+    for (const regionY of [0, 128]) service.complete(regionX, regionY);
+  }
+  await root;
+
+  const cold = service.getMetricsSnapshot();
+  assert.equal(cold.nodeRequests, 5);
+  assert.equal(cold.nodeBuilds, 5);
+  assert.equal(cold.leafExtractions, 4);
+
+  await service.getNode(2, 0, 0);
+  const warm = service.getMetricsSnapshot();
+  assert.equal(warm.nodeRequests, 10);
+  assert.equal(warm.nodeMemoryHits, 5);
+  assert.equal(warm.leafExtractions, 4);
 });
 
 test("deduplicates in-flight requests and bypasses the limiter for cached reads", async () => {
@@ -191,6 +214,15 @@ test("accounts dense nodes by serialized bytes and retained clusters", async () 
     evictions: 0,
     oversizedSkips: 0,
     activeWork: 0,
+    nodeRequests: 1,
+    nodeMemoryHits: 0,
+    nodeDiskHits: 0,
+    nodeBuilds: 1,
+    leafExtractions: 1,
+    extractedSources: 12,
+    leafBuildLimit: 1,
+    leafBuildActive: 0,
+    leafBuildQueued: 0,
   });
 });
 
@@ -230,6 +262,15 @@ test("serves but does not retain an individually oversized summary node", async 
     evictions: 0,
     oversizedSkips: 1,
     activeWork: 0,
+    nodeRequests: 1,
+    nodeMemoryHits: 0,
+    nodeDiskHits: 0,
+    nodeBuilds: 1,
+    leafExtractions: 1,
+    extractedSources: 1,
+    leafBuildLimit: 1,
+    leafBuildActive: 0,
+    leafBuildQueued: 0,
   });
 
   const second = service.getNode(1, 0, 0);

@@ -3,6 +3,7 @@ import type {
   VoxelWorkerPoolLike,
 } from "../../../src/server/services/voxel-mesh-service.js";
 import type { InstrumentedPoolResult } from "../../../src/server/services/voxel-worker-pool.js";
+import { VoxelQueuedJobCancelledError } from "../../../src/server/services/voxel-worker-pool.js";
 import type {
   VoxelGenerationStats,
   VoxelJob,
@@ -32,6 +33,7 @@ const stats: VoxelGenerationStats = {
 };
 
 const diagnostics = {
+  phase: "pre-transfer" as const,
   heapUsed: 0,
   heapTotal: 0,
   external: 0,
@@ -44,6 +46,10 @@ const diagnostics = {
 
 export class DeferredVoxelPool implements VoxelWorkerPoolLike {
   readonly jobs: VoxelJob[] = [];
+  readonly queuedJobIds = new Set<number>();
+  readonly cancelledJobIds: number[] = [];
+  admissionAccepted = 0;
+  admissionRejected = 0;
   private readonly completions = new Map<
     number,
     ReturnType<typeof createDeferred<InstrumentedPoolResult>>
@@ -53,10 +59,18 @@ export class DeferredVoxelPool implements VoxelWorkerPoolLike {
   async destroy(): Promise<void> {}
 
   run(job: VoxelJob): Promise<InstrumentedPoolResult> {
+    this.admissionAccepted++;
     this.jobs.push(job);
     const completion = createDeferred<InstrumentedPoolResult>();
     this.completions.set(job.id, completion);
     return completion.promise;
+  }
+
+  cancelQueued(jobId: number): boolean {
+    if (!this.queuedJobIds.delete(jobId)) return false;
+    this.cancelledJobIds.push(jobId);
+    this.completions.get(jobId)?.reject(new VoxelQueuedJobCancelledError());
+    return true;
   }
 
   complete(job: VoxelJob, payload = Buffer.from([1, 2, 3])): void {
@@ -69,7 +83,7 @@ export class DeferredVoxelPool implements VoxelWorkerPoolLike {
           payload.byteOffset + payload.byteLength,
         ),
         runMs: 1,
-        diagnostics,
+        preTransferDiagnostics: diagnostics,
         stats,
       },
       queueMs: 0,
@@ -84,7 +98,7 @@ export class DeferredVoxelPool implements VoxelWorkerPoolLike {
         status: "error",
         error,
         runMs: 1,
-        diagnostics,
+        preTransferDiagnostics: diagnostics,
       },
       queueMs: 0,
       runMs: 1,
@@ -98,7 +112,36 @@ export class DeferredVoxelPool implements VoxelWorkerPoolLike {
     return "source";
   }
   getQueueDepth(): number {
-    return 0;
+    return this.queuedJobIds.size;
+  }
+  getQueueLimit(): number {
+    return 32;
+  }
+  getAdmissionMetrics() {
+    return {
+      accepted: this.admissionAccepted,
+      rejected: this.admissionRejected,
+      queuedCancelled: this.cancelledJobIds.length,
+    };
+  }
+  getDiagnosticsSnapshot() {
+    const idle = { ...diagnostics, phase: "idle" as const };
+    return {
+      slots: [idle],
+      preTransferSlots: [diagnostics],
+      heapUsed: idle.heapUsed,
+      heapTotal: idle.heapTotal,
+      external: idle.external,
+      arrayBuffers: idle.arrayBuffers,
+      preTransferHeapUsed: diagnostics.heapUsed,
+      preTransferExternal: diagnostics.external,
+      preTransferArrayBuffers: diagnostics.arrayBuffers,
+      representedEmitterCacheEntries: 0,
+      representedEmitterCacheSources: 0,
+      representedEmitterInFlight: 0,
+      retirements: 0,
+      retirementReasons: {},
+    };
   }
   getRunningCount(): number {
     return this.jobs.length - [...this.completions.values()].length;
@@ -121,6 +164,15 @@ export class RecordingEmitterSummaries
     evictions: 0,
     oversizedSkips: 0,
     activeWork: 0,
+    nodeRequests: 0,
+    nodeMemoryHits: 0,
+    nodeDiskHits: 0,
+    nodeBuilds: 0,
+    leafExtractions: 0,
+    extractedSources: 0,
+    leafBuildLimit: 1,
+    leafBuildActive: 0,
+    leafBuildQueued: 0,
   };
 
   async getNode(): ReturnType<VoxelEmitterSummaryServiceLike["getNode"]> {

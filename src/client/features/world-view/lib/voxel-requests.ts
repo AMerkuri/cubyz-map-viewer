@@ -178,6 +178,10 @@ export async function fetchVoxelRegion(args: {
     request: PendingVoxelFetchRequest,
     input: PendingVoxelCompactInput,
   ) => void;
+  onCapacityRetry?: (
+    request: PendingVoxelFetchRequest,
+    retryAfterMs: number,
+  ) => void;
   includeHaloEmitters?: boolean;
   bakeEmissiveAttributes?: boolean;
 }): Promise<void> {
@@ -192,6 +196,7 @@ export async function fetchVoxelRegion(args: {
     isVoxelTileStale,
     onFinally,
     onCompactInput,
+    onCapacityRetry,
     includeHaloEmitters = true,
     bakeEmissiveAttributes = true,
   } = args;
@@ -218,6 +223,12 @@ export async function fetchVoxelRegion(args: {
     if (res.status === 204) {
       missingVoxelsRef.current.add(key);
       loadingVoxelsRef.current.delete(key);
+      return;
+    }
+    const capacityRetryAfterMs = readCapacityRetryAfterMs(res);
+    if (capacityRetryAfterMs !== null) {
+      loadingVoxelsRef.current.delete(key);
+      onCapacityRetry?.(request, capacityRetryAfterMs);
       return;
     }
     if (!res.ok) {
@@ -297,4 +308,47 @@ export async function fetchVoxelRegion(args: {
   } finally {
     onFinally(key);
   }
+}
+
+function readCapacityRetryAfterMs(res: Response): number | null {
+  if (res.status !== 503) return null;
+  const raw = res.headers.get("retry-after");
+  if (raw === null) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(raw);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+export function scheduleVoxelCapacityRetry(args: {
+  request: PendingVoxelFetchRequest;
+  retryAfterMs: number;
+  retryNotBeforeRef: { current: Map<string, number> };
+  activeVoxelRequestKeysRef: { current: Set<string> };
+  loadedVoxelsRef: { current: Map<string, LoadedVoxelTile> };
+  isVoxelTileStale: (key: string) => boolean;
+  requestVoxelRegion: (request: PendingVoxelFetchRequest) => void;
+}): void {
+  const {
+    request,
+    retryAfterMs,
+    retryNotBeforeRef,
+    activeVoxelRequestKeysRef,
+    loadedVoxelsRef,
+    isVoxelTileStale,
+    requestVoxelRegion,
+  } = args;
+  const deadline = performance.now() + retryAfterMs;
+  retryNotBeforeRef.current.set(request.key, deadline);
+  setTimeout(() => {
+    if (retryNotBeforeRef.current.get(request.key) !== deadline) return;
+    retryNotBeforeRef.current.delete(request.key);
+    if (
+      activeVoxelRequestKeysRef.current.has(request.key) ||
+      (loadedVoxelsRef.current.has(request.key) &&
+        isVoxelTileStale(request.key))
+    ) {
+      requestVoxelRegion(request);
+    }
+  }, retryAfterMs);
 }

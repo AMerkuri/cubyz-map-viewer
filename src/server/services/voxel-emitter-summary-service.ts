@@ -26,7 +26,7 @@ import {
   type EmitterSummaryResult,
   isEmitterSummaryLod,
 } from "./voxel-emitter-aggregation.js";
-import { generateVoxelMesh } from "./voxel-generator.js";
+import { extractLod1RepresentedEmitters } from "./voxel-emitter-extractor.js";
 
 const REGION_CELLS = CHUNK_SIZE * REGION_SIZE;
 const PROJECT_VOXEL_CACHE_DIR = resolve(
@@ -51,6 +51,20 @@ export interface VoxelEmitterSummaryCacheMetrics {
   evictions: number;
   oversizedSkips: number;
   activeWork: number;
+  nodeRequests: number;
+  nodeMemoryHits: number;
+  nodeDiskHits: number;
+  nodeBuilds: number;
+  leafExtractions: number;
+  extractedSources: number;
+  leafBuildLimit: number;
+  leafBuildActive: number;
+  leafBuildQueued: number;
+}
+
+interface CachedNodeResult {
+  node: EmitterSummaryNode;
+  outcome: "memory" | "disk";
 }
 
 interface SummaryWork {
@@ -65,6 +79,12 @@ export class VoxelEmitterSummaryService {
   private readonly leafBuildLimit: number;
   private leafBuildActive = 0;
   private activeWork = 0;
+  private nodeRequests = 0;
+  private nodeMemoryHits = 0;
+  private nodeDiskHits = 0;
+  private nodeBuilds = 0;
+  private leafExtractions = 0;
+  private extractedSources = 0;
   private readonly cacheRoot: string;
 
   constructor(
@@ -97,6 +117,7 @@ export class VoxelEmitterSummaryService {
     regionX: number,
     regionY: number,
   ): Promise<EmitterSummaryResult> {
+    this.nodeRequests++;
     if (!isEmitterSummaryLod(lod)) {
       return Promise.reject(new Error(`Invalid emitter summary LOD: ${lod}`));
     }
@@ -149,6 +170,15 @@ export class VoxelEmitterSummaryService {
       evictions: this.memory.evictions,
       oversizedSkips: this.memory.oversizedSkips,
       activeWork: this.activeWork,
+      nodeRequests: this.nodeRequests,
+      nodeMemoryHits: this.nodeMemoryHits,
+      nodeDiskHits: this.nodeDiskHits,
+      nodeBuilds: this.nodeBuilds,
+      leafExtractions: this.leafExtractions,
+      extractedSources: this.extractedSources,
+      leafBuildLimit: this.leafBuildLimit,
+      leafBuildActive: this.leafBuildActive,
+      leafBuildQueued: this.leafBuildQueue.length,
     };
   }
 
@@ -172,10 +202,16 @@ export class VoxelEmitterSummaryService {
         work,
       );
       if (cached) {
-        return resultForCachedNode(cached, performance.now() - startedAt);
+        return resultForCachedNode(
+          cached.node,
+          cached.outcome,
+          performance.now() - startedAt,
+        );
       }
       const { clusters, rawSourceCount, cappedClusterCount, leafParses } =
         await this.withLeafBuildSlot(() => this.buildLeaf(regionX, regionY));
+      this.leafExtractions++;
+      this.extractedSources += rawSourceCount;
       const node = this.createNode(
         lod,
         regionX,
@@ -222,13 +258,13 @@ export class VoxelEmitterSummaryService {
     const childMetrics = mergeMetrics(children.map(({ metrics }) => metrics));
     if (cached) {
       return {
-        node: cached,
+        node: cached.node,
         metrics: {
           ...childMetrics,
-          cacheOutcome: "disk",
+          cacheOutcome: cached.outcome,
           buildMs: performance.now() - startedAt,
-          retainedClusterCount: cached.clusters.length,
-          cappedClusterCount: cached.cappedClusterCount,
+          retainedClusterCount: cached.node.clusters.length,
+          cappedClusterCount: cached.node.cappedClusterCount,
         },
       };
     }
@@ -293,17 +329,15 @@ export class VoxelEmitterSummaryService {
     cappedClusterCount: number;
     leafParses: number;
   }> {
-    const generated = await generateVoxelMesh(
+    const extracted = await extractLod1RepresentedEmitters(
       this.savePath,
       this.blockColors,
       this.blockShapes,
-      1,
       regionX,
       regionY,
-      { includeHaloEmitters: false, returnRepresentedSources: true },
     );
     const clusters: EmitterSummaryCluster[] = [];
-    for (const source of generated.representedSources ?? []) {
+    for (const source of extracted.sources) {
       const scale = Math.max(source.r, source.g, source.b);
       const powerR = source.r / scale;
       const powerG = source.g / scale;
@@ -334,7 +368,7 @@ export class VoxelEmitterSummaryService {
     return {
       ...built,
       rawSourceCount,
-      leafParses: generated.stats?.regionsParsed ?? 0,
+      leafParses: extracted.metrics.regionsParsed,
     };
   }
 
@@ -394,6 +428,7 @@ export class VoxelEmitterSummaryService {
       cappedClusterCount,
       clusters,
     };
+    this.nodeBuilds++;
     if (work.valid) this.memory.set(nodeKey(lod, regionX, regionY), node);
     return node;
   }
@@ -404,10 +439,13 @@ export class VoxelEmitterSummaryService {
     regionY: number,
     sourceSignature: string,
     work: SummaryWork,
-  ): Promise<EmitterSummaryNode | null> {
+  ): Promise<CachedNodeResult | null> {
     const key = nodeKey(lod, regionX, regionY);
     const memory = this.memory.get(key);
-    if (memory?.sourceSignature === sourceSignature) return memory;
+    if (memory?.sourceSignature === sourceSignature) {
+      this.nodeMemoryHits++;
+      return { node: memory, outcome: "memory" };
+    }
     try {
       const parsed = JSON.parse(
         await readFile(this.nodePath(lod, regionX, regionY), "utf8"),
@@ -416,7 +454,8 @@ export class VoxelEmitterSummaryService {
         return null;
       }
       if (work.valid) this.memory.set(key, parsed);
-      return parsed;
+      this.nodeDiskHits++;
+      return { node: parsed, outcome: "disk" };
     } catch {
       return null;
     }
@@ -681,12 +720,13 @@ function mergeMetrics(
 
 function resultForCachedNode(
   node: EmitterSummaryNode,
+  cacheOutcome: "memory" | "disk",
   buildMs: number,
 ): EmitterSummaryResult {
   return {
     node,
     metrics: {
-      cacheOutcome: "memory",
+      cacheOutcome,
       buildMs,
       leafParses: 0,
       rawSourceCount: node.rawSourceCount,

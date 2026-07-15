@@ -121,6 +121,7 @@ import {
   markVoxelTileFresh as markVoxelTileFreshManaged,
   markVoxelTileStale as markVoxelTileStaleManaged,
   queueVoxelFetchRequest as queueVoxelFetchRequestManaged,
+  scheduleVoxelCapacityRetry,
   syncVoxelRequests as syncVoxelRequestsManaged,
 } from "../lib/voxel-requests.js";
 import {
@@ -260,6 +261,7 @@ export function World3DView({
   const loadingVoxelsRef = useRef<Set<string>>(new Set());
   const missingVoxelsRef = useRef<Set<string>>(new Set());
   const failedVoxelsRef = useRef<Map<string, number>>(new Map());
+  const voxelRetryNotBeforeRef = useRef<Map<string, number>>(new Map());
   const pendingVoxelFetchQueueRef = useRef<PendingVoxelFetchRequest[]>([]);
   const activeVoxelFetchCountRef = useRef(0);
   const voxelFetchControllersRef = useRef<Map<string, AbortController>>(
@@ -908,6 +910,7 @@ export function World3DView({
       maxVoxelRetries: MAX_VOXEL_RETRIES,
       loadingVoxels: loadingVoxelsRef.current,
       queueVoxelFetchRequest,
+      voxelRetryNotBefore: voxelRetryNotBeforeRef.current,
       drainVoxelFetchQueue,
       activeVoxelRequestGeneration: activeVoxelRequestGenerationRef.current,
       priority: {
@@ -939,6 +942,7 @@ export function World3DView({
       voxelFetchControllers: voxelFetchControllersRef.current,
       loadingVoxels: loadingVoxelsRef.current,
       queueVoxelFetchRequest,
+      voxelRetryNotBefore: voxelRetryNotBeforeRef.current,
       biomeLabelsDirtyRef,
     });
   }
@@ -1098,6 +1102,17 @@ export function World3DView({
         ) {
           dispatchNextVoxelWork();
         }
+      },
+      onCapacityRetry: (delayedRequest, retryAfterMs) => {
+        scheduleVoxelCapacityRetry({
+          request: delayedRequest,
+          retryAfterMs,
+          retryNotBeforeRef: voxelRetryNotBeforeRef,
+          activeVoxelRequestKeysRef,
+          loadedVoxelsRef,
+          isVoxelTileStale,
+          requestVoxelRegion,
+        });
       },
       includeHaloEmitters:
         debugSettingsRef.current.voxelHaloEmittersEnabled > 0,

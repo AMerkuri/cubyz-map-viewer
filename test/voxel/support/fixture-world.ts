@@ -14,6 +14,8 @@ export const STONE = 1;
 export const EMITTER = 2;
 export const TRANSPARENT = 3;
 export const MODEL = 4;
+export const LOD1_EMITTER = 5;
+export const SEMANTIC = 6;
 
 export type Point = { x: number; y: number; z: number };
 export type Cell = Point & { type: number };
@@ -28,15 +30,15 @@ export type BoundaryFixture = {
 export const colors: BlockColorTable = {
   rgb: new Uint8Array([
     0, 0, 0, 100, 100, 100, 255, 80, 20, 80, 120, 180, 180, 120, 80, 255, 160,
-    40,
+    40, 80, 255, 120,
   ]),
   emittedLightRgb: new Uint8Array([
-    0, 0, 0, 0, 0, 0, 255, 80, 20, 0, 0, 0, 120, 200, 255, 255, 160, 40,
+    0, 0, 0, 0, 0, 0, 255, 80, 20, 0, 0, 0, 120, 200, 255, 40, 220, 80, 0, 0, 0,
   ]),
-  airLike: new Uint8Array([1, 0, 0, 0, 0, 0]),
-  renderKind: new Uint8Array([0, 1, 1, 2, 1, 1]),
-  transparentBackface: new Uint8Array(6),
-  transparentGroup: new Uint32Array(6),
+  airLike: new Uint8Array([1, 0, 0, 0, 0, 0, 0]),
+  renderKind: new Uint8Array([0, 1, 1, 2, 1, 1, 1]),
+  transparentBackface: new Uint8Array(7),
+  transparentGroup: new Uint32Array(7),
   signature: "voxel-test-colors-v1",
 };
 
@@ -58,7 +60,40 @@ export const shapes: BlockShapeTable = {
       sideQuads: [],
       bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
     },
-    { kind: "cube", fallback: "cube" },
+    {
+      kind: "model",
+      fallback: "air",
+      blockId: "fixture:lod1-emitter",
+      modelRef: "fixture:lod1-emitter",
+      sideModelRef: null,
+      rotation: "cubyz:no_rotation",
+      lodReplacement: null,
+      quads: [
+        {
+          vertices: [
+            { x: 0, y: 0, z: 0 },
+            { x: 1, y: 0, z: 0 },
+            { x: 1, y: 0, z: 1 },
+            { x: 0, y: 0, z: 1 },
+          ],
+          normal: { x: 0, y: -1, z: 0 },
+        },
+      ],
+      sideQuads: [],
+      bounds: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
+    },
+    {
+      kind: "semantic",
+      fallback: "air",
+      blockId: "fixture:stairs",
+      semantic: "cubyz:stairs",
+      lodReplacement: null,
+      modelRefs: {},
+      quads: [],
+      variantQuads: {},
+      radius: null,
+      states: null,
+    },
   ],
   signature: "voxel-test-shapes-v1",
 };
@@ -195,6 +230,28 @@ export async function writeAdjacentFixture(
   return required;
 }
 
+export async function writePopulatedEmitterFixture(
+  save: string,
+): Promise<void> {
+  await writeSurface(save);
+  await writeRegions(save, [
+    ...stonePlane(),
+    { x: 40, y: 40, z: 1, type: EMITTER },
+    { x: 41, y: 40, z: 1, type: TRANSPARENT },
+    { x: 39, y: 40, z: 1, type: MODEL },
+    { x: 40, y: 41, z: 1, type: packBlock(SEMANTIC, 1) },
+    { x: 40, y: 39, z: 1, type: STONE },
+    { x: 64, y: 64, z: 1, type: LOD1_EMITTER },
+    { x: 0, y: 72, z: 1, type: EMITTER },
+    { x: 80, y: 80, z: -64, type: EMITTER },
+  ]);
+}
+
+export async function writeEmptyEmitterFixture(save: string): Promise<void> {
+  await writeSurface(save);
+  await writeRegions(save, stonePlane());
+}
+
 export function stonePlane(
   width = REGION_SIZE,
   height = REGION_SIZE,
@@ -297,6 +354,10 @@ export function comparePoints(a: Point, b: Point): number {
 }
 export function samePoint(a: Point, b: Point): boolean {
   return a.x === b.x && a.y === b.y && a.z === b.z;
+}
+
+export function packBlock(type: number, data: number): number {
+  return type | (data << 16);
 }
 
 function u32(value: number): Buffer {

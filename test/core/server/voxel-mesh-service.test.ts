@@ -31,6 +31,24 @@ function createService(
   );
 }
 
+test("aligns cold summary concurrency with resolved worker concurrency", () => {
+  for (const [workerCount, expected] of [
+    [undefined, 1],
+    [4, 4],
+  ] as const) {
+    const service = new VoxelMeshService(
+      "/unused",
+      colors,
+      shapes,
+      workerCount,
+      16,
+      undefined,
+      { pool: new DeferredVoxelPool() },
+    );
+    assert.equal(service.getMetricsSnapshot().summaryLeafBuildLimit, expected);
+  }
+});
+
 test("deduplicates same-key jobs, caches results, and separates halo identities", async () => {
   const pool = new DeferredVoxelPool();
   const service = createService(pool);
@@ -68,6 +86,18 @@ test("deduplicates same-key jobs, caches results, and separates halo identities"
   assert.equal(noHaloJob?.includeHaloEmitters, false);
   if (noHaloJob) pool.complete(noHaloJob);
   await noHalo;
+
+  const metrics = service.getMetricsSnapshot();
+  assert.equal(metrics.admissionAccepted, 2);
+  assert.equal(metrics.sharedPipelineConsumers, 1);
+  assert.equal(metrics.inFlightConsumers, 0);
+  assert.equal(metrics.queueLimit, 32);
+  assert.ok(metrics.mainProcessMemory.rss > 0);
+  assert.equal(metrics.workerDiagnostics?.slots[0]?.phase, "idle");
+  assert.equal(
+    metrics.workerDiagnostics?.preTransferSlots[0]?.phase,
+    "pre-transfer",
+  );
 });
 
 for (const clear of [
@@ -108,6 +138,142 @@ test("drops a result invalidated while its source signature is being computed", 
   service.clear("1/0/0");
   signature.resolve("source");
   assert.equal((await pending).status, "empty");
+});
+
+test("shares ownership after worker completion while validation is pending", async () => {
+  const pool = new DeferredVoxelPool();
+  const signature = createDeferred<string | null>();
+  let signatureCalls = 0;
+  const service = createService(pool, new RecordingEmitterSummaries(), () => {
+    signatureCalls++;
+    return signature.promise;
+  });
+  const first = service.getVoxelMesh("1/0/0", 1, 0, 0, "gzip");
+  const job = pool.jobs[0];
+  assert.ok(job);
+  pool.complete(job);
+  await Promise.resolve();
+
+  const second = service.getVoxelMesh("1/0/0", 1, 0, 0, "gzip");
+  assert.equal(pool.jobs.length, 1);
+  assert.equal(signatureCalls, 1);
+  signature.resolve("source");
+  const responses = await Promise.all([first, second]);
+  assert.equal(responses[0].etag, responses[1].etag);
+});
+
+test("keeps shared work for one consumer when another aborts", async () => {
+  const pool = new DeferredVoxelPool();
+  const service = createService(pool);
+  const firstController = new AbortController();
+  const secondController = new AbortController();
+  const first = service.getVoxelMesh(
+    "1/0/0",
+    1,
+    0,
+    0,
+    "identity",
+    true,
+    firstController.signal,
+  );
+  const second = service.getVoxelMesh(
+    "1/0/0",
+    1,
+    0,
+    0,
+    "identity",
+    true,
+    secondController.signal,
+  );
+  firstController.abort();
+  await assert.rejects(first, { name: "AbortError" });
+  assert.deepEqual(pool.cancelledJobIds, []);
+  const job = pool.jobs[0];
+  assert.ok(job);
+  pool.complete(job);
+  assert.equal((await second).status, "ok");
+  const metrics = service.getMetricsSnapshot();
+  assert.equal(metrics.sharedPipelineConsumers, 1);
+  assert.equal(metrics.consumerCancellations, 1);
+  assert.equal(metrics.runningOrphans, 0);
+});
+
+test("cancels queued work after its final consumer aborts", async () => {
+  const pool = new DeferredVoxelPool();
+  const service = createService(pool);
+  const controller = new AbortController();
+  const pending = service.getVoxelMesh(
+    "1/0/0",
+    1,
+    0,
+    0,
+    "identity",
+    true,
+    controller.signal,
+  );
+  const job = pool.jobs[0];
+  assert.ok(job);
+  pool.queuedJobIds.add(job.id);
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.deepEqual(pool.cancelledJobIds, [job.id]);
+  const metrics = service.getMetricsSnapshot();
+  assert.equal(metrics.consumerCancellations, 1);
+  assert.equal(metrics.queuedCancellations, 1);
+});
+
+test("invalidating queued work removes it before execution", async () => {
+  const pool = new DeferredVoxelPool();
+  const service = createService(pool);
+  const pending = service.getVoxelMesh("1/0/0", 1, 0, 0, "identity");
+  const job = pool.jobs[0];
+  assert.ok(job);
+  pool.queuedJobIds.add(job.id);
+  service.clear("1/0/0");
+  assert.equal((await pending).status, "empty");
+  assert.deepEqual(pool.cancelledJobIds, [job.id]);
+});
+
+test("skips orphan post-processing unless compatible demand rejoins", async () => {
+  for (const rejoin of [false, true]) {
+    const pool = new DeferredVoxelPool();
+    let signatureCalls = 0;
+    const service = createService(
+      pool,
+      new RecordingEmitterSummaries(),
+      async () => {
+        signatureCalls++;
+        return "source";
+      },
+    );
+    const controller = new AbortController();
+    const abandoned = service.getVoxelMesh(
+      "1/0/0",
+      1,
+      0,
+      0,
+      "identity",
+      true,
+      controller.signal,
+    );
+    const job = pool.jobs[0];
+    assert.ok(job);
+    controller.abort();
+    await assert.rejects(abandoned, { name: "AbortError" });
+    const replacement = rejoin
+      ? service.getVoxelMesh("1/0/0", 1, 0, 0, "identity")
+      : null;
+    pool.complete(job);
+    if (replacement) assert.equal((await replacement).status, "ok");
+    else await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(signatureCalls, rejoin ? 1 : 0);
+    assert.equal(pool.jobs.length, 1);
+    const metrics = service.getMetricsSnapshot();
+    assert.equal(metrics.consumerCancellations, 1);
+    assert.equal(metrics.runningOrphans, 1);
+    assert.equal(metrics.orphanRejoins, rejoin ? 1 : 0);
+    assert.equal(metrics.orphanCompletions, rejoin ? 0 : 1);
+  }
 });
 
 test("accounts shared raw storage once and evicts when a compression variant grows the entry", async () => {
@@ -174,6 +340,7 @@ test("does not retain request preparation after a failed mesh request", async ()
 test("exposes summary cache diagnostics and clears summary state globally", () => {
   const summaries = new RecordingEmitterSummaries();
   summaries.metrics = {
+    ...summaries.metrics,
     entries: 3,
     estimatedBytes: 4096,
     retainedClusters: 24,
@@ -192,6 +359,15 @@ test("exposes summary cache diagnostics and clears summary state globally", () =
       evictions: metrics.summaryCacheEvictions,
       oversizedSkips: metrics.summaryCacheOversizedSkips,
       activeWork: metrics.summaryActiveWork,
+      nodeRequests: metrics.summaryNodeRequests,
+      nodeMemoryHits: metrics.summaryNodeMemoryHits,
+      nodeDiskHits: metrics.summaryNodeDiskHits,
+      nodeBuilds: metrics.summaryNodeBuilds,
+      leafExtractions: metrics.summaryLeafExtractions,
+      extractedSources: metrics.summaryExtractedSources,
+      leafBuildLimit: metrics.summaryLeafBuildLimit,
+      leafBuildActive: metrics.summaryLeafBuildActive,
+      leafBuildQueued: metrics.summaryLeafBuildQueued,
     },
     summaries.metrics,
   );

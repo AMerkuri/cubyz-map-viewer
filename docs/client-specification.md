@@ -96,6 +96,8 @@ Both the HTTP request queue and compact-input worker dispatch use the same deter
 
 Every LOD selection pass increments the generation and reprioritizes queued fetching, compact-input, and expanded-output records without duplicating a tile request. A visible stale-tile refresh derives coverage and view priority from that tile's current loaded state and conservative bounds rather than using a global refresh priority.
 
+A voxel `503 Service Unavailable` response is temporary capacity pressure only when it includes valid `Retry-After` guidance. The active HTTP slot is released immediately, the tile receives a per-key not-before deadline, and it does not consume the permanent generation-failure budget. At the deadline, only a tile that remains active demand (or a loaded stale refresh) re-enters the normal priority queue; other eligible work continues while it waits. Other HTTP and network failures retain existing retry accounting.
+
 ## Voxel Pipeline Tuning
 
 The staged scheduler separates network, compact worker input, active worker execution, expanded worker output, and scene insertion. The following new `MapDebugSettings` fields and defaults are defined in `DEFAULT_MAP_DEBUG_SETTINGS`:

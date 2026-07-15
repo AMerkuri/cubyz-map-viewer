@@ -7,8 +7,10 @@ import { type Request, type Response, Router } from "express";
 import { logger } from "../services/logger.js";
 import type {
   VoxelContentEncoding,
+  VoxelMeshResponse,
   VoxelMeshServiceApi,
 } from "../services/voxel-mesh-service.js";
+import { VoxelQueueFullError } from "../services/voxel-worker-pool.js";
 import { etagMatches } from "./http.js";
 import { assertAlignedRegion, parseRegionParams } from "./validation.js";
 
@@ -171,6 +173,13 @@ export function createVoxelsRouter(
       return;
     }
 
+    const requestController = new AbortController();
+    const abortRequest = () => requestController.abort();
+    req.once("aborted", abortRequest);
+    res.once("close", () => {
+      if (!res.writableEnded) abortRequest();
+    });
+
     const currentEtag = await voxelMeshService.getCurrentEtag(
       key,
       lod,
@@ -183,6 +192,7 @@ export function createVoxelsRouter(
       res.status(204).end();
       return;
     }
+    if (requestController.signal.aborted) return;
     if (etagMatches(req.headers["if-none-match"], currentEtag)) {
       res.set("Cache-Control", VOXEL_CACHE_CONTROL);
       res.append("Vary", "Accept-Encoding");
@@ -191,14 +201,26 @@ export function createVoxelsRouter(
       return;
     }
 
-    const response = await voxelMeshService.getVoxelMesh(
-      key,
-      lod,
-      regionX,
-      regionY,
-      contentEncoding,
-      includeHaloEmitters,
-    );
+    let response: VoxelMeshResponse;
+    try {
+      response = await voxelMeshService.getVoxelMesh(
+        key,
+        lod,
+        regionX,
+        regionY,
+        contentEncoding,
+        includeHaloEmitters,
+        requestController.signal,
+      );
+    } catch (error) {
+      if (requestController.signal.aborted || isAbortError(error)) return;
+      if (error instanceof VoxelQueueFullError) {
+        res.set("Retry-After", "1");
+        res.status(503).json({ error: "Voxel generation capacity is full" });
+        return;
+      }
+      throw error;
+    }
     res.set("X-Voxel-Source", response.metrics.source);
     res.set("X-Voxel-Cache", response.metrics.cacheOutcome);
     res.set("X-Voxel-Queue-Ms", response.metrics.queueMs.toFixed(1));
@@ -380,4 +402,8 @@ export function createVoxelsRouter(
   });
 
   return router;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }

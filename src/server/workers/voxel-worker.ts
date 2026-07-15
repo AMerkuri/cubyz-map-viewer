@@ -20,10 +20,13 @@ configureRepresentedEmitterCache(
   data.representedEmitterCacheMaxSources,
 );
 
-function getDiagnostics(): VoxelWorkerDiagnostics {
+function getDiagnostics(
+  phase: VoxelWorkerDiagnostics["phase"],
+): VoxelWorkerDiagnostics {
   const memory = process.memoryUsage();
   const cache = getRepresentedEmitterCacheMetrics();
   return {
+    phase,
     heapUsed: memory.heapUsed,
     heapTotal: memory.heapTotal,
     external: memory.external,
@@ -63,7 +66,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
     );
     const runMs = performance.now() - startedAt;
     completedJobs++;
-    const diagnostics = getDiagnostics();
+    const preTransferDiagnostics = getDiagnostics("pre-transfer");
     const result: VoxelJobResult = generated.buffer
       ? generated.stats
         ? {
@@ -74,7 +77,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
             status: "ok",
             buffer: generated.buffer,
             runMs,
-            diagnostics,
+            preTransferDiagnostics,
             stats: generated.stats,
           }
         : {
@@ -85,7 +88,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
             status: "error",
             error: "Voxel mesh generation returned a buffer without stats",
             runMs,
-            diagnostics,
+            preTransferDiagnostics,
           }
       : {
           id: job.id,
@@ -94,7 +97,7 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
           keyEpoch: job.keyEpoch,
           status: "empty",
           runMs,
-          diagnostics,
+          preTransferDiagnostics,
           stats: generated.stats,
         };
     if (result.status === "ok") {
@@ -102,6 +105,11 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
     } else {
       parentPort?.postMessage(result);
     }
+    parentPort?.postMessage({
+      type: "idle",
+      id: job.id,
+      diagnostics: getDiagnostics("idle"),
+    });
   } catch (error) {
     completedJobs++;
     const result: VoxelJobResult = {
@@ -112,8 +120,13 @@ parentPort.on("message", async (message: VoxelWorkerMessage) => {
       status: "error",
       error: error instanceof Error ? error.message : String(error),
       runMs: performance.now() - startedAt,
-      diagnostics: getDiagnostics(),
+      preTransferDiagnostics: getDiagnostics("pre-transfer"),
     };
     parentPort?.postMessage(result);
+    parentPort?.postMessage({
+      type: "idle",
+      id: job.id,
+      diagnostics: getDiagnostics("idle"),
+    });
   }
 });

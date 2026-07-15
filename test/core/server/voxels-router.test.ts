@@ -7,14 +7,32 @@ import type {
   VoxelMeshServiceApi,
   VoxelServiceMetricsSnapshot,
 } from "../../../src/server/services/voxel-mesh-service.js";
-import { requestVoxels } from "../support/http-harness.js";
+import { VoxelQueueFullError } from "../../../src/server/services/voxel-worker-pool.js";
+import { abortVoxelsRequest, requestVoxels } from "../support/http-harness.js";
 
 const metrics: VoxelServiceMetricsSnapshot = {
   workers: 1,
   workerRuntimeMode: "source",
   queueDepth: 0,
+  queueLimit: 32,
+  admissionAccepted: 0,
+  admissionRejected: 0,
+  queuedCancellations: 0,
   runningJobs: 0,
   inFlightJobs: 0,
+  inFlightConsumers: 0,
+  sharedPipelineConsumers: 0,
+  consumerCancellations: 0,
+  runningOrphans: 0,
+  orphanRejoins: 0,
+  orphanCompletions: 0,
+  mainProcessMemory: {
+    rss: 0,
+    heapUsed: 0,
+    heapTotal: 0,
+    external: 0,
+    arrayBuffers: 0,
+  },
   cacheEntries: 0,
   cacheBytes: 0,
   cacheRawBytes: 0,
@@ -27,6 +45,15 @@ const metrics: VoxelServiceMetricsSnapshot = {
   summaryCacheEvictions: 0,
   summaryCacheOversizedSkips: 0,
   summaryActiveWork: 0,
+  summaryNodeRequests: 0,
+  summaryNodeMemoryHits: 0,
+  summaryNodeDiskHits: 0,
+  summaryNodeBuilds: 0,
+  summaryLeafExtractions: 0,
+  summaryExtractedSources: 0,
+  summaryLeafBuildLimit: 1,
+  summaryLeafBuildActive: 0,
+  summaryLeafBuildQueued: 0,
   requests: 0,
   cacheHits: 0,
   workerRequests: 0,
@@ -87,6 +114,7 @@ class FakeVoxelService implements VoxelMeshServiceApi {
     _regionY: number,
     encoding: VoxelContentEncoding,
     includeHaloEmitters = true,
+    _signal?: AbortSignal,
   ): Promise<VoxelMeshResponse> {
     this.calls.push({ key, encoding, includeHaloEmitters });
     return this.empty
@@ -175,6 +203,42 @@ test("returns cache headers, conditional responses, empty responses, and diagnos
   });
   assert.equal(empty.status, 204);
   assert.equal(empty.headers["cache-control"], "no-store");
+});
+
+test("returns retry guidance when distinct queue admission is full", async () => {
+  const service = new FakeVoxelService();
+  service.getVoxelMesh = async () => {
+    throw new VoxelQueueFullError();
+  };
+  const result = await requestVoxels(service, "/api/voxels/1/0/0", {
+    "accept-encoding": "br",
+  });
+  assert.equal(result.status, 503);
+  assert.equal(result.headers["retry-after"], "1");
+});
+
+test("aborts the service consumer when the HTTP client disconnects", async () => {
+  const service = new FakeVoxelService();
+  let receivedSignal: AbortSignal | undefined;
+  service.getVoxelMesh = async (
+    _key: string,
+    _lod: number,
+    _regionX: number,
+    _regionY: number,
+    _encoding: VoxelContentEncoding,
+    _includeHalo = true,
+    signal?: AbortSignal,
+  ) => {
+    receivedSignal = signal;
+    await new Promise<void>((resolve) =>
+      signal?.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    throw error;
+  };
+  await abortVoxelsRequest(service, "/api/voxels/1/0/0");
+  assert.equal(receivedSignal?.aborted, true);
 });
 
 for (const path of [

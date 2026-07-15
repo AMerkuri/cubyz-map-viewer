@@ -11,11 +11,16 @@ process.env.VOXEL_CACHE_DIR = cacheRoot;
 const generator = await import(
   "../../../src/server/services/voxel-generator.js"
 );
+const emitterExtractor = await import(
+  "../../../src/server/services/voxel-emitter-extractor.js"
+);
 const summaries = await import(
   "../../../src/server/services/voxel-emitter-summary-service.js"
 );
 
 export const generateVoxelMesh = generator.generateVoxelMesh;
+export const extractLod1RepresentedEmitters =
+  emitterExtractor.extractLod1RepresentedEmitters;
 export const VoxelEmitterSummaryService = summaries.VoxelEmitterSummaryService;
 
 type GeneratedLod1 = Awaited<ReturnType<typeof generator.generateVoxelMesh>> & {

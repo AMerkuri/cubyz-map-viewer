@@ -105,6 +105,7 @@ export function requestDirectVoxelRefresh(args: {
   maxVoxelRetries: number;
   loadingVoxels: Set<string>;
   queueVoxelFetchRequest: (request: PendingVoxelFetchRequest) => void;
+  voxelRetryNotBefore?: Map<string, number>;
   drainVoxelFetchQueue: () => void;
   activeVoxelRequestGeneration: number;
   priority?: VoxelWorkPriority;
@@ -118,11 +119,13 @@ export function requestDirectVoxelRefresh(args: {
     maxVoxelRetries,
     loadingVoxels,
     queueVoxelFetchRequest,
+    voxelRetryNotBefore,
     drainVoxelFetchQueue,
     activeVoxelRequestGeneration,
     priority,
   } = args;
   const key = voxelTileKey(lod, regionX, regionY);
+  if ((voxelRetryNotBefore?.get(key) ?? 0) > performance.now()) return;
   const retries = failedVoxels.get(key);
   if (retries !== undefined && retries >= maxVoxelRetries) return;
 
@@ -167,6 +170,7 @@ export function requestVoxelRegion(args: {
   voxelFetchControllers: Map<string, AbortController>;
   loadingVoxels: Set<string>;
   queueVoxelFetchRequest: (request: PendingVoxelFetchRequest) => void;
+  voxelRetryNotBefore?: Map<string, number>;
 }): void {
   const {
     request,
@@ -186,8 +190,10 @@ export function requestVoxelRegion(args: {
     voxelFetchControllers,
     loadingVoxels,
     queueVoxelFetchRequest,
+    voxelRetryNotBefore,
   } = args;
   const { key } = request;
+  if ((voxelRetryNotBefore?.get(key) ?? 0) > performance.now()) return;
   if (loadedVoxels.has(key) && !isVoxelTileStale(key)) return;
 
   const restored = restoreVoxelTileFromWarmCache(key);

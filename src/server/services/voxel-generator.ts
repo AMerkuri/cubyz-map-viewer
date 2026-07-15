@@ -6,7 +6,6 @@ import { join, resolve } from "node:path";
 import {
   CHUNK_SIZE,
   type ChunkData,
-  parseRegionFile,
   REGION_SIZE,
   type RegionData,
 } from "../parsers/region.js";
@@ -39,6 +38,7 @@ import {
 } from "./greedy-mesh.js";
 import { logger } from "./logger.js";
 import { VOXEL_GENERATOR_CACHE_VERSION } from "./voxel-cache-version.js";
+import { loadVoxelRegionFile } from "./voxel-column-source.js";
 import {
   EMITTER_MAX_POWER,
   type EmitterSummaryBuildMetrics,
@@ -46,6 +46,26 @@ import {
   type EmitterSummaryNode,
   getEmitterSummaryRadius,
 } from "./voxel-emitter-aggregation.js";
+import { extractLod1RepresentedEmitters } from "./voxel-emitter-extractor.js";
+import {
+  EMITTER_OPEN_FACE_X_NEG,
+  EMITTER_OPEN_FACE_X_POS,
+  EMITTER_OPEN_FACE_Y_NEG,
+  EMITTER_OPEN_FACE_Y_POS,
+  EMITTER_OPEN_FACE_Z_NEG,
+  EMITTER_OPEN_FACE_Z_POS,
+  getRepresentedLodMask,
+  getBlockData as getSharedBlockData,
+  getEmittedLight as getSharedEmittedLight,
+  getEmitterOpenFaces as getSharedEmitterOpenFaces,
+  getPaletteIndex as getSharedPaletteIndex,
+  isAirType as isSharedAirType,
+  isBlockBoundarySolid as isSharedBlockBoundarySolid,
+  isTransparentType as isSharedTransparentType,
+  isTraversableBlockValue as isSharedTraversableBlockValue,
+  type RepresentedEmitterSource,
+  type VoxelFace,
+} from "./voxel-emitter-semantics.js";
 
 const VALID_LODS = [1, 2, 4, 8, 16, 32];
 const COLUMN_VOXELS = VOXEL_REGION_SIZE;
@@ -58,12 +78,6 @@ const HALO_PROTECTED_RECORDS_PER_EDGE = 256;
 const HALO_PROTECTED_RECORDS_TOTAL = HALO_PROTECTED_RECORDS_PER_EDGE * 4;
 const BOUNDARY_SAMPLE_BUCKET_SIZE = 4;
 const MAX_BOUNDARY_SAMPLES_PER_EDGE = 4096;
-const EMITTER_OPEN_FACE_X_POS = 1 << 0;
-const EMITTER_OPEN_FACE_X_NEG = 1 << 1;
-const EMITTER_OPEN_FACE_Y_POS = 1 << 2;
-const EMITTER_OPEN_FACE_Y_NEG = 1 << 3;
-const EMITTER_OPEN_FACE_Z_POS = 1 << 4;
-const EMITTER_OPEN_FACE_Z_NEG = 1 << 5;
 // Safety ceiling that bounds pathological model/semantic geometry without
 // dropping ordinary dense decorative regions (spawn areas, sign-heavy plots,
 // forests). Sampled dense regions emit on the order of tens of thousands of
@@ -117,7 +131,7 @@ function evictRepresentedEmitterSources(): void {
   }
 }
 
-type Direction = "x-" | "x+" | "y-" | "y+" | "z+" | "z-";
+type Direction = VoxelFace;
 type HorizontalEdge = "x-" | "x+" | "y-" | "y+";
 
 interface BoundaryGeometrySample {
@@ -173,17 +187,6 @@ interface FaceEntry {
   packedAo: number;
   renderKind: number;
   mergeKey: number;
-}
-
-interface RepresentedEmitterSource {
-  x: number;
-  y: number;
-  z: number;
-  r: number;
-  g: number;
-  b: number;
-  openFaces: number;
-  representedLods: number;
 }
 
 const OPPOSITE_FACE: Record<Direction, Direction> = {
@@ -376,22 +379,22 @@ export async function generateVoxelMesh(
   }
 
   function isTraversableBlockValue(blockValue: number): boolean {
-    const paletteIndex = getPaletteIndex(blockValue);
-    if (isAirType(paletteIndex)) return true;
-    if (isTransparentType(paletteIndex)) return true;
-    const shape = resolveShapeForLod(blockShapes, paletteIndex, lod);
-    if (shape.kind === "model") return true;
-    if (shape.kind !== "semantic") return false;
-    return isTraversableSemantic(shape, getBlockData(blockValue), lod);
+    return isSharedTraversableBlockValue(
+      blockColors,
+      blockShapes,
+      blockValue,
+      lod,
+    );
   }
 
   function isBlockBoundarySolid(blockValue: number, face: Direction): boolean {
-    const paletteIndex = getPaletteIndex(blockValue);
-    if (isAirType(paletteIndex)) return false;
-    if (isTransparentType(paletteIndex)) return false;
-    const shape = resolveShapeForLod(blockShapes, paletteIndex, lod);
-    if (shape.kind !== "semantic") return false;
-    return isSemanticBoundarySolid(shape, getBlockData(blockValue), face, lod);
+    return isSharedBlockBoundarySolid(
+      blockColors,
+      blockShapes,
+      blockValue,
+      face,
+      lod,
+    );
   }
 
   function getType(chunk: ChunkData | null, idx: number): number {
@@ -401,19 +404,19 @@ export async function generateVoxelMesh(
   }
 
   function getPaletteIndex(blockValue: number): number {
-    return blockValue & 0xffff;
+    return getSharedPaletteIndex(blockValue);
   }
 
   function getBlockData(blockValue: number): number {
-    return blockValue >>> 16;
+    return getSharedBlockData(blockValue);
   }
 
   function isAirType(paletteIndex: number): boolean {
-    return paletteIndex === 0 || blockColors.airLike[paletteIndex] === 1;
+    return isSharedAirType(blockColors, paletteIndex);
   }
 
   function isTransparentType(paletteIndex: number): boolean {
-    return blockColors.renderKind[paletteIndex] === 2;
+    return isSharedTransparentType(blockColors, paletteIndex);
   }
 
   function getRenderKind(paletteIndex: number): number {
@@ -446,12 +449,7 @@ export async function generateVoxelMesh(
   function getEmittedLight(
     paletteIndex: number,
   ): { r: number; g: number; b: number } | null {
-    const off = paletteIndex * 3;
-    if (off + 2 >= blockColors.emittedLightRgb.length) return null;
-    const r = blockColors.emittedLightRgb[off] ?? 0;
-    const g = blockColors.emittedLightRgb[off + 1] ?? 0;
-    const b = blockColors.emittedLightRgb[off + 2] ?? 0;
-    return r === 0 && g === 0 && b === 0 ? null : { r, g, b };
+    return getSharedEmittedLight(blockColors, paletteIndex);
   }
 
   function qualifyBlockEmitter(
@@ -1111,27 +1109,28 @@ export async function generateVoxelMesh(
     if (!loader) {
       loader = (async () => {
         const path = join(colDir, `${regionWorldZ}.region`);
-        if (!existsSync(path)) return null;
-        try {
-          regionsParsed++;
-          return await parseRegionFile(
-            path,
-            regionX,
-            regionY,
-            regionWorldZ,
-            lod,
-          );
-        } catch (error) {
-          logger.warn("Failed to parse sparse region", {
-            path,
-            lod,
-            regionX,
-            regionY,
-            regionWorldZ,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return null;
-        }
+        const loaded = await loadVoxelRegionFile(
+          path,
+          regionX,
+          regionY,
+          regionWorldZ,
+          lod,
+        );
+        if (loaded.status === "missing") return null;
+        regionsParsed++;
+        if (loaded.status === "parsed") return loaded.region;
+        logger.warn("Failed to parse sparse region", {
+          path,
+          lod,
+          regionX,
+          regionY,
+          regionWorldZ,
+          error:
+            loaded.error instanceof Error
+              ? loaded.error.message
+              : String(loaded.error),
+        });
+        return null;
       })();
       regionLoaders.set(regionWorldZ, loader);
     }
@@ -1291,31 +1290,32 @@ export async function generateVoxelMesh(
         String(normalizedRegionY),
         `${regionWorldZ}.region`,
       );
-      if (!existsSync(path)) {
+      const loaded = await loadVoxelRegionFile(
+        path,
+        normalizedRegionX,
+        normalizedRegionY,
+        regionWorldZ,
+        lod,
+      );
+      if (loaded.status === "missing") {
         externalRegionMisses++;
         return null;
       }
-      try {
-        externalRegionParses++;
-        return await parseRegionFile(
-          path,
-          normalizedRegionX,
-          normalizedRegionY,
-          regionWorldZ,
-          lod,
-        );
-      } catch (error) {
-        externalRegionParseErrors++;
-        logger.warn("Failed to parse external sparse region", {
-          path,
-          lod,
-          normalizedRegionX,
-          normalizedRegionY,
-          regionWorldZ,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return null;
-      }
+      externalRegionParses++;
+      if (loaded.status === "parsed") return loaded.region;
+      externalRegionParseErrors++;
+      logger.warn("Failed to parse external sparse region", {
+        path,
+        lod,
+        normalizedRegionX,
+        normalizedRegionY,
+        regionWorldZ,
+        error:
+          loaded.error instanceof Error
+            ? loaded.error.message
+            : String(loaded.error),
+      });
+      return null;
     })();
     externalRegionLoaders.set(cacheKey, loader);
     return loader;
@@ -1440,26 +1440,7 @@ export async function generateVoxelMesh(
     y: number,
     z: number,
   ): Promise<number> {
-    let mask = 0;
-    if (await isTraversableCellWorld(x + 1, y, z)) {
-      mask |= EMITTER_OPEN_FACE_X_POS;
-    }
-    if (await isTraversableCellWorld(x - 1, y, z)) {
-      mask |= EMITTER_OPEN_FACE_X_NEG;
-    }
-    if (await isTraversableCellWorld(x, y + 1, z)) {
-      mask |= EMITTER_OPEN_FACE_Y_POS;
-    }
-    if (await isTraversableCellWorld(x, y - 1, z)) {
-      mask |= EMITTER_OPEN_FACE_Y_NEG;
-    }
-    if (await isTraversableCellWorld(x, y, z + 1)) {
-      mask |= EMITTER_OPEN_FACE_Z_POS;
-    }
-    if (await isTraversableCellWorld(x, y, z - 1)) {
-      mask |= EMITTER_OPEN_FACE_Z_NEG;
-    }
-    return mask;
+    return getSharedEmitterOpenFaces(x, y, z, isTraversableCellWorld);
   }
 
   async function getPackedFaceAo(
@@ -1729,19 +1710,6 @@ function emitterOpenFaceBit(face: Direction): number {
   }
 }
 
-function getRepresentedLodMask(
-  blockShapes: BlockShapeTable,
-  paletteIndex: number,
-): number {
-  let mask = 0;
-  for (const lod of VALID_LODS) {
-    if (resolveShapeForLod(blockShapes, paletteIndex, lod).kind !== "air") {
-      mask |= 1 << Math.log2(lod);
-    }
-  }
-  return mask;
-}
-
 async function getCachedRepresentedEmitterSources(
   savePath: string,
   blockColors: BlockColorTable,
@@ -1780,15 +1748,13 @@ async function getCachedRepresentedEmitterSources(
   const existing = representedSourceInFlight.get(key);
   if (existing) return existing;
 
-  const pending = generateVoxelMesh(
+  const pending = extractLod1RepresentedEmitters(
     savePath,
     blockColors,
     blockShapes,
-    1,
     regionX,
     regionY,
-    { includeHaloEmitters: false, returnRepresentedSources: true },
-  ).then((result) => result.representedSources ?? []);
+  ).then((result) => result.sources);
   representedSourceInFlight.set(key, pending);
   try {
     const sources = await pending;
@@ -1967,58 +1933,6 @@ function getModelQuadsForData(
   return parts.flatMap(({ quads, turns }) =>
     quads.map((quad) => ({ quad, turns })),
   );
-}
-
-function isTraversableSemantic(
-  shape: BlockSemanticShape,
-  data: number,
-  lod: number,
-): boolean {
-  if (lod !== 1) return false;
-  return shape.semantic !== "cubyz:stairs" || (data & 0xff) !== 0;
-}
-
-function isSemanticBoundarySolid(
-  shape: BlockSemanticShape,
-  data: number,
-  face: Direction,
-  lod: number,
-): boolean {
-  if (lod !== 1 || shape.semantic !== "cubyz:stairs") return false;
-  const removedMask = data & 0xff;
-  const occupied = (x: number, y: number, z: number) =>
-    (removedMask & (1 << ((x * 2 + y) * 2 + z))) === 0;
-  for (let sx = 0; sx < 2; sx++) {
-    for (let sy = 0; sy < 2; sy++) {
-      for (let sz = 0; sz < 2; sz++) {
-        if (!isSubBlockOnFace(sx, sy, sz, face)) continue;
-        if (!occupied(sx, sy, sz)) return false;
-      }
-    }
-  }
-  return true;
-}
-
-function isSubBlockOnFace(
-  x: number,
-  y: number,
-  z: number,
-  face: Direction,
-): boolean {
-  switch (face) {
-    case "x-":
-      return x === 0;
-    case "x+":
-      return x === 1;
-    case "y-":
-      return y === 0;
-    case "y+":
-      return y === 1;
-    case "z-":
-      return z === 0;
-    case "z+":
-      return z === 1;
-  }
 }
 
 function getSemanticQuadsForData(

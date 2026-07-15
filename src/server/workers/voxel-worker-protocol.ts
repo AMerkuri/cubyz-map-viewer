@@ -14,6 +14,7 @@ export interface VoxelWorkerData {
 }
 
 export interface VoxelWorkerDiagnostics {
+  phase: "pre-transfer" | "idle";
   heapUsed: number;
   heapTotal: number;
   external: number;
@@ -99,7 +100,7 @@ type VoxelJobResultBase = {
   globalEpoch: number;
   keyEpoch: number;
   runMs: number;
-  diagnostics: VoxelWorkerDiagnostics;
+  preTransferDiagnostics: VoxelWorkerDiagnostics;
 };
 
 export type VoxelJobResult = VoxelJobResultBase &
@@ -119,6 +120,16 @@ export type VoxelJobResult = VoxelJobResultBase &
         stats?: VoxelGenerationStats;
       }
   );
+
+export interface VoxelWorkerIdleMessage {
+  type: "idle";
+  id: number;
+  diagnostics: VoxelWorkerDiagnostics;
+}
+
+export type VoxelWorkerResponseMessage =
+  | VoxelJobResult
+  | VoxelWorkerIdleMessage;
 
 export interface VoxelWorkerRequestMessage {
   type: "job";

@@ -21,6 +21,37 @@ import { hasLightAt } from "../support/seam-colors.js";
 
 after(cleanupVoxelCache);
 
+test("server retains the literal uncapped halo emitter baseline", async () => {
+  await withTemporarySave("literal-uncapped-halo", async (save) => {
+    const fixture = boundaryFixtures[0];
+    assert.ok(fixture);
+    await writeBoundaryFixture(save, fixture, false);
+    const generated = await generateLod1(save, colors, shapes);
+    assert.deepEqual(decodeEmitterRecords(generated.buffer), [
+      {
+        x: 64,
+        y: 64,
+        z: 1,
+        r: 255,
+        g: 80,
+        b: 20,
+        halo: false,
+        openFaces: 31,
+      },
+      {
+        x: -1,
+        y: 64,
+        z: 1,
+        r: 255,
+        g: 80,
+        b: 20,
+        halo: true,
+        openFaces: 31,
+      },
+    ]);
+  });
+});
+
 for (const fixture of boundaryFixtures) {
   for (const pressure of [false, true]) {
     test(`server boundary ${fixture.name} ${pressure ? "cap-pressure" : "uncapped"}`, async () => {
