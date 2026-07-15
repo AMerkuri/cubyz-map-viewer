@@ -411,6 +411,32 @@ export function runVoxelLodSelection(args: {
     addVisibleQuadrant(visibleQuadrantMasks, key, quadrant);
   };
 
+  const selectLoadedDescendantFallback = (entry: TileEntry): boolean => {
+    if (entry.lod <= minRenderedVoxelLod) return false;
+
+    let foundLoadedCoverage = false;
+    for (const child of getImmediateFinerVoxelChildren(
+      entry.lod,
+      entry.regionX,
+      entry.regionY,
+    )) {
+      if (!isAllowedLod(child.lod)) continue;
+
+      const childKey = voxelTileKey(child.lod, child.regionX, child.regionY);
+      if (loadedVoxels.has(childKey)) {
+        retainedLoadedVoxelKeys.add(childKey);
+        visibleQuadrantMasks.set(childKey, 0b1111);
+        foundLoadedCoverage = true;
+        continue;
+      }
+
+      if (selectLoadedDescendantFallback(child)) {
+        foundLoadedCoverage = true;
+      }
+    }
+    return foundLoadedCoverage;
+  };
+
   const getEffectiveDist = (lod: number, regionX: number, regionY: number) => {
     const key = voxelTileKey(lod, regionX, regionY);
     const knownTile = loadedVoxels.get(key) ?? warmCachedVoxels.get(key)?.tile;
@@ -701,6 +727,8 @@ export function runVoxelLodSelection(args: {
         retainedLoadedVoxelKeys.add(key);
         visibleQuadrantMasks.set(key, 0b1111);
         hasSelectedCoverage = true;
+      } else if (isAllowedLod(entry.lod)) {
+        hasSelectedCoverage = selectLoadedDescendantFallback(entry);
       }
     }
 

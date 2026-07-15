@@ -33,8 +33,14 @@ function runSelection(args: {
   screenSpaceDistanceScale?: number;
   renderDistance?: number;
   rootLod?: number;
+  availableVoxelKeys?: Set<string>;
   loadedVoxels?: Map<string, LoadedVoxelTile>;
   warmCachedVoxels?: Map<string, WarmCachedVoxelTile>;
+  loadingVoxels?: Set<string>;
+  pendingVoxelMeshQueue?: [];
+  voxelUnloadGraceUntil?: Map<string, number>;
+  now?: number;
+  unloadVoxelTile?: (key: string) => void;
 }) {
   const availableLods = args.availableLods ?? LODS;
   return runVoxelLodSelection({
@@ -48,19 +54,19 @@ function runSelection(args: {
     viewportAspect: 16 / 9,
     focusPoint: args.focusPoint ?? null,
     roots: [{ lod: args.rootLod ?? 32, regionX: 0, regionY: 0 }],
-    availableVoxelKeys: new Set(
-      availableLods.map((lod) => voxelTileKey(lod, 0, 0)),
-    ),
+    availableVoxelKeys:
+      args.availableVoxelKeys ??
+      new Set(availableLods.map((lod) => voxelTileKey(lod, 0, 0))),
     loadedVoxels: args.loadedVoxels ?? new Map(),
     warmCachedVoxels: args.warmCachedVoxels ?? new Map(),
-    loadingVoxels: new Set(),
-    pendingVoxelMeshQueue: [],
-    voxelUnloadGraceUntil: new Map(),
+    loadingVoxels: args.loadingVoxels ?? new Set(),
+    pendingVoxelMeshQueue: args.pendingVoxelMeshQueue ?? [],
+    voxelUnloadGraceUntil: args.voxelUnloadGraceUntil ?? new Map(),
     voxelThresholds: thresholds,
     renderDistance: args.renderDistance ?? 150_000,
     minRenderedVoxelLod: 1,
     requestGeneration: args.generation ?? 1,
-    now: 10_000,
+    now: args.now ?? 10_000,
     stableForDetail: true,
     debugSettings: {
       voxelBehindCameraDotStart: -0.5,
@@ -76,8 +82,47 @@ function runSelection(args: {
     voxelViewClasses: args.viewClasses ?? new Map(),
     getVoxelRefreshVersion: () => 0,
     isVoxelTileStale: () => false,
-    unloadVoxelTile: () => {},
+    unloadVoxelTile: args.unloadVoxelTile ?? (() => {}),
   });
+}
+
+function loadedTile(
+  lod: number,
+  regionX: number,
+  regionY: number,
+): LoadedVoxelTile {
+  const key = voxelTileKey(lod, regionX, regionY);
+  return {
+    key,
+    lod,
+    regionX,
+    regionY,
+    voxelSize: lod,
+    subMeshes: [0, 1, 2, 3].map((quadrantIndex) => ({
+      quadrantIndex,
+      mesh: new THREE.Mesh(new THREE.BufferGeometry()),
+      baseColors: new Float32Array(),
+      faceAo: new Uint8Array(),
+      trianglePaletteIndices: new Uint32Array(),
+      aoBoundarySignature: "",
+    })),
+    transparentSubMeshes: [],
+    minZ: 0,
+    maxZ: 1,
+    chunkCoverage: 0b1111,
+    chunkTopHeights: new Float32Array(16).fill(1),
+    emitterRecords: [],
+    haloEmitterSourceKeys: [],
+    borderLines: new THREE.LineSegments(new THREE.BufferGeometry()),
+  };
+}
+
+function assertTileVisible(tile: LoadedVoxelTile, visible: boolean): void {
+  assert.equal(tile.borderLines.visible, visible);
+  assert.deepEqual(
+    tile.subMeshes.map((subMesh) => subMesh.mesh.visible),
+    [visible, visible, visible, visible],
+  );
 }
 
 function requestedLods(result: ReturnType<typeof runSelection>): number[] {
@@ -171,6 +216,95 @@ test("missing child retains an eligible coarser fallback request", () => {
   );
   assert.ok(lods.includes(2));
   assert.ok(!lods.includes(1));
+});
+
+test("loaded fine descendants remain visible until the desired coarse tile is scene-ready", () => {
+  const parent = loadedTile(4, 0, 0);
+  const descendants = [
+    loadedTile(2, 0, 0),
+    loadedTile(2, 256, 0),
+    loadedTile(2, 0, 256),
+    loadedTile(2, 256, 256),
+  ];
+  const loadedVoxels = new Map(
+    descendants.map((tile) => [tile.key, tile] as const),
+  );
+  const voxelUnloadGraceUntil = new Map<string, number>();
+
+  const loading = runSelection({
+    cameraForward: new THREE.Vector3(0, -1, 0),
+    rootLod: 4,
+    availableLods: [4],
+    loadedVoxels,
+    voxelUnloadGraceUntil,
+  });
+
+  assert.deepEqual(requestedLods(loading), [4]);
+  for (const descendant of descendants) assertTileVisible(descendant, true);
+
+  loadedVoxels.set(parent.key, parent);
+  runSelection({
+    cameraForward: new THREE.Vector3(0, -1, 0),
+    rootLod: 4,
+    availableLods: [4],
+    loadedVoxels,
+    voxelUnloadGraceUntil,
+  });
+
+  assertTileVisible(parent, true);
+  for (const descendant of descendants) assertTileVisible(descendant, false);
+  for (const descendant of descendants) {
+    assert.equal(voxelUnloadGraceUntil.get(descendant.key), 10_750);
+  }
+
+  const unloaded: string[] = [];
+  runSelection({
+    cameraForward: new THREE.Vector3(0, -1, 0),
+    rootLod: 4,
+    availableLods: [4],
+    loadedVoxels,
+    voxelUnloadGraceUntil,
+    now: 10_751,
+    unloadVoxelTile: (key) => unloaded.push(key),
+  });
+  assert.deepEqual(unloaded.sort(), descendants.map((tile) => tile.key).sort());
+});
+
+test("mixed-depth loaded fallback is non-overlapping and creates no fine demand", () => {
+  const coarseChild = loadedTile(2, 0, 0);
+  const fineGrandchildren = [
+    loadedTile(1, 256, 0),
+    loadedTile(1, 384, 0),
+    loadedTile(1, 256, 128),
+    loadedTile(1, 384, 128),
+  ];
+  const loadedVoxels = new Map(
+    [coarseChild, ...fineGrandchildren].map(
+      (tile) => [tile.key, tile] as const,
+    ),
+  );
+  const availableVoxelKeys = new Set<string>([voxelTileKey(4, 0, 0)]);
+  for (const lod of [1, 2]) {
+    const size = lod * 128;
+    for (let regionY = 0; regionY < 512; regionY += size) {
+      for (let regionX = 0; regionX < 512; regionX += size) {
+        availableVoxelKeys.add(voxelTileKey(lod, regionX, regionY));
+      }
+    }
+  }
+
+  const result = runSelection({
+    cameraForward: new THREE.Vector3(0, -1, 0),
+    rootLod: 4,
+    availableVoxelKeys,
+    loadedVoxels,
+  });
+
+  assert.deepEqual(requestedLods(result), [4]);
+  assertTileVisible(coarseChild, true);
+  for (const grandchild of fineGrandchildren) {
+    assertTileVisible(grandchild, true);
+  }
 });
 
 test("screen-space scaling never removes render-distance root coverage", () => {
