@@ -16,7 +16,12 @@ import {
 import { voxelTileKey } from "./voxel-index.js";
 import { runVoxelLodSelection } from "./voxel-lod.js";
 import { compareVoxelFetchRequests } from "./voxel-requests.js";
-import type { VoxelViewClass, VoxelWorkPriority } from "./voxel-work.js";
+import {
+  findMostUrgentVoxelWorkIndex,
+  getVoxelSafetyClass,
+  type VoxelViewClass,
+  type VoxelWorkPriority,
+} from "./voxel-work.js";
 
 export function clearVoxelTiles(args: {
   preserveWarmCache?: boolean;
@@ -30,10 +35,6 @@ export function clearVoxelTiles(args: {
   pendingVoxelDetailRequests: Map<string, PendingVoxelFetchRequest>;
   committedVoxelDetailRequests: Map<string, PendingVoxelFetchRequest>;
   voxelUnloadGraceUntil: Map<string, number>;
-  voxelLastCameraSampleRef: {
-    current: { camera: THREE.Vector3; target: THREE.Vector3 } | null;
-  };
-  voxelLastMotionAtRef: { current: number };
   pendingVoxelFetchQueueRef: { current: PendingVoxelFetchRequest[] };
   pendingVoxelMeshQueueRef: { current: PendingVoxelMeshItem[] };
   activeVoxelFetchCountRef: { current: number };
@@ -54,8 +55,6 @@ export function clearVoxelTiles(args: {
     pendingVoxelDetailRequests,
     committedVoxelDetailRequests,
     voxelUnloadGraceUntil,
-    voxelLastCameraSampleRef,
-    voxelLastMotionAtRef,
     pendingVoxelFetchQueueRef,
     pendingVoxelMeshQueueRef,
     activeVoxelFetchCountRef,
@@ -81,8 +80,6 @@ export function clearVoxelTiles(args: {
   pendingVoxelDetailRequests.clear();
   committedVoxelDetailRequests.clear();
   voxelUnloadGraceUntil.clear();
-  voxelLastCameraSampleRef.current = null;
-  voxelLastMotionAtRef.current = 0;
   pendingVoxelFetchQueueRef.current = [];
   pendingVoxelMeshQueueRef.current = [];
   activeVoxelFetchCountRef.current = 0;
@@ -139,11 +136,15 @@ export function requestDirectVoxelRefresh(args: {
       priority ??
       ({
         coverageClass: "detail",
+        safetyClass: getVoxelSafetyClass("detail", "forward"),
         viewClass: "forward",
+        phase: "base",
         projectedBenefit: Number.MAX_VALUE,
         distance: 0,
         lod,
         generation: activeVoxelRequestGeneration,
+        demandSince: performance.now(),
+        sequence: activeVoxelRequestGeneration,
       } satisfies VoxelWorkPriority),
     generation: activeVoxelRequestGeneration,
     version,
@@ -166,7 +167,7 @@ export function requestVoxelRegion(args: {
   missingVoxels: Set<string>;
   failedVoxels: Map<string, number>;
   maxVoxelRetries: number;
-  worker: Worker | null;
+  workerAvailable: boolean;
   voxelFetchControllers: Map<string, AbortController>;
   loadingVoxels: Set<string>;
   queueVoxelFetchRequest: (request: PendingVoxelFetchRequest) => void;
@@ -186,7 +187,7 @@ export function requestVoxelRegion(args: {
     missingVoxels,
     failedVoxels,
     maxVoxelRetries,
-    worker,
+    workerAvailable,
     voxelFetchControllers,
     loadingVoxels,
     queueVoxelFetchRequest,
@@ -211,7 +212,7 @@ export function requestVoxelRegion(args: {
 
   const retries = failedVoxels.get(key);
   if (retries !== undefined && retries >= maxVoxelRetries) return;
-  if (!worker) return;
+  if (!workerAvailable) return;
 
   if (voxelFetchControllers.has(key)) return;
 
@@ -322,8 +323,7 @@ export function updateVoxelLod(args: {
   minRenderedVoxelLod: number;
   activeVoxelRequestGenerationRef: { current: number };
   voxelViewClasses: Map<string, VoxelViewClass>;
-  voxelLastMotionAt: number;
-  voxelDetailRequestDebounceMs: number;
+  stableForDetail: boolean;
   debugSettings: {
     voxelBehindCameraDotStart: number;
     voxelBehindCameraMaxMultiplier: number;
@@ -370,8 +370,7 @@ export function updateVoxelLod(args: {
     minRenderedVoxelLod,
     activeVoxelRequestGenerationRef,
     voxelViewClasses,
-    voxelLastMotionAt,
-    voxelDetailRequestDebounceMs,
+    stableForDetail,
     debugSettings,
     pendingVoxelDetailRequestsRef,
     committedVoxelDetailRequestsRef,
@@ -394,9 +393,6 @@ export function updateVoxelLod(args: {
   const now = performance.now();
   const requestGeneration = activeVoxelRequestGenerationRef.current + 1;
   activeVoxelRequestGenerationRef.current = requestGeneration;
-  const stableForDetail =
-    now - voxelLastMotionAt >= voxelDetailRequestDebounceMs;
-
   const result = runVoxelLodSelection({
     focusLod,
     cameraPosition,
@@ -458,6 +454,7 @@ export function handleVoxelWorkerMessage(args: {
     sample: NonNullable<WorkerMeshResult["benchmark"]>,
   ) => void;
   acceptMeshResult?: (item: PendingVoxelMeshItem, bytes: number) => boolean;
+  getWorkPriority: (jobId: number) => VoxelWorkPriority | null;
 }): void {
   const {
     data,
@@ -470,7 +467,9 @@ export function handleVoxelWorkerMessage(args: {
     isVoxelTileStale,
     onBenchmarkSample,
     acceptMeshResult = () => true,
+    getWorkPriority,
   } = args;
+  if (data.type === "enhancement-result") return;
   const { lod, regionX, regionY, version } = data;
 
   const resolvedLod = lod;
@@ -541,6 +540,11 @@ export function handleVoxelWorkerMessage(args: {
     typeof minZ === "number" && Number.isFinite(minZ) ? minZ : 0;
   const resolvedMaxZ =
     typeof maxZ === "number" && Number.isFinite(maxZ) ? maxZ : 0;
+  const priority = getWorkPriority(data.jobId);
+  if (!priority) {
+    loadingVoxels.delete(key);
+    return;
+  }
 
   const item: PendingVoxelMeshItem = {
     jobId: data.jobId,
@@ -557,14 +561,35 @@ export function handleVoxelWorkerMessage(args: {
     maxZ: resolvedMaxZ,
     emitterRecords,
     haloEmitterSourceKeys: [],
+    enhancementBuffer:
+      data.type === "base-result" ? data.enhancementBuffer : null,
     version: resolvedVersion,
+    priority,
   };
   if (acceptMeshResult(item, getVoxelMeshOutputBytes(data))) {
     pendingVoxelMeshQueueRef.current.push(item);
   }
 }
 
-function getVoxelMeshOutputBytes(result: WorkerMeshResult): number {
+export function isVoxelEnhancementTargetValid(args: {
+  currentRefreshVersion: number;
+  targetRefreshVersion: number;
+  stale: boolean;
+  loadedBaseMeshId: number | null;
+  targetBaseMeshId: number;
+  scheduledBaseMeshId: number | null;
+}): boolean {
+  return (
+    !args.stale &&
+    args.targetRefreshVersion === args.currentRefreshVersion &&
+    args.loadedBaseMeshId === args.targetBaseMeshId &&
+    args.scheduledBaseMeshId === args.targetBaseMeshId
+  );
+}
+
+function getVoxelMeshOutputBytes(
+  result: WorkerMeshResult | import("./types.js").WorkerBaseResult,
+): number {
   if (result.benchmark) return result.benchmark.workerOutputBytes;
   let bytes = result.chunkTopHeights.byteLength;
   for (const quadrant of [
@@ -607,10 +632,12 @@ export function buildQueuedVoxelMeshes(args: {
   biomeLabelsDirtyRef: { current: boolean };
   disposeVoxelTileResources: (tile: LoadedVoxelTile) => void;
   onVoxelTileLoaded?: (tile?: LoadedVoxelTile) => void;
+  allocateBaseMeshId?: () => number;
   onVoxelMeshFinished?: (
     item: PendingVoxelMeshItem,
     outcome: "loaded" | "discarded" | "error",
   ) => void;
+  getWorkPriority?: (jobId: number) => VoxelWorkPriority | null;
 }): boolean {
   const {
     pendingVoxelMeshQueueRef,
@@ -636,7 +663,9 @@ export function buildQueuedVoxelMeshes(args: {
     biomeLabelsDirtyRef,
     disposeVoxelTileResources,
     onVoxelTileLoaded,
+    allocateBaseMeshId = () => 0,
     onVoxelMeshFinished,
+    getWorkPriority = () => null,
   } = args;
 
   let builtVoxelTile = false;
@@ -649,7 +678,12 @@ export function buildQueuedVoxelMeshes(args: {
     processedVoxelMeshes < maxVoxelMeshesPerFrame &&
     performance.now() - voxelMeshBuildStart < voxelMeshBuildBudgetMs
   ) {
-    const item = pendingVoxelMeshQueueRef.current.shift();
+    const nextIndex = findMostUrgentVoxelWorkIndex(
+      pendingVoxelMeshQueueRef.current,
+      (item) => getWorkPriority(item.jobId) ?? item.priority,
+      performance.now(),
+    );
+    const [item] = pendingVoxelMeshQueueRef.current.splice(nextIndex, 1);
     if (!item) continue;
     processedVoxelMeshes++;
     if (item.version < getVoxelRefreshVersion(item.key)) {
@@ -722,6 +756,7 @@ export function buildQueuedVoxelMeshes(args: {
             lod: item.lod,
             regionX: item.regionX,
             regionY: item.regionY,
+            baseMeshId: allocateBaseMeshId(),
             voxelSize: item.voxelSize,
             subMeshes: built.subMeshes,
             transparentSubMeshes: built.transparentSubMeshes,

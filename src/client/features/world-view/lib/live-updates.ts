@@ -2,6 +2,11 @@ import type { QueryClient } from "@tanstack/react-query";
 import type * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+import {
+  expandVoxelInvalidationBatch,
+  isSupportedVoxelLod,
+  type VoxelInvalidationRegion,
+} from "../../../../server/services/voxel-invalidation.js";
 import { terrainTileKey } from "./terrain-manager.js";
 import type {
   LoadedTerrainTile,
@@ -9,10 +14,7 @@ import type {
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
 } from "./types.js";
-import { regionWorldSize } from "./utils.js";
 import { voxelTileKey } from "./voxel-index.js";
-
-const EMITTED_LIGHT_RADIUS_WORLD = 12;
 
 export function handleTerrainTileUpdate(args: {
   lod: number;
@@ -78,10 +80,8 @@ export function handleTerrainTileUpdate(args: {
   biomeLabelsDirtyRef.current = true;
 }
 
-export function handleVoxelRegionUpdate(args: {
-  lod: number;
-  regionX: number;
-  regionY: number;
+export function handleVoxelRegionUpdates(args: {
+  regions: Array<{ lod: number; regionX: number; regionY: number }>;
   scene: { camera: THREE.PerspectiveCamera; controls: OrbitControls } | null;
   loadedVoxels: Map<string, LoadedVoxelTile>;
   availableVoxelKeys: Set<string>;
@@ -109,9 +109,7 @@ export function handleVoxelRegionUpdate(args: {
   biomeLabelsDirtyRef: { current: boolean };
 }): void {
   const {
-    lod,
-    regionX,
-    regionY,
+    regions,
     scene,
     loadedVoxels,
     availableVoxelKeys,
@@ -131,7 +129,11 @@ export function handleVoxelRegionUpdate(args: {
     biomeLabelsDirtyRef,
   } = args;
 
-  const affectedRegions = getHaloAffectedVoxelRegions(lod, regionX, regionY);
+  const supportedRegions = regions.filter(
+    (region): region is VoxelInvalidationRegion =>
+      isSupportedVoxelLod(region.lod),
+  );
+  const affectedRegions = expandVoxelInvalidationBatch(supportedRegions);
   for (const region of affectedRegions) {
     const key = voxelTileKey(region.lod, region.regionX, region.regionY);
     const version = markVoxelTileStale(key);
@@ -160,41 +162,4 @@ export function handleVoxelRegionUpdate(args: {
   }
   debugLabelsDirtyRef.current = true;
   biomeLabelsDirtyRef.current = true;
-}
-
-function getHaloAffectedVoxelRegions(
-  lod: number,
-  regionX: number,
-  regionY: number,
-): Array<{ lod: number; regionX: number; regionY: number }> {
-  const span = regionWorldSize(lod);
-  const radius = lod === 1 ? EMITTED_LIGHT_RADIUS_WORLD : 0;
-  const startX = Math.floor((regionX - radius) / span) * span;
-  const endX = Math.floor((regionX + span - 1 + radius) / span) * span;
-  const startY = Math.floor((regionY - radius) / span) * span;
-  const endY = Math.floor((regionY + span - 1 + radius) / span) * span;
-  const regions = new Map<
-    string,
-    { lod: number; regionX: number; regionY: number }
-  >();
-
-  for (let x = startX; x <= endX; x += span) {
-    for (let y = startY; y <= endY; y += span) {
-      regions.set(`${lod}/${x}/${y}`, { lod, regionX: x, regionY: y });
-      if (lod === 1) {
-        for (const ancestorLod of [2, 4, 8, 16, 32]) {
-          const ancestorSpan = regionWorldSize(ancestorLod);
-          const ancestorX = Math.floor(x / ancestorSpan) * ancestorSpan;
-          const ancestorY = Math.floor(y / ancestorSpan) * ancestorSpan;
-          regions.set(`${ancestorLod}/${ancestorX}/${ancestorY}`, {
-            lod: ancestorLod,
-            regionX: ancestorX,
-            regionY: ancestorY,
-          });
-        }
-      }
-    }
-  }
-
-  return [...regions.values()];
 }

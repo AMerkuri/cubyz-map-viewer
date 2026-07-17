@@ -38,7 +38,12 @@ import { buildChunkIndex } from "./services/chunk-index.js";
 import { ColorMapService } from "./services/color-map.js";
 import { EntityModelAssetService } from "./services/entity-model-assets.js";
 import { logger } from "./services/logger.js";
-import { EMITTER_MAX_SUMMARY_RADIUS } from "./services/voxel-emitter-aggregation.js";
+import {
+  deduplicateVoxelInvalidationSources,
+  expandVoxelInvalidationBatch,
+  isSupportedVoxelLod,
+  type VoxelInvalidationRegion,
+} from "./services/voxel-invalidation.js";
 import { readVoxelMemoryCacheConfig } from "./services/voxel-memory-config.js";
 import { VoxelMeshService } from "./services/voxel-mesh-service.js";
 import {
@@ -101,8 +106,6 @@ const PLAYER_RETENTION_MS = parseInt(
 const VOXEL_PREGENERATE_ON_STARTUP = parseBooleanEnv(
   process.env.VOXEL_PREGENERATE_ON_STARTUP,
 );
-const VOXEL_REGION_SIZE = 128;
-const EMITTED_LIGHT_RADIUS_WORLD = 12;
 
 interface TerrainUpdatesBatchData {
   tiles: { lod: number; tileX: number; tileY: number }[];
@@ -692,7 +695,12 @@ async function main() {
         }
       }
 
-      for (const region of regions) {
+      const voxelSources = deduplicateVoxelInvalidationSources(
+        regions.filter((region): region is VoxelInvalidationRegion =>
+          isSupportedVoxelLod(region.lod),
+        ),
+      );
+      for (const region of voxelSources) {
         if (region.lod === 1) {
           voxelMeshService.invalidateLod1EmitterColumn(
             region.regionX,
@@ -701,7 +709,7 @@ async function main() {
         }
       }
 
-      for (const region of expandHaloAffectedVoxelRegions(regions)) {
+      for (const region of expandVoxelInvalidationBatch(voxelSources)) {
         const key = `${region.lod}/${region.regionX}/${region.regionY}`;
         voxelMeshService.clear(key);
         voxelMeshService.clear(`${key}#nohalo`);
@@ -779,47 +787,6 @@ async function main() {
       });
     }
   });
-}
-
-function expandHaloAffectedVoxelRegions(
-  regions: TerrainUpdatesBatchData["regions"],
-): TerrainUpdatesBatchData["regions"] {
-  const affected = new Map<
-    string,
-    TerrainUpdatesBatchData["regions"][number]
-  >();
-  for (const region of regions) {
-    const span = VOXEL_REGION_SIZE * region.lod;
-    const radius =
-      region.lod === 1
-        ? EMITTED_LIGHT_RADIUS_WORLD
-        : EMITTER_MAX_SUMMARY_RADIUS;
-    const startX = Math.floor((region.regionX - radius) / span) * span;
-    const endX = Math.floor((region.regionX + span - 1 + radius) / span) * span;
-    const startY = Math.floor((region.regionY - radius) / span) * span;
-    const endY = Math.floor((region.regionY + span - 1 + radius) / span) * span;
-
-    for (let x = startX; x <= endX; x += span) {
-      for (let y = startY; y <= endY; y += span) {
-        const key = `${region.lod}/${x}/${y}`;
-        affected.set(key, { lod: region.lod, regionX: x, regionY: y });
-        if (region.lod === 1) {
-          for (const ancestorLod of [2, 4, 8, 16, 32]) {
-            const ancestorSpan = VOXEL_REGION_SIZE * ancestorLod;
-            const ancestorX = Math.floor(x / ancestorSpan) * ancestorSpan;
-            const ancestorY = Math.floor(y / ancestorSpan) * ancestorSpan;
-            const ancestorKey = `${ancestorLod}/${ancestorX}/${ancestorY}`;
-            affected.set(ancestorKey, {
-              lod: ancestorLod,
-              regionX: ancestorX,
-              regionY: ancestorY,
-            });
-          }
-        }
-      }
-    }
-  }
-  return [...affected.values()];
 }
 
 main().catch((err) => {

@@ -33,7 +33,7 @@ import {
 } from "../lib/debug-overlays.js";
 import {
   handleTerrainTileUpdate,
-  handleVoxelRegionUpdate,
+  handleVoxelRegionUpdates,
 } from "../lib/live-updates.js";
 import { checkAndUpdateLod as checkAndUpdateLodManaged } from "../lib/lod-controller.js";
 import {
@@ -86,6 +86,7 @@ import type {
   PendingTerrainFetchRequest,
   PendingTerrainMeshItem,
   PendingVoxelCompactInput,
+  PendingVoxelEnhancementInput,
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
   VoxelFocusState,
@@ -105,6 +106,12 @@ import {
   useWorld3DSceneSyncEffects,
   useWorld3DUpdateSubscription,
 } from "../lib/view-hooks.js";
+import {
+  createVoxelAdaptiveState,
+  selectVoxelWorkerProfile,
+  updateVoxelAdaptiveTarget,
+} from "../lib/voxel-adaptive-workers.js";
+import { attachVoxelEmissiveEnhancement } from "../lib/voxel-builders.js";
 import {
   disposeVoxelTileResources as disposeVoxelTileResourcesManaged,
   evictWarmCachedVoxelTile as evictWarmCachedVoxelTileManaged,
@@ -129,6 +136,7 @@ import {
   clearVoxelTiles as clearVoxelTilesManaged,
   drainVoxelFetchQueue as drainVoxelFetchQueueManaged,
   handleVoxelWorkerMessage,
+  isVoxelEnhancementTargetValid,
   requestDirectVoxelRefresh as requestDirectVoxelRefreshManaged,
   requestVoxelRegion as requestVoxelRegionManaged,
   updateVoxelLod as updateVoxelLodManaged,
@@ -137,7 +145,13 @@ import {
   classifyVoxelView,
   getReferenceVoxelViewBounds,
 } from "../lib/voxel-view.js";
-import { type VoxelViewClass, VoxelWorkScheduler } from "../lib/voxel-work.js";
+import {
+  getVoxelSafetyClass,
+  type VoxelViewClass,
+  VoxelWorkScheduler,
+} from "../lib/voxel-work.js";
+import { VoxelOutputEstimator } from "../lib/voxel-worker-capacity.js";
+import type { VoxelWorkerPool } from "../lib/voxel-worker-pool.js";
 
 const PLAYER_MARKER_BASE_SCALE = 4;
 const PLAYER_MARKER_SCALE_REFERENCE_DISTANCE = 200;
@@ -279,15 +293,13 @@ export function World3DView({
     Map<string, PendingVoxelFetchRequest>
   >(new Map());
   const voxelUnloadGraceUntilRef = useRef<Map<string, number>>(new Map());
-  const voxelLastCameraSampleRef = useRef<{
-    camera: THREE.Vector3;
-    target: THREE.Vector3;
-  } | null>(null);
-  const voxelLastMotionAtRef = useRef(0);
   const voxelViewClassesRef = useRef(new Map<string, VoxelViewClass>());
   const pendingVoxelMeshQueueRef = useRef<PendingVoxelMeshItem[]>([]);
   const voxelWorkSchedulerRef = useRef<
-    VoxelWorkScheduler<PendingVoxelCompactInput, PendingVoxelMeshItem>
+    VoxelWorkScheduler<
+      PendingVoxelCompactInput | PendingVoxelEnhancementInput,
+      PendingVoxelMeshItem | WorkerOut
+    >
   >(
     new VoxelWorkScheduler(
       {
@@ -310,7 +322,18 @@ export function World3DView({
       maxBytes: debugSettings.voxelExpandedOutputMaxBytes,
     },
   );
-  const workerRef = useRef<Worker | null>(null);
+  const workerPoolRef = useRef<VoxelWorkerPool<WorkerOut> | null>(null);
+  const voxelOutputEstimatorRef = useRef(new VoxelOutputEstimator());
+  const initialWorkerProfile = selectVoxelWorkerProfile({
+    coarsePointer: null,
+    deviceMemoryGb: null,
+    staticOne: debugSettings.voxelWorkerTarget === 1,
+  });
+  const voxelAdaptiveStateRef = useRef(
+    createVoxelAdaptiveState(initialWorkerProfile),
+  );
+  const voxelAdaptiveProfileClassRef = useRef(initialWorkerProfile.class);
+  const nextBaseMeshIdRef = useRef(1);
   const pendingInitialSurfaceRetargetRef = useRef<InitialCameraState | null>(
     null,
   );
@@ -379,7 +402,7 @@ export function World3DView({
   // Debug-only voxel-lighting diagnostics: reset benchmark averages whenever
   // the active diagnostic matrix state changes so samples from different
   // matrix cells are never averaged together.
-  const diagnosticsMatrixKey = `${debugSettings.voxelHaloEmittersEnabled > 0 ? 1 : 0}:${debugSettings.voxelEmissiveAttributesEnabled > 0 ? 1 : 0}`;
+  const diagnosticsMatrixKey = `${debugSettings.voxelHaloEmittersEnabled > 0 ? 1 : 0}:${debugSettings.voxelEmissiveAttributesEnabled > 0 ? 1 : 0}:${debugSettings.voxelProgressiveMeshingEnabled > 0 ? 1 : 0}`;
   const lastDiagnosticsMatrixKeyRef = useRef(diagnosticsMatrixKey);
   if (lastDiagnosticsMatrixKeyRef.current !== diagnosticsMatrixKey) {
     lastDiagnosticsMatrixKeyRef.current = diagnosticsMatrixKey;
@@ -419,6 +442,18 @@ export function World3DView({
     lastSampleAt: 0,
     initialized: false,
   });
+  const voxelLastCameraSampleRef = useRef<{
+    camera: THREE.Vector3;
+    target: THREE.Vector3;
+  } | null>(null);
+  const voxelLastMotionAtRef = useRef(performance.now());
+
+  function isVoxelDetailStable(now = performance.now()): boolean {
+    return (
+      now - voxelLastMotionAtRef.current >=
+      debugSettingsRef.current.voxelDetailRequestDebounceMs
+    );
+  }
 
   const requiredAvatarModelIds = useMemo(() => {
     const ids = new Set<string>();
@@ -694,7 +729,7 @@ export function World3DView({
   }
 
   function restoreVoxelTileFromWarmCache(key: string): LoadedVoxelTile | null {
-    return restoreVoxelTileFromWarmCacheManaged({
+    const tile = restoreVoxelTileFromWarmCacheManaged({
       key,
       warmCachedVoxels: warmCachedVoxelsRef.current,
       warmCachedVoxelBytesRef,
@@ -702,6 +737,8 @@ export function World3DView({
       chunkBorderGroup: chunkBorderGroupRef.current,
       isVoxelTileStale,
     });
+    if (tile) tile.baseMeshId = nextBaseMeshIdRef.current++;
+    return tile;
   }
 
   function unloadVoxelTile(key: string, preserveWarmCache = true) {
@@ -729,11 +766,21 @@ export function World3DView({
     voxelViewClassesRef.current.clear();
     for (const record of voxelWorkSchedulerRef.current.cancelAll("shutdown")) {
       if (record.stage === "meshing") {
-        workerRef.current?.postMessage({
+        const workerId = record.workerId;
+        workerPoolRef.current?.postToWorker(workerId ?? -1, {
           type: "cancel",
           jobId: record.jobId,
+          phase: record.phase,
           version: record.version,
+          ...(record.baseMeshId === null
+            ? {}
+            : { baseMeshId: record.baseMeshId }),
         });
+        voxelWorkSchedulerRef.current.finish(
+          record.jobId,
+          "cancelled",
+          "shutdown",
+        );
       }
     }
     clearVoxelTilesManaged({
@@ -748,8 +795,6 @@ export function World3DView({
       pendingVoxelDetailRequests: pendingVoxelDetailRequestsRef.current,
       committedVoxelDetailRequests: committedVoxelDetailRequestsRef.current,
       voxelUnloadGraceUntil: voxelUnloadGraceUntilRef.current,
-      voxelLastCameraSampleRef,
-      voxelLastMotionAtRef,
       pendingVoxelFetchQueueRef,
       pendingVoxelMeshQueueRef,
       activeVoxelFetchCountRef,
@@ -758,6 +803,8 @@ export function World3DView({
       unloadVoxelTile,
       evictWarmCachedVoxelTile,
     });
+    voxelLastCameraSampleRef.current = null;
+    voxelLastMotionAtRef.current = performance.now();
   }
 
   function updateTerrainVisibility(target: THREE.Vector3, camDist: number) {
@@ -777,13 +824,10 @@ export function World3DView({
   }
 
   function syncTerrainLod(target: THREE.Vector3, camDist: number) {
-    const now = performance.now();
     const terrainRequestGeneration =
       activeTerrainRequestGenerationRef.current + 1;
     activeTerrainRequestGenerationRef.current = terrainRequestGeneration;
-    const stableForDetail =
-      now - voxelLastMotionAtRef.current >=
-      debugSettingsRef.current.voxelDetailRequestDebounceMs;
+    const stableForDetail = isVoxelDetailStable();
 
     syncTerrainLodManaged({
       target,
@@ -823,6 +867,26 @@ export function World3DView({
 
   function isVoxelTileStale(key: string): boolean {
     return isVoxelTileStaleManaged(voxelRefreshStatesRef.current, key);
+  }
+
+  function hasValidEnhancementTarget(
+    key: string,
+    targetRefreshVersion: number,
+    scheduledBaseMeshId: number | null,
+    targetBaseMeshId = scheduledBaseMeshId,
+  ): boolean {
+    const tile = loadedVoxelsRef.current.get(key);
+    return (
+      targetBaseMeshId !== null &&
+      isVoxelEnhancementTargetValid({
+        currentRefreshVersion: getVoxelRefreshVersion(key),
+        targetRefreshVersion,
+        stale: isVoxelTileStale(key),
+        loadedBaseMeshId: tile?.baseMeshId ?? null,
+        targetBaseMeshId,
+        scheduledBaseMeshId,
+      })
+    );
   }
 
   function finishVoxelFetch(key: string) {
@@ -915,11 +979,18 @@ export function World3DView({
       activeVoxelRequestGeneration: activeVoxelRequestGenerationRef.current,
       priority: {
         coverageClass: loadedTile ? "detail" : "coverage",
+        safetyClass: getVoxelSafetyClass(
+          loadedTile ? "detail" : "coverage",
+          viewClass,
+        ),
         viewClass,
+        phase: "base",
         projectedBenefit,
         distance,
         lod,
         generation: activeVoxelRequestGenerationRef.current,
+        demandSince: performance.now(),
+        sequence: activeVoxelRequestGenerationRef.current,
       },
     });
   }
@@ -938,7 +1009,7 @@ export function World3DView({
       missingVoxels: missingVoxelsRef.current,
       failedVoxels: failedVoxelsRef.current,
       maxVoxelRetries: MAX_VOXEL_RETRIES,
-      worker: workerRef.current,
+      workerAvailable: (workerPoolRef.current?.activeCount ?? 0) > 0,
       voxelFetchControllers: voxelFetchControllersRef.current,
       loadingVoxels: loadingVoxelsRef.current,
       queueVoxelFetchRequest,
@@ -976,29 +1047,63 @@ export function World3DView({
   }
 
   function dispatchNextVoxelWork() {
-    const worker = workerRef.current;
-    if (!worker) return;
-    const record = voxelWorkSchedulerRef.current.dispatchNext(
-      performance.now(),
-    );
-    const input = record?.compact;
-    if (!record || !input) return;
-    worker.postMessage(
-      {
-        type: "mesh",
-        jobId: record.jobId,
-        buffer: input.buffer,
-        lod: input.lod,
-        regionX: input.regionX,
-        regionY: input.regionY,
-        version: record.version,
-        cancellationCheckpointMs:
-          debugSettingsRef.current.voxelCancellationCheckpointMs,
-        bakeEmissiveAttributes: input.bakeEmissiveAttributes,
-        benchmark: input.benchmark,
-      },
-      [input.buffer],
-    );
+    const pool = workerPoolRef.current;
+    if (!pool) return;
+    pool.dispatchToIdle((workerId, worker) => {
+      const now = performance.now();
+      const record = voxelWorkSchedulerRef.current.dispatchNext(
+        now,
+        workerId,
+        (candidate) => {
+          const input = candidate.compact;
+          return input
+            ? voxelOutputEstimatorRef.current.estimate({
+                phase: candidate.phase,
+                lod: input.lod,
+                buffer: input.buffer,
+              })
+            : 0;
+        },
+      );
+      const input = record?.compact;
+      if (!record || !input) return false;
+      const progressive =
+        debugSettingsRef.current.voxelProgressiveMeshingEnabled > 0;
+      const message =
+        record.phase === "enhancement"
+          ? {
+              type: "enhancement" as const,
+              phase: "enhancement" as const,
+              jobId: record.jobId,
+              buffer: input.buffer,
+              lod: input.lod,
+              regionX: input.regionX,
+              regionY: input.regionY,
+              version: record.version,
+              baseMeshId: record.baseMeshId ?? -1,
+              cancellationCheckpointMs:
+                debugSettingsRef.current.voxelCancellationCheckpointMs,
+            }
+          : {
+              type: progressive ? ("base" as const) : ("mesh" as const),
+              phase: "base" as const,
+              jobId: record.jobId,
+              buffer: input.buffer,
+              lod: input.lod,
+              regionX: input.regionX,
+              regionY: input.regionY,
+              version: record.version,
+              cancellationCheckpointMs:
+                debugSettingsRef.current.voxelCancellationCheckpointMs,
+              bakeEmissiveAttributes:
+                "bakeEmissiveAttributes" in input
+                  ? input.bakeEmissiveAttributes
+                  : false,
+              benchmark: "benchmark" in input ? input.benchmark : undefined,
+            };
+      worker.postMessage(message, [input.buffer]);
+      return true;
+    });
     drainVoxelFetchQueue();
   }
 
@@ -1006,23 +1111,28 @@ export function World3DView({
     key: string,
     reason: "demand-removed" | "refresh-superseded",
     olderThanVersion = Number.POSITIVE_INFINITY,
+    jobId?: number,
   ) {
-    const cancelled = voxelWorkSchedulerRef.current.cancelKey(
-      key,
-      reason,
-      olderThanVersion,
-    );
+    const cancelled = jobId
+      ? [voxelWorkSchedulerRef.current.cancel(jobId, reason)].filter(
+          (record) => record !== null,
+        )
+      : voxelWorkSchedulerRef.current.cancelKey(key, reason, olderThanVersion);
     for (const record of cancelled) {
-      if (reason === "demand-removed") {
+      if (reason === "demand-removed" && record.phase === "base") {
         loadingVoxelsRef.current.delete(record.key);
       }
       if (record.stage === "fetching") {
         voxelFetchControllersRef.current.get(key)?.abort();
       } else if (record.stage === "meshing") {
-        workerRef.current?.postMessage({
+        workerPoolRef.current?.postToWorker(record.workerId ?? -1, {
           type: "cancel",
           jobId: record.jobId,
+          phase: record.phase,
           version: record.version,
+          ...(record.baseMeshId === null
+            ? {}
+            : { baseMeshId: record.baseMeshId }),
         });
       } else if (record.stage === "expanded-output") {
         pendingVoxelMeshQueueRef.current =
@@ -1036,12 +1146,35 @@ export function World3DView({
   }
 
   function syncVoxelRequests(requests: Map<string, PendingVoxelFetchRequest>) {
+    voxelWorkSchedulerRef.current.reconcileDemand(requests, performance.now());
     for (const record of [...voxelWorkSchedulerRef.current.records.values()]) {
       const updated = requests.get(record.key);
       const refreshRequired =
         loadedVoxelsRef.current.has(record.key) && isVoxelTileStale(record.key);
+      if (record.phase === "enhancement") {
+        if (
+          !hasValidEnhancementTarget(
+            record.key,
+            record.version,
+            record.baseMeshId,
+          )
+        ) {
+          cancelVoxelWork(
+            record.key,
+            "demand-removed",
+            Number.POSITIVE_INFINITY,
+            record.jobId,
+          );
+        }
+        continue;
+      }
       if (!updated && !refreshRequired) {
-        cancelVoxelWork(record.key, "demand-removed");
+        cancelVoxelWork(
+          record.key,
+          "demand-removed",
+          Number.POSITIVE_INFINITY,
+          record.jobId,
+        );
       } else if (updated && record.version < updated.version) {
         cancelVoxelWork(record.key, "refresh-superseded", updated.version);
         loadingVoxelsRef.current.add(updated.key);
@@ -1131,6 +1264,7 @@ export function World3DView({
     viewportHeight: number,
     viewportAspect: number,
     focusPoint: THREE.Vector3 | null,
+    stableForDetail: boolean,
   ) {
     updateVoxelLodManaged({
       focusLod,
@@ -1153,9 +1287,7 @@ export function World3DView({
       renderDistance,
       minRenderedVoxelLod,
       activeVoxelRequestGenerationRef,
-      voxelLastMotionAt: voxelLastMotionAtRef.current,
-      voxelDetailRequestDebounceMs:
-        debugSettingsRef.current.voxelDetailRequestDebounceMs,
+      stableForDetail,
       debugSettings: {
         voxelBehindCameraDotStart:
           debugSettingsRef.current.voxelBehindCameraDotStart,
@@ -1345,12 +1477,14 @@ export function World3DView({
     syncSignLayer();
   }
 
-  function handleRegionUpdate(lod: number, regionX: number, regionY: number) {
-    signLayerRef.current?.invalidateRegion(regionX, regionY);
-    handleVoxelRegionUpdate({
-      lod,
-      regionX,
-      regionY,
+  function handleRegionUpdates(
+    regions: Array<{ lod: number; regionX: number; regionY: number }>,
+  ) {
+    for (const region of regions) {
+      signLayerRef.current?.invalidateRegion(region.regionX, region.regionY);
+    }
+    handleVoxelRegionUpdates({
+      regions,
       scene: sceneRef.current,
       loadedVoxels: loadedVoxelsRef.current,
       availableVoxelKeys: availableVoxelKeysRef.current,
@@ -1398,6 +1532,8 @@ export function World3DView({
       showTerrainUnderlay: showTerrainUnderlayRef.current,
       voxelLastCameraSampleRef,
       voxelLastMotionAtRef,
+      voxelDetailRequestDebounceMs:
+        debugSettingsRef.current.voxelDetailRequestDebounceMs,
       pendingVoxelDetailRequestsRef,
       committedVoxelDetailRequestsRef,
       syncVoxelRequests,
@@ -1467,7 +1603,8 @@ export function World3DView({
     return true;
   }
 
-  function handleWorkerMessage(data: WorkerOut) {
+  function handleWorkerMessage(workerId: number, data: WorkerOut) {
+    workerPoolRef.current?.complete(workerId);
     const resultReceivedAt = performance.now();
     const record = voxelWorkSchedulerRef.current.records.get(data.jobId);
     if (
@@ -1481,7 +1618,9 @@ export function World3DView({
           loadingVoxelsRef.current.delete(record.key);
         }
         const cancelledResultRace =
-          data.type === "mesh-result" &&
+          (data.type === "mesh-result" ||
+            data.type === "base-result" ||
+            data.type === "enhancement-result") &&
           record.cancellationReason !== undefined;
         voxelWorkSchedulerRef.current.finish(
           record.jobId,
@@ -1499,6 +1638,69 @@ export function World3DView({
       drainVoxelFetchQueue();
       return;
     }
+    if (
+      data.phase === "enhancement" &&
+      (data.type === "cancelled" || data.type === "error")
+    ) {
+      voxelWorkSchedulerRef.current.finish(
+        data.jobId,
+        data.type === "cancelled" ? "cancelled" : "error",
+        data.type === "cancelled" ? "worker-cancelled" : "worker-error",
+      );
+      dispatchNextVoxelWork();
+      drainVoxelFetchQueue();
+      return;
+    }
+    if (data.type === "enhancement-result") {
+      const bytes = data.quadrantEnhancements.reduce(
+        (sum, quadrant) => sum + quadrant.emissiveColors.byteLength,
+        0,
+      );
+      voxelOutputEstimatorRef.current.observeActual(
+        record.phase,
+        record.priority.lod,
+        record.compactBytes,
+        bytes,
+      );
+      const accepted = voxelWorkSchedulerRef.current.completeWorker(
+        data.jobId,
+        data,
+        bytes,
+        {
+          workerStartedAt: data.timing.startedAt - performance.timeOrigin,
+          workerCompletedAt: data.timing.completedAt - performance.timeOrigin,
+          resultReceivedAt,
+        },
+      );
+      const current =
+        accepted &&
+        hasValidEnhancementTarget(
+          record.key,
+          data.version,
+          record.baseMeshId,
+          data.baseMeshId,
+        );
+      const tile = loadedVoxelsRef.current.get(record.key);
+      if (
+        current &&
+        tile &&
+        attachVoxelEmissiveEnhancement(tile, data.quadrantEnhancements)
+      ) {
+        voxelWorkSchedulerRef.current.markEnhancementAttached(
+          data.jobId,
+          performance.now(),
+        );
+      } else {
+        voxelWorkSchedulerRef.current.finish(
+          data.jobId,
+          "discarded",
+          accepted ? "enhancement-target-mismatch" : "result-validation",
+        );
+      }
+      dispatchNextVoxelWork();
+      drainVoxelFetchQueue();
+      return;
+    }
     handleVoxelWorkerMessage({
       data,
       getVoxelRefreshVersion,
@@ -1508,12 +1710,26 @@ export function World3DView({
       failedVoxels: failedVoxelsRef.current,
       pendingVoxelMeshQueueRef,
       isVoxelTileStale,
-      acceptMeshResult: (item, bytes) =>
-        voxelWorkSchedulerRef.current.completeWorker(item.jobId, item, bytes, {
-          workerStartedAt: data.timing.startedAt - performance.timeOrigin,
-          workerCompletedAt: data.timing.completedAt - performance.timeOrigin,
-          resultReceivedAt,
-        }),
+      getWorkPriority: (jobId) =>
+        voxelWorkSchedulerRef.current.records.get(jobId)?.priority ?? null,
+      acceptMeshResult: (item, bytes) => {
+        voxelOutputEstimatorRef.current.observeActual(
+          record.phase,
+          record.priority.lod,
+          record.compactBytes,
+          bytes,
+        );
+        return voxelWorkSchedulerRef.current.completeWorker(
+          item.jobId,
+          item,
+          bytes,
+          {
+            workerStartedAt: data.timing.startedAt - performance.timeOrigin,
+            workerCompletedAt: data.timing.completedAt - performance.timeOrigin,
+            resultReceivedAt,
+          },
+        );
+      },
       onBenchmarkSample: (sample) => {
         voxelBenchmarkRef.current = addVoxelBenchmarkSample(
           voxelBenchmarkRef.current,
@@ -1522,7 +1738,7 @@ export function World3DView({
       },
     });
     if (
-      data.type === "mesh-result" &&
+      (data.type === "mesh-result" || data.type === "base-result") &&
       voxelWorkSchedulerRef.current.records.get(data.jobId)?.stage === "meshing"
     ) {
       voxelWorkSchedulerRef.current.finish(
@@ -1535,6 +1751,19 @@ export function World3DView({
       voxelWorkSchedulerRef.current.finish(
         data.jobId,
         data.type === "cancelled" ? "cancelled" : "error",
+      );
+    }
+    dispatchNextVoxelWork();
+    drainVoxelFetchQueue();
+  }
+
+  function handleWorkerError(workerId: number) {
+    const failed = voxelWorkSchedulerRef.current.failWorker(workerId);
+    for (const record of failed) {
+      loadingVoxelsRef.current.delete(record.key);
+      failedVoxelsRef.current.set(
+        record.key,
+        (failedVoxelsRef.current.get(record.key) ?? 0) + 1,
       );
     }
     dispatchNextVoxelWork();
@@ -1569,6 +1798,8 @@ export function World3DView({
       missingVoxels: missingVoxelsRef.current,
       debugLabelsDirtyRef,
       biomeLabelsDirtyRef,
+      getWorkPriority: (jobId) =>
+        voxelWorkSchedulerRef.current.records.get(jobId)?.priority ?? null,
       disposeVoxelTileResources: (tile) => {
         disposeVoxelTileResourcesManaged(
           tile,
@@ -1577,12 +1808,36 @@ export function World3DView({
         );
       },
       onVoxelTileLoaded: () => loadedVoxelsRevisionRef.current++,
+      allocateBaseMeshId: () => nextBaseMeshIdRef.current++,
       onVoxelMeshFinished: (item, outcome) => {
         if (outcome === "loaded") {
           voxelWorkSchedulerRef.current.markSceneInserted(
             item.jobId,
             performance.now(),
           );
+          const tile = loadedVoxelsRef.current.get(item.key);
+          const baseRecord = voxelWorkSchedulerRef.current.records.get(
+            item.jobId,
+          );
+          if (item.enhancementBuffer && tile && baseRecord) {
+            voxelWorkSchedulerRef.current.createRetainedEnhancement({
+              key: item.key,
+              version: item.version,
+              priority: baseRecord.priority,
+              selectedAt: baseRecord.timestamps.selectedAt,
+              retainedAt: performance.now(),
+              compact: {
+                buffer: item.enhancementBuffer,
+                lod: item.lod,
+                regionX: item.regionX,
+                regionY: item.regionY,
+                baseMeshId: tile.baseMeshId,
+              },
+              compactBytes: item.enhancementBuffer.byteLength,
+              baseMeshId: tile.baseMeshId,
+            });
+            item.enhancementBuffer = null;
+          }
           if (!loadedVoxelsRef.current.has(item.key)) {
             voxelWorkSchedulerRef.current.finish(item.jobId, "loaded");
           }
@@ -1616,7 +1871,9 @@ export function World3DView({
       voxelBenchmark: voxelBenchmarkRef.current,
       voxelPipeline: {
         snapshot: voxelWorkSchedulerRef.current.snapshot(),
-        diagnostics: voxelWorkSchedulerRef.current.diagnostics,
+        diagnostics: voxelWorkSchedulerRef.current.getDiagnostics(
+          performance.now(),
+        ),
       },
       blockLightStats: blockLightStatsRef.current,
       lastChunkStatsRef,
@@ -1624,6 +1881,73 @@ export function World3DView({
         onChunkStatsChangeRef.current(stats);
       },
     });
+  }
+
+  function observeVoxelFrame(frameTimeMs: number) {
+    const snapshot = voxelWorkSchedulerRef.current.snapshot();
+    const pool = workerPoolRef.current;
+    if (!pool) return;
+    const configuredTarget = Math.floor(
+      debugSettingsRef.current.voxelWorkerTarget,
+    );
+    const profile = selectVoxelWorkerProfile({
+      coarsePointer:
+        typeof window.matchMedia === "function"
+          ? window.matchMedia("(pointer: coarse)").matches
+          : null,
+      deviceMemoryGb:
+        (navigator as Navigator & { deviceMemory?: number }).deviceMemory ??
+        null,
+      staticOne: configuredTarget === 1,
+    });
+    const diagnostics = voxelWorkSchedulerRef.current.getDiagnostics(
+      performance.now(),
+    );
+    const heap = (
+      performance as Performance & {
+        memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+      }
+    ).memory;
+    if (voxelAdaptiveProfileClassRef.current !== profile.class) {
+      voxelAdaptiveProfileClassRef.current = profile.class;
+      voxelAdaptiveStateRef.current = createVoxelAdaptiveState(
+        profile,
+        performance.now(),
+      );
+    }
+    if (configuredTarget > 0) {
+      pool.setTarget(Math.min(configuredTarget, profile.maxWorkers));
+    } else {
+      voxelAdaptiveStateRef.current = updateVoxelAdaptiveTarget(
+        voxelAdaptiveStateRef.current,
+        {
+          now: performance.now(),
+          oldestUrgentQueueMs:
+            diagnostics.currentQueue.oldestDemandAgeMs.byViewClass.focus ?? 0,
+          frameTimeMs,
+          workerBusyRatio: pool.busyCount / Math.max(1, pool.activeCount),
+          workerDurationMs: diagnostics.observations.workerDurationMs.p95 ?? 0,
+          sceneBacklogJobs: snapshot.expandedOutput.jobs,
+          sceneBacklogBytes: snapshot.expandedOutput.bytes,
+          reservedBytes: snapshot.reservedExpandedOutput.bytes,
+          expandedBytes: snapshot.expandedOutput.bytes,
+          memoryPressure: heap
+            ? heap.usedJSHeapSize / Math.max(1, heap.jsHeapSizeLimit)
+            : null,
+          interacting: !isVoxelDetailStable(),
+        },
+        profile,
+      );
+      pool.setTarget(voxelAdaptiveStateRef.current.targetWorkers);
+    }
+    voxelWorkSchedulerRef.current.observeRuntime({
+      frameTimeMs,
+      workerBusy: pool.busyCount / Math.max(1, pool.activeCount),
+      reservedExpandedBytes: snapshot.reservedExpandedOutput.bytes,
+      activeWorkers: pool.activeCount,
+      targetWorkers: pool.targetCount,
+    });
+    dispatchNextVoxelWork();
   }
 
   function publishCurrentLoadingBreakdown() {
@@ -1664,7 +1988,7 @@ export function World3DView({
     containerRef,
     sceneRef,
     labelRendererRef,
-    workerRef,
+    workerPoolRef,
     initializedRef,
     terrainGroupRef,
     voxelGroupRef,
@@ -1691,6 +2015,7 @@ export function World3DView({
     biomeLabelsDirtyRef,
     updateMarkerScales,
     handleWorkerMessage,
+    handleWorkerError,
     buildQueuedTerrainMeshes: buildQueuedTerrainMeshesForFrame,
     buildQueuedVoxelMeshes: buildQueuedVoxelMeshesForFrame,
     retargetInitialCameraToVisibleSurface,
@@ -1700,6 +2025,7 @@ export function World3DView({
     clearDebugLabels,
     refreshBiomeLabels,
     publishChunkStats: publishCurrentChunkStats,
+    observeVoxelFrame,
     publishLoadingBreakdown: publishCurrentLoadingBreakdown,
     hasPendingSceneWork,
     clearTerrainTiles,
@@ -1726,6 +2052,9 @@ export function World3DView({
     pendingInitialSurfaceRetargetRef,
     addSpawnMarker,
     updatePlayerMarkers,
+    resetVoxelLoadGeneration: () => {
+      voxelWorkSchedulerRef.current.resetLoadGeneration();
+    },
     checkAndUpdateLOD,
   });
 
@@ -1779,7 +2108,7 @@ export function World3DView({
   useWorld3DUpdateSubscription({
     subscribe,
     handleTileUpdate,
-    handleRegionUpdate,
+    handleRegionUpdates,
     handleWorldUpdate,
   });
 

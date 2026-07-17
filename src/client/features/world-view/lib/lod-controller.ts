@@ -13,6 +13,7 @@ export function checkAndUpdateLod(args: {
     current: { camera: THREE.Vector3; target: THREE.Vector3 } | null;
   };
   voxelLastMotionAtRef: { current: number };
+  voxelDetailRequestDebounceMs: number;
   pendingVoxelDetailRequestsRef: {
     current: Map<string, PendingVoxelFetchRequest>;
   };
@@ -47,6 +48,7 @@ export function checkAndUpdateLod(args: {
     viewportHeight: number,
     viewportAspect: number,
     focusPoint: THREE.Vector3 | null,
+    stableForDetail: boolean,
   ) => void;
   debugLabelsDirtyRef: { current: boolean };
   biomeLabelsDirtyRef: { current: boolean };
@@ -68,6 +70,7 @@ export function checkAndUpdateLod(args: {
     showTerrainUnderlay,
     voxelLastCameraSampleRef,
     voxelLastMotionAtRef,
+    voxelDetailRequestDebounceMs,
     pendingVoxelDetailRequestsRef,
     committedVoxelDetailRequestsRef,
     syncVoxelRequests,
@@ -162,6 +165,7 @@ export function checkAndUpdateLod(args: {
     viewportHeight,
     viewportAspect,
     focus.point,
+    now - voxelLastMotionAtRef.current >= voxelDetailRequestDebounceMs,
   );
 
   if (debugLabelsDirtyRef.current) {

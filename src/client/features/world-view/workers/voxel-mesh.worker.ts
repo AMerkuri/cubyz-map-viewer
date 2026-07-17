@@ -6,6 +6,8 @@ import {
 } from "../lib/daylight.js";
 import type {
   EmissiveColorArray,
+  WorkerBaseRequest,
+  WorkerEnhancementRequest,
   WorkerIn,
   WorkerMeshRequest,
   WorkerOut,
@@ -182,27 +184,41 @@ interface EmitterLightGrid {
 const workerGlobal = globalThis as unknown as {
   postMessage(message: WorkerOut, transfer?: Transferable[]): void;
 };
-const meshQueue: WorkerMeshRequest[] = [];
-const cancelledJobs = new Set<string>();
-let activeRequest: WorkerMeshRequest | null = null;
+type WorkerBuildRequest =
+  | WorkerMeshRequest
+  | WorkerBaseRequest
+  | WorkerEnhancementRequest;
 
-function workerJobKey(jobId: number, version: number): string {
-  return `${jobId}:${version}`;
+const meshQueue: WorkerBuildRequest[] = [];
+const cancelledJobs = new Set<string>();
+let activeRequest: WorkerBuildRequest | null = null;
+
+function workerJobKey(
+  jobId: number,
+  phase: "base" | "enhancement",
+  version: number,
+): string {
+  return `${jobId}:${phase}:${version}`;
 }
 
 self.onmessage = (event: MessageEvent<WorkerIn>) => {
   const message = event.data;
   if (message.type === "cancel") {
-    const key = workerJobKey(message.jobId, message.version);
+    const key = workerJobKey(message.jobId, message.phase, message.version);
     const queuedIndex = meshQueue.findIndex(
-      (request) => workerJobKey(request.jobId, request.version) === key,
+      (request) =>
+        workerJobKey(request.jobId, request.phase, request.version) === key,
     );
     if (queuedIndex >= 0) {
       const [request] = meshQueue.splice(queuedIndex, 1);
       if (request) postCancelled(request);
     } else if (
       activeRequest &&
-      workerJobKey(activeRequest.jobId, activeRequest.version) === key
+      workerJobKey(
+        activeRequest.jobId,
+        activeRequest.phase,
+        activeRequest.version,
+      ) === key
     ) {
       cancelledJobs.add(key);
     }
@@ -219,13 +235,19 @@ async function drainMeshQueue(): Promise<void> {
   while (request) {
     activeRequest = request;
     await processMeshRequest(request);
-    cancelledJobs.delete(workerJobKey(request.jobId, request.version));
+    cancelledJobs.delete(
+      workerJobKey(request.jobId, request.phase, request.version),
+    );
     activeRequest = null;
     request = meshQueue.shift();
   }
 }
 
-async function processMeshRequest(request: WorkerMeshRequest): Promise<void> {
+async function processMeshRequest(request: WorkerBuildRequest): Promise<void> {
+  if (request.type === "enhancement") {
+    await processEnhancementRequest(request);
+    return;
+  }
   const {
     buffer,
     jobId,
@@ -236,29 +258,41 @@ async function processMeshRequest(request: WorkerMeshRequest): Promise<void> {
     bakeEmissiveAttributes,
     benchmark,
   } = request;
+  const progressive = request.type === "base";
   const startedAt = performance.timeOrigin + performance.now();
 
   try {
     const outcome = await runCancellableWorkerTask({
       budgetMs: Math.max(0, request.cancellationCheckpointMs),
-      isCancelled: () => cancelledJobs.has(workerJobKey(jobId, version)),
+      isCancelled: () =>
+        cancelledJobs.has(workerJobKey(jobId, request.phase, version)),
       build: (checkpoint) =>
         buildMeshArraysAsync(
           buffer,
-          bakeEmissiveAttributes !== false,
+          progressive ? false : bakeEmissiveAttributes !== false,
           checkpoint,
         ),
       commit: (result) => {
         const completedAt = performance.timeOrigin + performance.now();
-        const out: WorkerOut = {
-          type: "mesh-result",
+        const enhancementBuffer = progressive
+          ? getRetainedEnhancementBuffer(
+              buffer,
+              result,
+              bakeEmissiveAttributes === true,
+            )
+          : null;
+        const resultType = progressive ? "base-result" : "mesh-result";
+        const out = {
+          type: resultType,
           jobId,
+          phase: "base",
           lod,
           regionX,
           regionY,
           version,
           timing: { startedAt, completedAt },
           ...result,
+          ...(progressive ? { enhancementBuffer } : {}),
           haloEmitterSourceKeys: [],
           benchmark: benchmark
             ? {
@@ -287,8 +321,11 @@ async function processMeshRequest(request: WorkerMeshRequest): Promise<void> {
                 cacheOutcome: benchmark.cacheOutcome,
               }
             : undefined,
-        };
-        workerGlobal.postMessage(out, getMeshTransferables(result));
+        } as WorkerOut;
+        workerGlobal.postMessage(
+          out,
+          getMeshTransferables(result, enhancementBuffer),
+        );
       },
     });
     if (outcome.type === "cancelled") postCancelled(request);
@@ -297,6 +334,7 @@ async function processMeshRequest(request: WorkerMeshRequest): Promise<void> {
     const out: WorkerOut = {
       type: "error",
       jobId,
+      phase: request.phase,
       regionX,
       regionY,
       lod,
@@ -335,23 +373,81 @@ async function processMeshRequest(request: WorkerMeshRequest): Promise<void> {
   }
 }
 
-function postCancelled(request: WorkerMeshRequest): void {
+async function processEnhancementRequest(
+  request: WorkerEnhancementRequest,
+): Promise<void> {
+  const startedAt = performance.timeOrigin + performance.now();
+  try {
+    const outcome = await runCancellableWorkerTask({
+      budgetMs: Math.max(0, request.cancellationCheckpointMs),
+      isCancelled: () =>
+        cancelledJobs.has(
+          workerJobKey(request.jobId, request.phase, request.version),
+        ),
+      build: (checkpoint) =>
+        buildEmissiveEnhancementArraysAsync(request.buffer, checkpoint),
+      commit: (result) => {
+        const completedAt = performance.timeOrigin + performance.now();
+        workerGlobal.postMessage(
+          {
+            type: "enhancement-result",
+            jobId: request.jobId,
+            phase: "enhancement",
+            version: request.version,
+            lod: request.lod,
+            regionX: request.regionX,
+            regionY: request.regionY,
+            baseMeshId: request.baseMeshId,
+            timing: { startedAt, completedAt },
+            quadrantEnhancements: result.quadrantEnhancements,
+          },
+          result.quadrantEnhancements.map(
+            (quadrant) => quadrant.emissiveColors.buffer,
+          ),
+        );
+      },
+    });
+    if (outcome.type === "cancelled") postCancelled(request);
+  } catch (err) {
+    const completedAt = performance.timeOrigin + performance.now();
+    workerGlobal.postMessage({
+      type: "error",
+      jobId: request.jobId,
+      phase: "enhancement",
+      version: request.version,
+      lod: request.lod,
+      regionX: request.regionX,
+      regionY: request.regionY,
+      baseMeshId: request.baseMeshId,
+      timing: { startedAt, completedAt },
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function postCancelled(request: WorkerBuildRequest): void {
   const completedAt = performance.timeOrigin + performance.now();
   workerGlobal.postMessage({
     type: "cancelled",
     jobId: request.jobId,
+    phase: request.phase,
     version: request.version,
     lod: request.lod,
     regionX: request.regionX,
     regionY: request.regionY,
+    ...(request.type === "enhancement"
+      ? { baseMeshId: request.baseMeshId }
+      : {}),
     timing: { startedAt: completedAt, completedAt },
   });
 }
 
 function getMeshTransferables(
   result: ReturnType<typeof buildMeshArrays>,
+  enhancementBuffer: ArrayBuffer | null = null,
 ): Transferable[] {
   const transferables: Transferable[] = [result.chunkTopHeights.buffer];
+  if (enhancementBuffer) transferables.push(enhancementBuffer);
   for (const quadrant of [
     ...result.quadrantMeshes,
     ...result.transparentQuadrantMeshes,
@@ -444,6 +540,7 @@ export function buildMeshArrays(
     power: number;
     radius: number;
   }[];
+  enhancementEligible: boolean;
   emissivePhase: EmissivePhaseMetrics;
 } {
   if (buf.byteLength < 20) throw new Error("buffer too small for header");
@@ -884,6 +981,7 @@ export function buildMeshArrays(
     minZ,
     maxZ,
     emitterRecords: [],
+    enhancementEligible: false,
     emissivePhase: createEmptyEmissivePhaseMetrics(),
   };
 }
@@ -1170,7 +1268,63 @@ function* buildOptimizedMeshArraySteps(
     minZ,
     maxZ,
     emitterRecords: emitterRecords.filter((record) => !record.halo),
+    enhancementEligible: emitterRecords.length > 0,
     emissivePhase,
+  };
+}
+
+export function buildEmissiveEnhancementArrays(buf: ArrayBuffer): {
+  quadrantEnhancements: {
+    quadrantIndex: number;
+    emissiveColors: EmissiveColorArray;
+  }[];
+  emissivePhase: EmissivePhaseMetrics;
+} {
+  const result = buildMeshArrays(buf, true);
+  return {
+    quadrantEnhancements: result.quadrantMeshes.flatMap((quadrant) =>
+      quadrant.emissiveColors
+        ? [
+            {
+              quadrantIndex: quadrant.quadrantIndex,
+              emissiveColors: quadrant.emissiveColors,
+            },
+          ]
+        : [],
+    ),
+    emissivePhase: result.emissivePhase,
+  };
+}
+
+export function getRetainedEnhancementBuffer(
+  buffer: ArrayBuffer,
+  result: ReturnType<typeof buildMeshArrays>,
+  enabled: boolean,
+): ArrayBuffer | null {
+  return enabled &&
+    result.enhancementEligible &&
+    result.quadrantMeshes.some((quadrant) => quadrant.indices.length > 0)
+    ? buffer
+    : null;
+}
+
+async function buildEmissiveEnhancementArraysAsync(
+  buf: ArrayBuffer,
+  checkpoint: WorkerCheckpoint,
+): Promise<ReturnType<typeof buildEmissiveEnhancementArrays>> {
+  const result = await buildMeshArraysAsync(buf, true, checkpoint);
+  return {
+    quadrantEnhancements: result.quadrantMeshes.flatMap((quadrant) =>
+      quadrant.emissiveColors
+        ? [
+            {
+              quadrantIndex: quadrant.quadrantIndex,
+              emissiveColors: quadrant.emissiveColors,
+            },
+          ]
+        : [],
+    ),
+    emissivePhase: result.emissivePhase,
   };
 }
 

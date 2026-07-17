@@ -15,6 +15,8 @@ import {
 } from "./camera.js";
 import { createCursorInteractionHandlers } from "./cursor.js";
 import type { CursorHoverInfo, LoadedVoxelTile, WorkerOut } from "./types.js";
+import { selectVoxelWorkerProfile } from "./voxel-adaptive-workers.js";
+import { VoxelWorkerPool } from "./voxel-worker-pool.js";
 
 const MIN_CAMERA_DISTANCE = 1;
 const ACTIVE_LOD_POLL_INTERVAL_MS = 125;
@@ -43,7 +45,7 @@ export function initializeSceneRuntime(args: {
     } | null;
   };
   labelRendererRef: { current: CSS2DRenderer | null };
-  workerRef: { current: Worker | null };
+  workerPoolRef: { current: VoxelWorkerPool<WorkerOut> | null };
   initializedRef: { current: boolean };
   terrainGroupRef: { current: THREE.Group | null };
   voxelGroupRef: { current: THREE.Group | null };
@@ -74,7 +76,8 @@ export function initializeSceneRuntime(args: {
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
   ) => void;
-  handleWorkerMessage: (data: WorkerOut) => void;
+  handleWorkerMessage: (workerId: number, data: WorkerOut) => void;
+  handleWorkerError: (workerId: number) => void;
   buildQueuedTerrainMeshes: () => boolean;
   buildQueuedVoxelMeshes: (
     renderer: THREE.WebGLRenderer,
@@ -95,6 +98,7 @@ export function initializeSceneRuntime(args: {
     camDist: number,
   ) => Promise<void> | void;
   publishChunkStats: (fpsValue: number) => void;
+  observeVoxelFrame: (frameTimeMs: number) => void;
   publishLoadingBreakdown: () => void;
   hasPendingSceneWork: () => boolean;
   clearTerrainTiles: () => void;
@@ -108,7 +112,7 @@ export function initializeSceneRuntime(args: {
     container,
     sceneRef,
     labelRendererRef,
-    workerRef,
+    workerPoolRef,
     initializedRef,
     terrainGroupRef,
     voxelGroupRef,
@@ -135,6 +139,7 @@ export function initializeSceneRuntime(args: {
     biomeLabelsDirtyRef,
     updateMarkerScales,
     handleWorkerMessage,
+    handleWorkerError,
     buildQueuedTerrainMeshes,
     buildQueuedVoxelMeshes,
     retargetInitialCameraToVisibleSurface,
@@ -144,6 +149,7 @@ export function initializeSceneRuntime(args: {
     clearDebugLabels,
     refreshBiomeLabels,
     publishChunkStats,
+    observeVoxelFrame,
     publishLoadingBreakdown,
     hasPendingSceneWork,
     clearTerrainTiles,
@@ -237,16 +243,35 @@ export function initializeSceneRuntime(args: {
   const preUploadScene = new THREE.Scene();
   const preUploadCamera = new THREE.PerspectiveCamera();
 
-  const worker = new Worker(
-    new URL("../workers/voxel-mesh.worker.ts", import.meta.url),
-    { type: "module" },
+  const coarsePointer =
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(pointer: coarse)").matches
+      : null;
+  const deviceMemoryGb =
+    (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? null;
+  const configuredTarget = Math.floor(
+    debugSettingsRef.current.voxelWorkerTarget,
   );
-  workerRef.current = worker;
-  worker.onmessage = (e: MessageEvent) => {
-    handleWorkerMessage(e.data as WorkerOut);
-  };
-
-  worker.onerror = () => {};
+  const detectedProfile = selectVoxelWorkerProfile({
+    coarsePointer,
+    deviceMemoryGb,
+    staticOne: configuredTarget === 1,
+  });
+  const initialWorkers =
+    configuredTarget > 0
+      ? Math.min(configuredTarget, detectedProfile.maxWorkers)
+      : detectedProfile.initialWorkers;
+  const workerPool = new VoxelWorkerPool<WorkerOut>({
+    initialWorkers,
+    maxWorkers: detectedProfile.maxWorkers,
+    createWorker: () =>
+      new Worker(new URL("../workers/voxel-mesh.worker.ts", import.meta.url), {
+        type: "module",
+      }),
+    onMessage: handleWorkerMessage,
+    onError: handleWorkerError,
+  });
+  workerPoolRef.current = workerPool;
 
   const cursorHandlers = createCursorInteractionHandlers({
     renderer,
@@ -538,6 +563,8 @@ export function initializeSceneRuntime(args: {
     renderer.render(scene, camera);
     labelRenderer.render(scene, camera);
 
+    observeVoxelFrame(performance.now() - now);
+
     publishLoadingBreakdown();
 
     fpsFrameCounter++;
@@ -656,7 +683,7 @@ export function initializeSceneRuntime(args: {
   function onPointerUp(e: PointerEvent) {
     const tapPointer = activeTapPointers.get(e.pointerId);
     activeTapPointers.delete(e.pointerId);
-    isPointerInteracting = false;
+    isPointerInteracting = activeTapPointers.size > 0;
     markActive();
     if (tapPointer && shouldHandleTap(tapPointer, e)) {
       handleCanvasTap(e);
@@ -672,15 +699,17 @@ export function initializeSceneRuntime(args: {
       suppressTouchTapCandidates();
     }
     activeTapPointers.delete(e.pointerId);
-    isPointerInteracting = false;
+    isPointerInteracting = activeTapPointers.size > 0;
     markActive();
     cursorHandlers.onPointerCancel(e);
   }
 
   function onPointerLeave(e: PointerEvent) {
-    activeTapPointers.delete(e.pointerId);
+    if (e.buttons === 0) {
+      activeTapPointers.delete(e.pointerId);
+    }
     isPointerOverCanvas = false;
-    isPointerInteracting = false;
+    isPointerInteracting = activeTapPointers.size > 0;
     cursorHandlers.onPointerLeave(e);
   }
 
@@ -750,8 +779,8 @@ export function initializeSceneRuntime(args: {
     }
     labelRendererRef.current = null;
 
-    worker.terminate();
-    workerRef.current = null;
+    workerPool.shutdown();
+    workerPoolRef.current = null;
     terrainMaterial.dispose();
     voxelMaterial.dispose();
     transparentVoxelMaterial.dispose();

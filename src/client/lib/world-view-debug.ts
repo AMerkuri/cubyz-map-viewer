@@ -45,16 +45,54 @@ export type ChunkStats = {
     voxels: number;
   };
   voxelPipeline: {
+    loadGeneration: number;
     compactInput: { jobs: number; bytes: number };
     expandedOutput: { jobs: number; bytes: number };
     timings: Record<
       | "fetchMs"
       | "compactQueueWaitMs"
-      | "workerExecutionMs"
+      | "baseWorkerExecutionMs"
       | "resultTransferWaitMs"
       | "sceneQueueWaitMs"
-      | "requestToVisibleMs",
-      { averageMs: number | null; samples: number }
+      | "selectionToBaseVisibleMs"
+      | "enhancementQueueWaitMs"
+      | "enhancementWorkerExecutionMs"
+      | "enhancementResultTransferWaitMs"
+      | "enhancementAttachWaitMs"
+      | "selectionToEnhancedMs",
+      {
+        count: number;
+        p50Ms: number | null;
+        p95Ms: number | null;
+        maxMs: number | null;
+      }
+    >;
+    currentQueue: {
+      jobs: number;
+      oldestDemandAgeMs: {
+        overall: number | null;
+        byLod: Record<string, number>;
+        bySafetyClass: Record<string, number>;
+        byCoverageClass: Record<string, number>;
+        byViewClass: Record<string, number>;
+        byPhase: Record<string, number>;
+      };
+    };
+    focusDeadlineMisses: number;
+    sceneBacklog: { jobs: number; bytes: number };
+    observations: Record<
+      | "frameTimeMs"
+      | "workerBusyRatio"
+      | "workerDurationMs"
+      | "reservedExpandedBytes"
+      | "activeWorkers"
+      | "targetWorkers",
+      {
+        count: number;
+        p50: number | null;
+        p95: number | null;
+        max: number | null;
+      }
     >;
     cancellations: Record<string, number>;
     discards: Record<string, number>;
@@ -122,6 +160,7 @@ export interface MapDebugSettings {
   voxelCompactInputMaxBytes: number;
   voxelExpandedOutputMaxJobs: number;
   voxelExpandedOutputMaxBytes: number;
+  voxelWorkerTarget: number;
   voxelCancellationCheckpointMs: number;
   maxConcurrentTerrainFetches: number;
   voxelTopAoIntensity: number;
@@ -146,6 +185,7 @@ export interface MapDebugSettings {
   warmVoxelCacheLimitBytes: number;
   voxelHaloEmittersEnabled: number;
   voxelEmissiveAttributesEnabled: number;
+  voxelProgressiveMeshingEnabled: number;
 }
 
 export interface MapDebugParameterDefinition {
@@ -185,6 +225,7 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   voxelCompactInputMaxBytes: 32 * MB,
   voxelExpandedOutputMaxJobs: 4,
   voxelExpandedOutputMaxBytes: 96 * MB,
+  voxelWorkerTarget: 0,
   voxelCancellationCheckpointMs: 4,
   voxelTopAoIntensity: 1,
   voxelWallAoIntensity: 0.5,
@@ -207,6 +248,7 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   voxelLodHysteresisRatio: 0.12,
   voxelHaloEmittersEnabled: 1,
   voxelEmissiveAttributesEnabled: 1,
+  voxelProgressiveMeshingEnabled: 1,
 };
 
 export function createEmptyChunkStats(): ChunkStats {
@@ -241,16 +283,95 @@ export function createEmptyChunkStats(): ChunkStats {
       voxels: 0,
     },
     voxelPipeline: {
+      loadGeneration: 1,
       compactInput: { jobs: 0, bytes: 0 },
       expandedOutput: { jobs: 0, bytes: 0 },
       timings: {
-        fetchMs: { averageMs: null, samples: 0 },
-        compactQueueWaitMs: { averageMs: null, samples: 0 },
-        workerExecutionMs: { averageMs: null, samples: 0 },
-        resultTransferWaitMs: { averageMs: null, samples: 0 },
-        sceneQueueWaitMs: { averageMs: null, samples: 0 },
-        requestToVisibleMs: { averageMs: null, samples: 0 },
+        fetchMs: { count: 0, p50Ms: null, p95Ms: null, maxMs: null },
+        compactQueueWaitMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        baseWorkerExecutionMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        resultTransferWaitMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        sceneQueueWaitMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        selectionToBaseVisibleMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        enhancementQueueWaitMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        enhancementWorkerExecutionMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        enhancementResultTransferWaitMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        enhancementAttachWaitMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
+        selectionToEnhancedMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
       },
+      currentQueue: {
+        jobs: 0,
+        oldestDemandAgeMs: {
+          overall: null,
+          byLod: {},
+          bySafetyClass: {},
+          byCoverageClass: {},
+          byViewClass: {},
+          byPhase: {},
+        },
+      },
+      focusDeadlineMisses: 0,
+      sceneBacklog: { jobs: 0, bytes: 0 },
+      observations: Object.fromEntries(
+        [
+          "frameTimeMs",
+          "workerBusyRatio",
+          "workerDurationMs",
+          "reservedExpandedBytes",
+          "activeWorkers",
+          "targetWorkers",
+        ].map((key) => [key, { count: 0, p50: null, p95: null, max: null }]),
+      ) as ChunkStats["voxelPipeline"]["observations"],
       cancellations: {},
       discards: {},
     },
@@ -440,6 +561,19 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     toDisplay: (value) => value / MB,
     fromDisplay: (value) => value * MB,
     formatDisplay: (value) => `${Math.round(value)} MiB`,
+  },
+  {
+    key: "voxelWorkerTarget",
+    section: "Loading",
+    label: "Voxel Worker Target",
+    description:
+      "Uses adaptive profile-based concurrency at 0, or a fixed worker count from 1 through 4.",
+    min: 0,
+    max: 4,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelWorkerTarget,
+    formatDisplay: (value) =>
+      value === 0 ? "Adaptive" : `${Math.round(value)} fixed`,
   },
   {
     key: "voxelCancellationCheckpointMs",
@@ -671,6 +805,18 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     step: 1,
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelHaloEmittersEnabled,
     formatDisplay: (value) => (value <= 0 ? "Off" : "On"),
+  },
+  {
+    key: "voxelProgressiveMeshingEnabled",
+    section: "Diagnostics",
+    label: "Progressive Voxel Meshing",
+    description:
+      "Splits base geometry from optional emissive enhancement. Set to Off to use the one-phase worker baseline for correctness and performance comparisons.",
+    min: 0,
+    max: 1,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelProgressiveMeshingEnabled,
+    formatDisplay: (value) => (value <= 0 ? "One phase" : "Progressive"),
   },
   {
     key: "voxelEmissiveAttributesEnabled",

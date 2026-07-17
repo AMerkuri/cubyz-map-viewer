@@ -1,7 +1,11 @@
 import * as THREE from "three";
 import { VOXEL_EMISSIVE_ATTRIBUTE } from "./block-light-mesh.js";
 import { getLodBorderColor } from "./primitives.js";
-import type { PendingVoxelMeshItem } from "./types.js";
+import type {
+  LoadedVoxelTile,
+  PendingVoxelMeshItem,
+  WorkerEnhancementQuadrant,
+} from "./types.js";
 import { chunkWorldSize, regionWorldSize } from "./utils.js";
 
 export function buildVoxelBorderLines(
@@ -155,4 +159,30 @@ export function buildVoxelQuadrantSubMeshes(
     minZ: item.minZ,
     maxZ: item.maxZ,
   };
+}
+
+export function attachVoxelEmissiveEnhancement(
+  tile: LoadedVoxelTile,
+  enhancements: readonly WorkerEnhancementQuadrant[],
+): boolean {
+  const attributes = new Map<number, THREE.BufferAttribute>();
+  for (const enhancement of enhancements) {
+    const subMesh = tile.subMeshes.find(
+      (candidate) => candidate.quadrantIndex === enhancement.quadrantIndex,
+    );
+    if (!subMesh) return false;
+    const position = subMesh.mesh.geometry.getAttribute("position");
+    if (enhancement.emissiveColors.length !== position.count * 3) return false;
+    attributes.set(
+      enhancement.quadrantIndex,
+      new THREE.BufferAttribute(enhancement.emissiveColors, 3, true),
+    );
+  }
+  for (const subMesh of tile.subMeshes) {
+    const attribute = attributes.get(subMesh.quadrantIndex);
+    if (attribute) {
+      subMesh.mesh.geometry.setAttribute(VOXEL_EMISSIVE_ATTRIBUTE, attribute);
+    }
+  }
+  return true;
 }

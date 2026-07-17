@@ -41,6 +41,7 @@ function runSelection(args: {
   voxelUnloadGraceUntil?: Map<string, number>;
   now?: number;
   unloadVoxelTile?: (key: string) => void;
+  stableForDetail?: boolean;
 }) {
   const availableLods = args.availableLods ?? LODS;
   return runVoxelLodSelection({
@@ -67,7 +68,7 @@ function runSelection(args: {
     minRenderedVoxelLod: 1,
     requestGeneration: args.generation ?? 1,
     now: args.now ?? 10_000,
-    stableForDetail: true,
+    stableForDetail: args.stableForDetail ?? true,
     debugSettings: {
       voxelBehindCameraDotStart: -0.5,
       voxelBehindCameraMaxMultiplier: 1.05,
@@ -97,6 +98,7 @@ function loadedTile(
     lod,
     regionX,
     regionY,
+    baseMeshId: 1,
     voxelSize: lod,
     subMeshes: [0, 1, 2, 3].map((quadrantIndex) => ({
       quadrantIndex,
@@ -205,6 +207,19 @@ test("local focus overrides rear coarsening", () => {
     }),
   );
   assert.ok(lods.includes(1));
+});
+
+test("camera motion retains coverage while deferring finer detail", () => {
+  const root = loadedTile(32, 0, 0);
+  const result = runSelection({
+    cameraForward: new THREE.Vector3(0, 1, 0),
+    loadedVoxels: new Map([[root.key, root]]),
+    stableForDetail: false,
+  });
+
+  assert.ok(result.detailVoxelRequests.size > 0);
+  assert.equal(result.committedVoxelDetailRequests.size, 0);
+  assertTileVisible(root, true);
 });
 
 test("missing child retains an eligible coarser fallback request", () => {

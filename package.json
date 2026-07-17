@@ -18,6 +18,7 @@
     "test:core:terrain": "node --import tsx --test test/core/contract/terrain-seam.test.ts",
     "bench:voxel:server": "node --import tsx --test test/voxel/benchmarks/voxel-server.bench.ts",
     "bench:voxel:client": "node --import tsx --test test/voxel/benchmarks/voxel-client.bench.ts",
+    "compare:voxel:workers": "node --import tsx scripts/compare-voxel-worker-pool.ts",
     "bench:voxel:real-save": "node scripts/benchmark-real-save-voxel-memory.mjs",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "tsx watch src/server/index.ts",

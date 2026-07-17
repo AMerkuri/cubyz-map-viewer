@@ -29,7 +29,11 @@ import {
   getReferenceVoxelViewBounds,
   type VoxelViewBounds,
 } from "./voxel-view.js";
-import type { VoxelCoverageClass, VoxelViewClass } from "./voxel-work.js";
+import {
+  getVoxelSafetyClass,
+  type VoxelCoverageClass,
+  type VoxelViewClass,
+} from "./voxel-work.js";
 
 const TOP_HEIGHT_GRID_SIZE = 4;
 const FOCUS_REFINEMENT_RADIUS_MULTIPLIER = 0.5;
@@ -277,11 +281,15 @@ function noteVoxelRequest(args: {
     regionY,
     priority: {
       coverageClass,
+      safetyClass: getVoxelSafetyClass(coverageClass, viewClass),
       viewClass,
+      phase: "base",
       projectedBenefit,
       distance: effectiveDist,
       lod,
       generation: requestGeneration,
+      demandSince: args.selectedAt,
+      sequence: requestGeneration,
     },
     generation: requestGeneration,
     version: getVoxelRefreshVersion(key),

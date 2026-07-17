@@ -24,9 +24,9 @@ function StatsSectionTitle({ children }: { children: React.ReactNode }) {
 export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
   const formatTiming = (key: keyof typeof chunkStats.voxelPipeline.timings) => {
     const timing = chunkStats.voxelPipeline.timings[key];
-    return timing.averageMs === null
+    return timing.p50Ms === null
       ? "n/a"
-      : `${timing.averageMs.toFixed(1)} ms (${timing.samples})`;
+      : `p50 ${timing.p50Ms.toFixed(1)} / p95 ${timing.p95Ms?.toFixed(1)} / max ${timing.maxMs?.toFixed(1)} ms (n=${timing.count})`;
   };
   const formatOutcomes = (outcomes: Record<string, number>) => {
     const entries = Object.entries(outcomes).sort(([left], [right]) =>
@@ -35,6 +35,25 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
     return entries.length === 0
       ? "none"
       : entries.map(([key, count]) => `${key} ${count}`).join(" / ");
+  };
+  const formatAgeGroups = (groups: Record<string, number>) => {
+    const entries = Object.entries(groups).sort(([left], [right]) =>
+      left.localeCompare(right, undefined, { numeric: true }),
+    );
+    return entries.length === 0
+      ? "none"
+      : entries
+          .map(([key, ageMs]) => `${key} ${ageMs.toFixed(0)} ms`)
+          .join(" / ");
+  };
+  const formatObservation = (
+    key: keyof typeof chunkStats.voxelPipeline.observations,
+    format: (value: number) => string,
+  ) => {
+    const observation = chunkStats.voxelPipeline.observations[key];
+    return observation.p50 === null
+      ? "n/a"
+      : `p50 ${format(observation.p50)} / p95 ${format(observation.p95 ?? 0)} / max ${format(observation.max ?? 0)} (n=${observation.count})`;
   };
   return (
     <div style={{ display: "grid", gap: 6 }}>
@@ -51,19 +70,117 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
 
       <StatsSectionTitle>Voxel pipeline</StatsSectionTitle>
       <div>
-        Compact input: {chunkStats.voxelPipeline.compactInput.jobs} jobs /{" "}
+        Diagnostics load generation: {chunkStats.voxelPipeline.loadGeneration}
+      </div>
+      <div>
+        Current compact-input queue:{" "}
+        {chunkStats.voxelPipeline.compactInput.jobs} jobs /{" "}
         {formatMemoryBytes(chunkStats.voxelPipeline.compactInput.bytes)}
       </div>
       <div>
-        Expanded output: {chunkStats.voxelPipeline.expandedOutput.jobs} jobs /{" "}
-        {formatMemoryBytes(chunkStats.voxelPipeline.expandedOutput.bytes)}
+        Current base scene-ready queue:{" "}
+        {chunkStats.voxelPipeline.sceneBacklog.jobs} jobs /{" "}
+        {formatMemoryBytes(chunkStats.voxelPipeline.sceneBacklog.bytes)}
       </div>
-      <div>Avg fetch: {formatTiming("fetchMs")}</div>
-      <div>Avg compact wait: {formatTiming("compactQueueWaitMs")}</div>
-      <div>Avg worker: {formatTiming("workerExecutionMs")}</div>
-      <div>Avg result transfer: {formatTiming("resultTransferWaitMs")}</div>
-      <div>Avg scene wait: {formatTiming("sceneQueueWaitMs")}</div>
-      <div>Avg request to visible: {formatTiming("requestToVisibleMs")}</div>
+      <div>Base fetch duration: {formatTiming("fetchMs")}</div>
+      <div>Base compact-queue wait: {formatTiming("compactQueueWaitMs")}</div>
+      <div>Base worker duration: {formatTiming("baseWorkerExecutionMs")}</div>
+      <div>
+        Base result-transfer wait: {formatTiming("resultTransferWaitMs")}
+      </div>
+      <div>Base scene-ready wait: {formatTiming("sceneQueueWaitMs")}</div>
+      <div>
+        Selection to base-visible state (end-to-end, not additive):{" "}
+        {formatTiming("selectionToBaseVisibleMs")}
+      </div>
+      <div>
+        Enhancement compact-queue wait: {formatTiming("enhancementQueueWaitMs")}
+      </div>
+      <div>
+        Enhancement worker duration:{" "}
+        {formatTiming("enhancementWorkerExecutionMs")}
+      </div>
+      <div>
+        Enhancement result-transfer wait:{" "}
+        {formatTiming("enhancementResultTransferWaitMs")}
+      </div>
+      <div>
+        Enhancement attachment wait: {formatTiming("enhancementAttachWaitMs")}
+      </div>
+      <div>
+        Selection to enhanced state (optional, not additive):{" "}
+        {formatTiming("selectionToEnhancedMs")}
+      </div>
+      <div>
+        Current queued demand: {chunkStats.voxelPipeline.currentQueue.jobs} jobs
+        / oldest{" "}
+        {chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs.overall ===
+        null
+          ? "n/a"
+          : `${chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs.overall.toFixed(0)} ms`}
+      </div>
+      <div>
+        Oldest by LOD:{" "}
+        {formatAgeGroups(
+          chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs.byLod,
+        )}
+      </div>
+      <div>
+        Oldest by safety:{" "}
+        {formatAgeGroups(
+          chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs.bySafetyClass,
+        )}
+      </div>
+      <div>
+        Oldest by coverage:{" "}
+        {formatAgeGroups(
+          chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs
+            .byCoverageClass,
+        )}
+      </div>
+      <div>
+        Oldest by view:{" "}
+        {formatAgeGroups(
+          chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs.byViewClass,
+        )}
+      </div>
+      <div>
+        Oldest by phase:{" "}
+        {formatAgeGroups(
+          chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs.byPhase,
+        )}
+      </div>
+      <div>
+        Focus base deadline misses:{" "}
+        {chunkStats.voxelPipeline.focusDeadlineMisses}
+      </div>
+      <div>
+        Frame work time:{" "}
+        {formatObservation("frameTimeMs", (value) => `${value.toFixed(1)} ms`)}
+      </div>
+      <div>
+        Worker busy observations:{" "}
+        {formatObservation(
+          "workerBusyRatio",
+          (value) => `${(value * 100).toFixed(0)}%`,
+        )}
+      </div>
+      <div>
+        Worker duration observations:{" "}
+        {formatObservation(
+          "workerDurationMs",
+          (value) => `${value.toFixed(1)} ms`,
+        )}
+      </div>
+      <div>
+        Reserved expanded bytes:{" "}
+        {formatObservation("reservedExpandedBytes", formatMemoryBytes)}
+      </div>
+      <div>
+        Active / target worker observations:{" "}
+        {formatObservation("activeWorkers", (value) => value.toFixed(0))} /{" "}
+        {formatObservation("targetWorkers", (value) => value.toFixed(0))}
+      </div>
       <div>
         Cancellations: {formatOutcomes(chunkStats.voxelPipeline.cancellations)}
       </div>

@@ -70,12 +70,20 @@ interface CachedNodeResult {
 interface SummaryWork {
   valid: boolean;
   promise: Promise<EmitterSummaryResult>;
+  leafBuildAdmission?: LeafBuildAdmission;
+}
+
+interface LeafBuildAdmission {
+  ready: boolean;
+  skipped: boolean;
+  started: boolean;
+  resolve?: () => void;
 }
 
 export class VoxelEmitterSummaryService {
   private readonly memory: WeightedLRUCache<string, EmitterSummaryNode>;
   private readonly inFlight = new Map<string, SummaryWork>();
-  private readonly leafBuildQueue: Array<() => void> = [];
+  private readonly leafBuildQueue: LeafBuildAdmission[] = [];
   private readonly leafBuildLimit: number;
   private leafBuildActive = 0;
   private activeWork = 0;
@@ -132,6 +140,9 @@ export class VoxelEmitterSummaryService {
 
     const work = {} as SummaryWork;
     work.valid = true;
+    if (lod === 1) {
+      work.leafBuildAdmission = this.createLeafBuildAdmission();
+    }
     this.activeWork++;
     work.promise = this.loadOrBuildNode(lod, regionX, regionY, work).finally(
       () => {
@@ -190,51 +201,61 @@ export class VoxelEmitterSummaryService {
   ): Promise<EmitterSummaryResult> {
     const startedAt = performance.now();
     if (lod === 1) {
-      const sourceSignature = await this.buildLeafSourceSignature(
-        regionX,
-        regionY,
-      );
-      const cached = await this.readCachedNode(
-        lod,
-        regionX,
-        regionY,
-        sourceSignature,
-        work,
-      );
-      if (cached) {
-        return resultForCachedNode(
-          cached.node,
-          cached.outcome,
-          performance.now() - startedAt,
+      const admission = work.leafBuildAdmission;
+      if (!admission) throw new Error("Missing leaf build admission");
+      try {
+        const sourceSignature = await this.buildLeafSourceSignature(
+          regionX,
+          regionY,
         );
-      }
-      const { clusters, rawSourceCount, cappedClusterCount, leafParses } =
-        await this.withLeafBuildSlot(() => this.buildLeaf(regionX, regionY));
-      this.leafExtractions++;
-      this.extractedSources += rawSourceCount;
-      const node = this.createNode(
-        lod,
-        regionX,
-        regionY,
-        sourceSignature,
-        rawSourceCount,
-        cappedClusterCount,
-        clusters,
-        work,
-      );
-      await this.persistNode(node);
-      await this.removeStaleNode(work, node);
-      return {
-        node,
-        metrics: {
-          cacheOutcome: "built",
-          buildMs: performance.now() - startedAt,
-          leafParses,
+        const cached = await this.readCachedNode(
+          lod,
+          regionX,
+          regionY,
+          sourceSignature,
+          work,
+        );
+        if (cached) {
+          this.skipLeafBuildAdmission(admission);
+          return resultForCachedNode(
+            cached.node,
+            cached.outcome,
+            performance.now() - startedAt,
+          );
+        }
+        const { clusters, rawSourceCount, cappedClusterCount, leafParses } =
+          await this.withLeafBuildSlot(admission, () =>
+            this.buildLeaf(regionX, regionY),
+          );
+        this.leafExtractions++;
+        this.extractedSources += rawSourceCount;
+        const node = this.createNode(
+          lod,
+          regionX,
+          regionY,
+          sourceSignature,
           rawSourceCount,
-          retainedClusterCount: clusters.length,
           cappedClusterCount,
-        },
-      };
+          clusters,
+          work,
+        );
+        await this.persistNode(node);
+        await this.removeStaleNode(work, node);
+        return {
+          node,
+          metrics: {
+            cacheOutcome: "built",
+            buildMs: performance.now() - startedAt,
+            leafParses,
+            rawSourceCount,
+            retainedClusterCount: clusters.length,
+            cappedClusterCount,
+          },
+        };
+      } catch (error) {
+        this.skipLeafBuildAdmission(admission);
+        throw error;
+      }
     }
 
     const childLod = (lod / 2) as EmitterSummaryLod;
@@ -306,17 +327,56 @@ export class VoxelEmitterSummaryService {
     };
   }
 
-  private async withLeafBuildSlot<T>(build: () => Promise<T>): Promise<T> {
-    if (this.leafBuildActive >= this.leafBuildLimit) {
-      await new Promise<void>((resolve) => this.leafBuildQueue.push(resolve));
-    }
-    this.leafBuildActive++;
+  private createLeafBuildAdmission(): LeafBuildAdmission {
+    const admission: LeafBuildAdmission = {
+      ready: false,
+      skipped: false,
+      started: false,
+    };
+    this.leafBuildQueue.push(admission);
+    return admission;
+  }
+
+  private async withLeafBuildSlot<T>(
+    admission: LeafBuildAdmission,
+    build: () => Promise<T>,
+  ): Promise<T> {
+    await this.acquireLeafBuildSlot(admission);
     try {
       return await build();
     } finally {
       this.leafBuildActive--;
-      const next = this.leafBuildQueue.shift();
-      if (next) next();
+      this.pumpLeafBuildQueue();
+    }
+  }
+
+  private acquireLeafBuildSlot(admission: LeafBuildAdmission): Promise<void> {
+    admission.ready = true;
+    const promise = new Promise<void>((resolve) => {
+      admission.resolve = resolve;
+    });
+    this.pumpLeafBuildQueue();
+    return promise;
+  }
+
+  private skipLeafBuildAdmission(admission: LeafBuildAdmission): void {
+    if (admission.started) return;
+    admission.skipped = true;
+    this.pumpLeafBuildQueue();
+  }
+
+  private pumpLeafBuildQueue(): void {
+    while (this.leafBuildQueue.length > 0) {
+      const next = this.leafBuildQueue[0];
+      if (next?.skipped) {
+        this.leafBuildQueue.shift();
+        continue;
+      }
+      if (!next?.ready || this.leafBuildActive >= this.leafBuildLimit) return;
+      this.leafBuildQueue.shift();
+      next.started = true;
+      this.leafBuildActive++;
+      next.resolve?.();
     }
   }
 

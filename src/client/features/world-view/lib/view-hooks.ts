@@ -28,6 +28,7 @@ import type {
   LoadedVoxelTile,
   World3DViewProps,
 } from "./types.js";
+import type { VoxelWorkerPool } from "./voxel-worker-pool.js";
 
 interface SceneRuntimeState {
   renderer: THREE.WebGLRenderer;
@@ -41,7 +42,9 @@ export function useWorld3DSceneRuntime(args: {
   containerRef: { current: HTMLDivElement | null };
   sceneRef: { current: SceneRuntimeState | null };
   labelRendererRef: { current: CSS2DRenderer | null };
-  workerRef: { current: Worker | null };
+  workerPoolRef: {
+    current: VoxelWorkerPool<import("./types.js").WorkerOut> | null;
+  };
   initializedRef: { current: boolean };
   terrainGroupRef: { current: THREE.Group | null };
   voxelGroupRef: { current: THREE.Group | null };
@@ -72,7 +75,11 @@ export function useWorld3DSceneRuntime(args: {
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
   ) => void;
-  handleWorkerMessage: (data: import("./types.js").WorkerOut) => void;
+  handleWorkerMessage: (
+    workerId: number,
+    data: import("./types.js").WorkerOut,
+  ) => void;
+  handleWorkerError: (workerId: number) => void;
   buildQueuedTerrainMeshes: () => boolean;
   buildQueuedVoxelMeshes: (
     renderer: THREE.WebGLRenderer,
@@ -93,6 +100,7 @@ export function useWorld3DSceneRuntime(args: {
     camDist: number,
   ) => Promise<void> | void;
   publishChunkStats: (fpsValue: number) => void;
+  observeVoxelFrame: (frameTimeMs: number) => void;
   publishLoadingBreakdown: () => void;
   hasPendingSceneWork: () => boolean;
   clearTerrainTiles: () => void;
@@ -106,7 +114,7 @@ export function useWorld3DSceneRuntime(args: {
     containerRef,
     sceneRef,
     labelRendererRef,
-    workerRef,
+    workerPoolRef,
     initializedRef,
     terrainGroupRef,
     voxelGroupRef,
@@ -133,6 +141,7 @@ export function useWorld3DSceneRuntime(args: {
     biomeLabelsDirtyRef,
     updateMarkerScales,
     handleWorkerMessage,
+    handleWorkerError,
     buildQueuedTerrainMeshes,
     buildQueuedVoxelMeshes,
     retargetInitialCameraToVisibleSurface,
@@ -142,6 +151,7 @@ export function useWorld3DSceneRuntime(args: {
     clearDebugLabels,
     refreshBiomeLabels,
     publishChunkStats,
+    observeVoxelFrame,
     publishLoadingBreakdown,
     hasPendingSceneWork,
     clearTerrainTiles,
@@ -154,6 +164,7 @@ export function useWorld3DSceneRuntime(args: {
 
   const onUpdateMarkerScales = useEffectEvent(updateMarkerScales);
   const onHandleWorkerMessage = useEffectEvent(handleWorkerMessage);
+  const onHandleWorkerError = useEffectEvent(handleWorkerError);
   const onBuildQueuedTerrainMeshes = useEffectEvent(buildQueuedTerrainMeshes);
   const onBuildQueuedVoxelMeshes = useEffectEvent(buildQueuedVoxelMeshes);
   const onRetargetInitialCameraToVisibleSurface = useEffectEvent(
@@ -165,6 +176,7 @@ export function useWorld3DSceneRuntime(args: {
   const onClearDebugLabels = useEffectEvent(clearDebugLabels);
   const onRefreshBiomeLabels = useEffectEvent(refreshBiomeLabels);
   const onPublishChunkStats = useEffectEvent(publishChunkStats);
+  const onObserveVoxelFrame = useEffectEvent(observeVoxelFrame);
   const onPublishLoadingBreakdown = useEffectEvent(publishLoadingBreakdown);
   const onHasPendingSceneWork = useEffectEvent(hasPendingSceneWork);
   const onClearTerrainTiles = useEffectEvent(clearTerrainTiles);
@@ -178,7 +190,7 @@ export function useWorld3DSceneRuntime(args: {
       container: containerRef.current,
       sceneRef,
       labelRendererRef,
-      workerRef,
+      workerPoolRef,
       initializedRef,
       terrainGroupRef,
       voxelGroupRef,
@@ -205,6 +217,7 @@ export function useWorld3DSceneRuntime(args: {
       biomeLabelsDirtyRef,
       updateMarkerScales: onUpdateMarkerScales,
       handleWorkerMessage: onHandleWorkerMessage,
+      handleWorkerError: onHandleWorkerError,
       buildQueuedTerrainMeshes: onBuildQueuedTerrainMeshes,
       buildQueuedVoxelMeshes: onBuildQueuedVoxelMeshes,
       retargetInitialCameraToVisibleSurface:
@@ -215,6 +228,7 @@ export function useWorld3DSceneRuntime(args: {
       clearDebugLabels: onClearDebugLabels,
       refreshBiomeLabels: onRefreshBiomeLabels,
       publishChunkStats: onPublishChunkStats,
+      observeVoxelFrame: onObserveVoxelFrame,
       publishLoadingBreakdown: onPublishLoadingBreakdown,
       hasPendingSceneWork: onHasPendingSceneWork,
       clearTerrainTiles: onClearTerrainTiles,
@@ -228,7 +242,7 @@ export function useWorld3DSceneRuntime(args: {
     containerRef,
     sceneRef,
     labelRendererRef,
-    workerRef,
+    workerPoolRef,
     initializedRef,
     terrainGroupRef,
     voxelGroupRef,
@@ -275,6 +289,7 @@ export function useWorld3DInitialization(args: {
   pendingInitialSurfaceRetargetRef: { current: InitialCameraState | null };
   addSpawnMarker: () => void;
   updatePlayerMarkers: () => void;
+  resetVoxelLoadGeneration: () => void;
   checkAndUpdateLOD: (
     camera: THREE.PerspectiveCamera,
     controls: OrbitControls,
@@ -296,12 +311,14 @@ export function useWorld3DInitialization(args: {
     pendingInitialSurfaceRetargetRef,
     addSpawnMarker,
     updatePlayerMarkers,
+    resetVoxelLoadGeneration,
     checkAndUpdateLOD,
   } = args;
 
   const onRebuildVoxelIndexState = useEffectEvent(rebuildVoxelIndexState);
   const onAddSpawnMarker = useEffectEvent(addSpawnMarker);
   const onUpdatePlayerMarkers = useEffectEvent(updatePlayerMarkers);
+  const onResetVoxelLoadGeneration = useEffectEvent(resetVoxelLoadGeneration);
   const onCheckAndUpdateLOD = useEffectEvent(checkAndUpdateLOD);
 
   useEffect(() => {
@@ -310,6 +327,7 @@ export function useWorld3DInitialization(args: {
     if (worldDataLoading) return;
 
     initializedRef.current = true;
+    onResetVoxelLoadGeneration();
     surfaceIndexRef.current = surfaceIndex;
     chunkIndexRef.current = chunkIndex;
     onRebuildVoxelIndexState(chunkIndex);
@@ -591,14 +609,20 @@ export function useWorld3DDisplayEffects(args: {
 export function useWorld3DUpdateSubscription(args: {
   subscribe: World3DViewProps["subscribe"];
   handleTileUpdate: (lod: number, tileX: number, tileY: number) => void;
-  handleRegionUpdate: (lod: number, regionX: number, regionY: number) => void;
+  handleRegionUpdates: (
+    regions: TerrainUpdatesBatchEvent["data"]["regions"],
+  ) => void;
   handleWorldUpdate: () => void;
 }): void {
-  const { subscribe, handleTileUpdate, handleRegionUpdate, handleWorldUpdate } =
-    args;
+  const {
+    subscribe,
+    handleTileUpdate,
+    handleRegionUpdates,
+    handleWorldUpdate,
+  } = args;
 
   const onHandleTileUpdate = useEffectEvent(handleTileUpdate);
-  const onHandleRegionUpdate = useEffectEvent(handleRegionUpdate);
+  const onHandleRegionUpdates = useEffectEvent(handleRegionUpdates);
   const onHandleWorldUpdate = useEffectEvent(handleWorldUpdate);
 
   useEffect(() => {
@@ -608,13 +632,7 @@ export function useWorld3DUpdateSubscription(args: {
       for (const tile of batch.data.tiles) {
         onHandleTileUpdate(tile.lod, tile.tileX, tile.tileY);
       }
-      for (const region of batch.data.regions) {
-        onHandleRegionUpdate(
-          (region as { lod?: number }).lod ?? 1,
-          region.regionX,
-          region.regionY,
-        );
-      }
+      onHandleRegionUpdates(batch.data.regions);
     });
 
     const unsubWorld = subscribe("world-updated", () => {

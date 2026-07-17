@@ -12,7 +12,10 @@ import {
   writeSurface,
 } from "../support/fixture-world.js";
 import { cleanupVoxelCache, generateLod1 } from "../support/production.js";
-import { buildWithProductionWorker } from "../support/worker-harness.js";
+import {
+  buildProgressiveWithProductionWorker,
+  buildWithProductionWorker,
+} from "../support/worker-harness.js";
 
 after(cleanupVoxelCache);
 
@@ -49,6 +52,12 @@ test("benchmark client dense emissive baking", async () => {
     const generated = await generateLod1(save, colors, shapes);
     if (!generated.buffer) throw new Error("dense payload missing");
     const mesh = await buildWithProductionWorker(generated.buffer.slice(0));
+    const onePhaseStart = performance.now();
+    const onePhase = await buildWithProductionWorker(generated.buffer.slice(0));
+    const onePhaseMs = performance.now() - onePhaseStart;
+    const progressive = await buildProgressiveWithProductionWorker(
+      generated.buffer.slice(0),
+    );
     await sampleSerial("client-dense-emissive", async () => {
       await buildWithProductionWorker(generated.buffer.slice(0));
     });
@@ -61,10 +70,41 @@ test("benchmark client dense emissive baking", async () => {
           0,
         ),
         emissivePhase: mesh.emissivePhase,
+        cachedPayloadComparison: {
+          onePhaseMs,
+          baseVisibleMs: progressive.baseMs,
+          enhancementMs: progressive.enhancementMs,
+          progressiveTotalCpuMs: progressive.baseMs + progressive.enhancementMs,
+          retainedCompactBytes: progressive.retained?.byteLength ?? 0,
+          onePhaseOutputBytes: meshOutputBytes(onePhase),
+          progressiveBaseOutputBytes: meshOutputBytes(progressive.base),
+          progressiveEnhancementOutputBytes:
+            progressive.enhancement?.quadrantEnhancements.reduce(
+              (sum, quadrant) => sum + quadrant.emissiveColors.byteLength,
+              0,
+            ) ?? 0,
+        },
       }),
     );
   });
 });
+
+function meshOutputBytes(
+  mesh: Awaited<ReturnType<typeof buildWithProductionWorker>>,
+): number {
+  return [...mesh.quadrantMeshes, ...mesh.transparentQuadrantMeshes].reduce(
+    (sum, quadrant) =>
+      sum +
+      quadrant.positions.byteLength +
+      quadrant.normals.byteLength +
+      quadrant.baseColors.byteLength +
+      quadrant.faceAo.byteLength +
+      quadrant.trianglePaletteIndices.byteLength +
+      quadrant.indices.byteLength +
+      (quadrant.emissiveColors?.byteLength ?? 0),
+    mesh.chunkTopHeights.byteLength,
+  );
+}
 
 test("benchmark client adjacent seam pair", async () => {
   await withTemporarySave("bench-client-seam", async (save) => {

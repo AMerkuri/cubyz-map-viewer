@@ -297,16 +297,6 @@ export function publishChunkStats(args: {
 
   const { optionalMetricAggregates: _, ...publishedVoxelBenchmark } =
     voxelBenchmark;
-  const averageTiming = (
-    key: keyof typeof voxelPipeline.diagnostics.timings,
-  ) => {
-    const aggregate = voxelPipeline.diagnostics.timings[key];
-    return {
-      averageMs:
-        aggregate.samples === 0 ? null : aggregate.sumMs / aggregate.samples,
-      samples: aggregate.samples,
-    };
-  };
   const statsPayload: ChunkStats = {
     loading: loadingCount,
     loaded: loadedCount,
@@ -343,16 +333,14 @@ export function publishChunkStats(args: {
       voxels: warmCachedVoxels.size,
     },
     voxelPipeline: {
+      loadGeneration: voxelPipeline.diagnostics.loadGeneration,
       compactInput: voxelPipeline.snapshot.compactInput,
       expandedOutput: voxelPipeline.snapshot.expandedOutput,
-      timings: {
-        fetchMs: averageTiming("fetchMs"),
-        compactQueueWaitMs: averageTiming("compactQueueWaitMs"),
-        workerExecutionMs: averageTiming("workerExecutionMs"),
-        resultTransferWaitMs: averageTiming("resultTransferWaitMs"),
-        sceneQueueWaitMs: averageTiming("sceneQueueWaitMs"),
-        requestToVisibleMs: averageTiming("requestToVisibleMs"),
-      },
+      timings: voxelPipeline.diagnostics.timings,
+      currentQueue: voxelPipeline.diagnostics.currentQueue,
+      focusDeadlineMisses: voxelPipeline.diagnostics.focusDeadlineMisses,
+      sceneBacklog: voxelPipeline.diagnostics.sceneBacklog,
+      observations: voxelPipeline.diagnostics.observations,
       cancellations: { ...voxelPipeline.diagnostics.cancellations },
       discards: { ...voxelPipeline.diagnostics.discards },
     },

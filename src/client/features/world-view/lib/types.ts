@@ -105,6 +105,7 @@ export interface PendingVoxelMeshItem {
   regionX: number;
   regionY: number;
   version: number;
+  priority: VoxelWorkPriority;
   quadrantMeshes: WorkerQuadrantMesh[];
   transparentQuadrantMeshes: WorkerQuadrantMesh[];
   chunkCoverage: number;
@@ -114,6 +115,7 @@ export interface PendingVoxelMeshItem {
   maxZ: number;
   emitterRecords: VoxelEmitterRecord[];
   haloEmitterSourceKeys: string[];
+  enhancementBuffer: ArrayBuffer | null;
 }
 
 export interface PendingVoxelFetchRequest {
@@ -127,17 +129,25 @@ export interface PendingVoxelFetchRequest {
   selectedAt: number;
 }
 
-export interface WorkerMeshRequest {
-  type: "mesh";
+interface WorkerRequestIdentity {
   jobId: number;
+  phase: "base" | "enhancement";
+  version: number;
+}
+
+interface WorkerMeshRequestCommon extends WorkerRequestIdentity {
   buffer: ArrayBuffer;
   lod: number;
   regionX: number;
   regionY: number;
+  cancellationCheckpointMs: number;
+}
+
+export interface WorkerMeshRequest extends WorkerMeshRequestCommon {
+  type: "mesh";
+  phase: "base";
   haloEmitterRecords?: VoxelEmitterRecord[];
   haloEmitterSourceKeys?: string[];
-  version: number;
-  cancellationCheckpointMs: number;
   bakeEmissiveAttributes?: boolean;
   benchmark?: {
     fetchCompletedAt: number;
@@ -158,6 +168,19 @@ export interface WorkerMeshRequest {
   };
 }
 
+export interface WorkerBaseRequest extends WorkerMeshRequestCommon {
+  type: "base";
+  phase: "base";
+  bakeEmissiveAttributes: boolean;
+  benchmark?: WorkerMeshRequest["benchmark"];
+}
+
+export interface WorkerEnhancementRequest extends WorkerMeshRequestCommon {
+  type: "enhancement";
+  phase: "enhancement";
+  baseMeshId: number;
+}
+
 export interface PendingVoxelCompactInput {
   buffer: ArrayBuffer;
   lod: number;
@@ -167,16 +190,31 @@ export interface PendingVoxelCompactInput {
   benchmark: NonNullable<WorkerMeshRequest["benchmark"]>;
 }
 
+export interface PendingVoxelEnhancementInput {
+  buffer: ArrayBuffer;
+  lod: number;
+  regionX: number;
+  regionY: number;
+  baseMeshId: number;
+}
+
 export interface WorkerCancelRequest {
   type: "cancel";
   jobId: number;
+  phase: "base" | "enhancement";
   version: number;
+  baseMeshId?: number;
 }
 
-export type WorkerIn = WorkerMeshRequest | WorkerCancelRequest;
+export type WorkerIn =
+  | WorkerMeshRequest
+  | WorkerBaseRequest
+  | WorkerEnhancementRequest
+  | WorkerCancelRequest;
 
 interface WorkerResponseIdentity {
   jobId: number;
+  phase: "base" | "enhancement";
   version: number;
   timing: {
     startedAt: number;
@@ -186,6 +224,7 @@ interface WorkerResponseIdentity {
 
 export interface WorkerMeshResult extends WorkerResponseIdentity {
   type: "mesh-result";
+  phase: "base";
   lod: number;
   regionX: number;
   regionY: number;
@@ -241,11 +280,32 @@ export interface WorkerMeshResult extends WorkerResponseIdentity {
   };
 }
 
+export interface WorkerBaseResult extends Omit<WorkerMeshResult, "type"> {
+  type: "base-result";
+  enhancementBuffer: ArrayBuffer | null;
+}
+
+export interface WorkerEnhancementQuadrant {
+  quadrantIndex: number;
+  emissiveColors: EmissiveColorArray;
+}
+
+export interface WorkerEnhancementResult extends WorkerResponseIdentity {
+  type: "enhancement-result";
+  phase: "enhancement";
+  lod: number;
+  regionX: number;
+  regionY: number;
+  baseMeshId: number;
+  quadrantEnhancements: WorkerEnhancementQuadrant[];
+}
+
 export interface WorkerCancelled extends WorkerResponseIdentity {
   type: "cancelled";
   lod: number;
   regionX: number;
   regionY: number;
+  baseMeshId?: number;
 }
 
 export interface WorkerError extends WorkerResponseIdentity {
@@ -253,11 +313,17 @@ export interface WorkerError extends WorkerResponseIdentity {
   lod: number;
   regionX: number;
   regionY: number;
+  baseMeshId?: number;
   error: string;
   benchmark?: WorkerMeshResult["benchmark"];
 }
 
-export type WorkerOut = WorkerMeshResult | WorkerCancelled | WorkerError;
+export type WorkerOut =
+  | WorkerMeshResult
+  | WorkerBaseResult
+  | WorkerEnhancementResult
+  | WorkerCancelled
+  | WorkerError;
 
 export interface LoadedTerrainTile {
   key: string;
@@ -281,6 +347,7 @@ export interface LoadedVoxelTile {
   lod: number;
   regionX: number;
   regionY: number;
+  baseMeshId: number;
   voxelSize: number;
   subMeshes: {
     quadrantIndex: number;

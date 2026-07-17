@@ -12,7 +12,7 @@ export function compareVoxelFetchRequests(
   a: PendingVoxelFetchRequest,
   b: PendingVoxelFetchRequest,
 ): number {
-  return compareVoxelWorkPriority(a.priority, b.priority);
+  return compareVoxelWorkPriority(a.priority, b.priority, performance.now());
 }
 
 export function getVoxelRefreshVersion(

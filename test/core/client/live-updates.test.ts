@@ -5,11 +5,12 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import {
   handleTerrainTileUpdate,
-  handleVoxelRegionUpdate,
+  handleVoxelRegionUpdates,
 } from "../../../src/client/features/world-view/lib/live-updates.js";
 import { terrainTileKey } from "../../../src/client/features/world-view/lib/terrain-manager.js";
 import type {
   LoadedTerrainTile,
+  LoadedVoxelTile,
   PendingVoxelFetchRequest,
   PendingVoxelMeshItem,
 } from "../../../src/client/features/world-view/lib/types.js";
@@ -66,11 +67,15 @@ test("terrain changes evict the complete gutter neighborhood and reload only whe
 test("voxel changes floor-align negative halo leaves and ancestors while cancelling stale work", () => {
   const priority: VoxelWorkPriority = {
     coverageClass: "detail",
+    safetyClass: "optional",
     viewClass: "forward",
+    phase: "base",
     projectedBenefit: 1,
     distance: 1,
     lod: 1,
     generation: 0,
+    demandSince: 0,
+    sequence: 1,
   };
   const staleVersions = new Map<string, number>();
   const affectedKey = voxelTileKey(1, -256, -128);
@@ -116,10 +121,8 @@ test("voxel changes floor-align negative halo leaves and ancestors while cancell
   const loading = new Set([affectedKey]);
   const fetchControllers = new Map([[affectedKey, controller]]);
 
-  handleVoxelRegionUpdate({
-    lod: 1,
-    regionX: -128,
-    regionY: 0,
+  handleVoxelRegionUpdates({
+    regions: [{ lod: 1, regionX: -128, regionY: 0 }],
     scene: null,
     loadedVoxels: new Map(),
     availableVoxelKeys: available,
@@ -166,4 +169,85 @@ test("voxel changes floor-align negative halo leaves and ancestors while cancell
     ).size,
     2,
   );
+});
+
+test("voxel update batches union adjacent and duplicate footprints before exact-once side effects", () => {
+  const sourceBatch = [
+    { lod: 1, regionX: 0, regionY: 0 },
+    { lod: 1, regionX: 0, regionY: 0 },
+    { lod: 1, regionX: 128, regionY: 0 },
+  ];
+  const staleVersions = new Map<string, number>();
+  const staleCalls = new Map<string, number>();
+  const cancelCalls = new Map<string, number>();
+  const evictCalls = new Map<string, number>();
+  const refreshCalls = new Map<string, number[]>();
+  const retainedKey = voxelTileKey(1, 0, 0);
+  const retainedTile = { key: retainedKey } as LoadedVoxelTile;
+  const loadedVoxels = new Map([[retainedKey, retainedTile]]);
+  const availableVoxelKeys = new Set<string>();
+  for (const lod of [1, 2, 4, 8, 16, 32]) {
+    const span = 128 * lod;
+    for (let x = -span; x <= span * 2; x += span) {
+      for (let y = -span; y <= span; y += span) {
+        availableVoxelKeys.add(voxelTileKey(lod, x, y));
+      }
+    }
+  }
+
+  const runBatch = (
+    regions: Array<{ lod: number; regionX: number; regionY: number }>,
+  ) => {
+    handleVoxelRegionUpdates({
+      regions,
+      scene: null,
+      loadedVoxels,
+      availableVoxelKeys,
+      missingVoxels: new Set(),
+      failedVoxels: new Map(),
+      loadingVoxels: new Set(),
+      voxelFetchControllers: new Map(),
+      pendingVoxelFetchQueueRef: { current: [] },
+      pendingVoxelMeshQueueRef: { current: [] },
+      markVoxelTileStale: (key) => {
+        staleCalls.set(key, (staleCalls.get(key) ?? 0) + 1);
+        const version = (staleVersions.get(key) ?? 0) + 1;
+        staleVersions.set(key, version);
+        return version;
+      },
+      getVoxelRefreshVersion: (key) => staleVersions.get(key) ?? 0,
+      cancelVoxelWork: (key) => {
+        cancelCalls.set(key, (cancelCalls.get(key) ?? 0) + 1);
+      },
+      evictWarmCachedVoxelTile: (key) => {
+        evictCalls.set(key, (evictCalls.get(key) ?? 0) + 1);
+      },
+      requestDirectVoxelRefresh: (lod, regionX, regionY, version) => {
+        const key = voxelTileKey(lod, regionX, regionY);
+        const versions = refreshCalls.get(key) ?? [];
+        versions.push(version);
+        refreshCalls.set(key, versions);
+      },
+      checkAndUpdateLOD: () => {},
+      debugLabelsDirtyRef: { current: false },
+      biomeLabelsDirtyRef: { current: false },
+    });
+  };
+
+  runBatch(sourceBatch);
+
+  assert.ok(staleCalls.size > 0);
+  assert.ok([...staleCalls.values()].every((count) => count === 1));
+  assert.deepEqual(cancelCalls, staleCalls);
+  assert.deepEqual(evictCalls, staleCalls);
+  assert.ok(
+    [...refreshCalls.values()].every((versions) => versions.length === 1),
+  );
+  assert.equal(loadedVoxels.get(retainedKey), retainedTile);
+
+  runBatch([{ lod: 1, regionX: 0, regionY: 0 }]);
+
+  assert.equal(staleVersions.get(retainedKey), 2);
+  assert.deepEqual(refreshCalls.get(retainedKey), [1, 2]);
+  assert.equal(loadedVoxels.get(retainedKey), retainedTile);
 });
