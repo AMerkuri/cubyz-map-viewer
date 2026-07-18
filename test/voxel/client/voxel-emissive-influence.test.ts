@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
+import { encodeBinaryQuads } from "../../../src/server/services/greedy-mesh.js";
 import {
   colors,
   EMITTER,
@@ -52,6 +53,23 @@ test("client worker applies in-radius, out-of-radius, and open-face emitter infl
   });
 });
 
+test("client worker keeps outside-primary-cell emitters with unrelated primary records", async () => {
+  const [withoutRelevant, withRelevant] = await Promise.all([
+    buildWithProductionWorker(createCandidateDiscoveryPayload(false)),
+    buildWithProductionWorker(createCandidateDiscoveryPayload(true)),
+  ]);
+  const receiver = [71, 71, 0] as const;
+  assert.deepEqual(
+    emissiveAt(withoutRelevant, ...receiver),
+    [0, 0, 0],
+    "unrelated primary-cell records are outside the receiving vertex radius",
+  );
+  assert.ok(
+    emissiveAt(withRelevant, ...receiver).some((channel) => channel > 0),
+    "an in-radius emitter outside the receiver primary grid cell contributes",
+  );
+});
+
 function emissiveEnergy(
   mesh: Awaited<ReturnType<typeof buildWithProductionWorker>>,
 ): number {
@@ -60,4 +78,79 @@ function emissiveEnergy(
     for (const value of quadrant.emissiveColors ?? []) total += value;
   }
   return total;
+}
+
+function createCandidateDiscoveryPayload(
+  includeRelevant: boolean,
+): ArrayBuffer {
+  const unrelatedPrimaryRecords = [
+    { x: 60, y: 60, z: 1, r: 255, g: 80, b: 20, openFaces: 0x3f },
+    { x: 60, y: 61, z: 1, r: 255, g: 80, b: 20, openFaces: 0x3f },
+  ];
+  return encodeBinaryQuads(
+    [
+      {
+        v0x: 70,
+        v0y: 70,
+        v0z: 0,
+        v1x: 71,
+        v1y: 70,
+        v1z: 0,
+        v2x: 71,
+        v2y: 71,
+        v2z: 0,
+        v3x: 70,
+        v3y: 71,
+        v3z: 0,
+        typ: 1,
+        dir: 1,
+        packedAo: 0,
+        renderKind: 1,
+        sourceKind: "greedy",
+        face: 5,
+        plane: 0,
+        u: 70,
+        v: 70,
+        du: 1,
+        dv: 1,
+      },
+    ],
+    [],
+    0,
+    0,
+    0,
+    1,
+    colors,
+    1,
+    [
+      ...unrelatedPrimaryRecords,
+      ...(includeRelevant
+        ? [{ x: 72, y: 71, z: 1, r: 255, g: 80, b: 20, openFaces: 0x3f }]
+        : []),
+    ],
+  ).buffer;
+}
+
+function emissiveAt(
+  mesh: Awaited<ReturnType<typeof buildWithProductionWorker>>,
+  x: number,
+  y: number,
+  z: number,
+): [number, number, number] {
+  for (const quadrant of mesh.quadrantMeshes) {
+    for (let index = 0; index < quadrant.positions.length; index += 3) {
+      if (
+        quadrant.positions[index] === x &&
+        quadrant.positions[index + 1] === y &&
+        quadrant.positions[index + 2] === z
+      ) {
+        return [
+          quadrant.emissiveColors?.[index] ?? 0,
+          quadrant.emissiveColors?.[index + 1] ?? 0,
+          quadrant.emissiveColors?.[index + 2] ?? 0,
+        ];
+      }
+    }
+  }
+  throw new Error(`missing emissive receiver vertex ${x}/${y}/${z}`);
 }

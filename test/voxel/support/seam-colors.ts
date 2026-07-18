@@ -11,6 +11,27 @@ export function collectSeamEmissive(
   maxY = 68,
   seamZ = 1,
 ): Map<string, Emissive> {
+  return collectHorizontalSeamEmissive(mesh, "x", seamX, minY, maxY, seamZ);
+}
+
+export function collectYSeamEmissive(
+  mesh: WorkerMesh,
+  seamY: number,
+  minX = 60,
+  maxX = 68,
+  seamZ = 1,
+): Map<string, Emissive> {
+  return collectHorizontalSeamEmissive(mesh, "y", seamY, minX, maxX, seamZ);
+}
+
+function collectHorizontalSeamEmissive(
+  mesh: WorkerMesh,
+  axis: "x" | "y",
+  seam: number,
+  minOtherAxis: number,
+  maxOtherAxis: number,
+  seamZ: number,
+): Map<string, Emissive> {
   const values = new Map<string, Emissive>();
   for (const quadrant of mesh.quadrantMeshes) {
     if (!quadrant.emissiveColors) continue;
@@ -20,9 +41,9 @@ export function collectSeamEmissive(
       const y = quadrant.positions[index + 1];
       const z = quadrant.positions[index + 2];
       if (
-        x !== seamX ||
-        y < minY ||
-        y > maxY ||
+        (axis === "x" ? x : y) !== seam ||
+        (axis === "x" ? y : x) < minOtherAxis ||
+        (axis === "x" ? y : x) > maxOtherAxis ||
         z !== seamZ ||
         quadrant.normals[index] !== 0 ||
         quadrant.normals[index + 1] !== 0 ||

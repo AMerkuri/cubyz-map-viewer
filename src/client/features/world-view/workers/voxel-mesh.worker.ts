@@ -113,7 +113,7 @@ function createEmptyEmissivePhaseMetrics(): EmissivePhaseMetrics {
  * Spatial index of payload-owned own-region plus halo emitter records used to
  * bake bounded mesh-local emitted-light contribution into per-vertex emissive
  * colors. Emitters are inserted into every reachable cell plus one cell of
- * edge slack, so vertex baking can use a single-cell lookup.
+ * edge slack, so vertex baking can inspect a fixed local cell footprint.
  *
  * The per-vertex hot path avoids string allocation by mapping numeric cell
  * coordinates `(ix, iy, iz)` to emitter buckets. A dense local cell array is
@@ -1747,38 +1747,18 @@ function accumulateEmitterLight(
   const candidateStamp = nextEmitterCandidateStamp(grid);
   const emitterIndices = grid.candidateScratch;
   emitterIndices.length = 0;
-  const primaryCell = getEmitterGridCell(grid, cx, cy, cz);
-  if (primaryCell) {
-    for (const emitterIndex of primaryCell) {
-      grid.candidateStamps[emitterIndex] = candidateStamp;
-      emitterIndices.push(emitterIndex);
-    }
-  }
-  let hasReachablePrimaryCandidate = false;
-  for (const emitterIndex of emitterIndices) {
-    const dx = grid.x[emitterIndex] - x;
-    const dy = grid.y[emitterIndex] - y;
-    const dz = grid.z[emitterIndex] - z;
-    if (dx * dx + dy * dy + dz * dz < grid.radius[emitterIndex] ** 2) {
-      hasReachablePrimaryCandidate = true;
-      break;
-    }
-  }
-  // The padded insertion grid keeps the common case in the receiver cell. An
-  // empty or non-reaching primary cell falls back to its neighbors, covering
-  // independent region grids at the seam without a 27-cell probe everywhere.
-  if (!hasReachablePrimaryCandidate) {
-    for (let ix = cx - 1; ix <= cx + 1; ix++) {
-      for (let iy = cy - 1; iy <= cy + 1; iy++) {
-        for (let iz = cz - 1; iz <= cz + 1; iz++) {
-          if (ix === cx && iy === cy && iz === cz) continue;
-          const cell = getEmitterGridCell(grid, ix, iy, iz);
-          if (!cell) continue;
-          for (const emitterIndex of cell) {
-            if (grid.candidateStamps[emitterIndex] === candidateStamp) continue;
-            grid.candidateStamps[emitterIndex] = candidateStamp;
-            emitterIndices.push(emitterIndex);
-          }
+  // Probe the full fixed neighborhood even when the primary cell has a
+  // candidate. Payload ownership and unrelated records must not affect which
+  // in-radius seam emitters are considered.
+  for (let ix = cx - 1; ix <= cx + 1; ix++) {
+    for (let iy = cy - 1; iy <= cy + 1; iy++) {
+      for (let iz = cz - 1; iz <= cz + 1; iz++) {
+        const cell = getEmitterGridCell(grid, ix, iy, iz);
+        if (!cell) continue;
+        for (const emitterIndex of cell) {
+          if (grid.candidateStamps[emitterIndex] === candidateStamp) continue;
+          grid.candidateStamps[emitterIndex] = candidateStamp;
+          emitterIndices.push(emitterIndex);
         }
       }
     }

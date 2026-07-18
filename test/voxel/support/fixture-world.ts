@@ -26,6 +26,11 @@ export type BoundaryFixture = {
   extra?: Cell[];
   denseNeighbor?: boolean;
 };
+export type AdjacentYAxisFixture = {
+  crossBoundary: Point;
+  southUnrelated: Point[];
+  northUnrelated: Point[];
+};
 
 export const colors: BlockColorTable = {
   rgb: new Uint8Array([
@@ -228,6 +233,29 @@ export async function writeAdjacentFixture(
   await writeSurface(save);
   await writeRegions(save, cells);
   return required;
+}
+
+export async function writeAdjacentYAxisFixture(
+  save: string,
+): Promise<AdjacentYAxisFixture> {
+  const fixture: AdjacentYAxisFixture = {
+    crossBoundary: { x: 64, y: REGION_SIZE + 1, z: 1 },
+    southUnrelated: [{ x: 16, y: 16, z: 1 }],
+    northUnrelated: [
+      { x: 16, y: REGION_SIZE + 96, z: 1 },
+      { x: 96, y: REGION_SIZE + 112, z: 1 },
+    ],
+  };
+  await writeSurface(save);
+  await writeRegions(save, [
+    ...stonePlane(REGION_SIZE, REGION_SIZE * 2),
+    ...[
+      fixture.crossBoundary,
+      ...fixture.southUnrelated,
+      ...fixture.northUnrelated,
+    ].map((point) => ({ ...point, type: EMITTER })),
+  ]);
+  return fixture;
 }
 
 export async function writePopulatedEmitterFixture(
