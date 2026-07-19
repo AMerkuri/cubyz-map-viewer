@@ -31,6 +31,54 @@ The client SHALL represent fetching, compact base input, active worker execution
 - **WHEN** a base or enhancement job completes, is cancelled, fails, or loses its worker
 - **THEN** the scheduler MUST release its active-worker and reserved-output capacity exactly once and continue draining the highest-priority eligible work
 
+### Requirement: Executable base work has isolated admission and worker capacity
+The client SHALL treat requestable selected base demand, queued and active base fetches, compact base input, active base workers, and scene-ready base output as one executable base lifecycle. Retained enhancement input SHALL use separately accounted bounded capacity and MUST NOT consume the configured compact job or byte capacity reserved for base responses. While executable base work exists, every available worker SHALL select eligible base work before optional enhancement; enhancement MAY proceed only when no executable base work remains or when a separately specified pressure-relief policy is required to keep bounded retained enhancement storage progressing without closing base admission.
+
+#### Scenario: Retained enhancement competes with a newly selected base request
+- **WHEN** retained enhancement input exists and a requestable base tile is selected but has not started fetching
+- **THEN** retained enhancement jobs or bytes MUST NOT prevent the base request from using reserved fetch and compact-input admission
+- **THEN** an idle worker MUST remain available for eligible base work before starting optional enhancement
+
+#### Scenario: Base fetch is active while a worker is idle
+- **WHEN** an executable base fetch is active and no base compact buffer has completed yet
+- **THEN** the client MUST treat the base lifecycle as outstanding rather than inferring that base loading is complete from an instantaneously empty compact queue
+- **THEN** optional enhancement MUST NOT start a non-preemptible job that can delay that arriving base result under the normal base-isolation policy
+
+#### Scenario: Retained enhancement storage reaches its bound
+- **WHEN** another returned enhancement buffer would exceed separately bounded retained-enhancement capacity
+- **THEN** the client MUST preserve base admission and current visible base geometry
+- **THEN** it MUST use a bounded, observable pressure-relief or deferred-reacquisition path that preserves eventual enhancement eligibility without hiding the storage overflow
+
+#### Scenario: Selected region is not executable
+- **WHEN** selected demand is known missing, permanently retry-exhausted, already fresh, or temporarily ineligible until a future retry deadline
+- **THEN** that demand MUST NOT be counted as currently executable base work
+- **THEN** it MUST NOT indefinitely block otherwise eligible enhancement
+
+### Requirement: Concurrent base loading converges deterministically
+The client SHALL converge the same current demanded base tile set under one-worker, adaptive, and fixed multi-worker execution, independent of fetch and worker completion order. Capacity release, cancellation, and reprioritization races MUST NOT leave a still-requestable demanded tile without queued, active, loaded, known-missing, or retry-delayed state.
+
+#### Scenario: Two workers complete tiles out of order
+- **WHEN** two base workers complete demanded tiles in an order different from request priority or dispatch order
+- **THEN** every current result MUST enter normal scene readiness and every obsolete result MUST release capacity exactly once
+- **THEN** the final loaded and known-missing tile sets MUST match the deterministic one-worker result for the same stable selection
+
+#### Scenario: Demand changes during concurrent completion
+- **WHEN** LOD reconciliation removes, replaces, or reprioritizes demand while multiple fetches or workers complete
+- **THEN** obsolete work MUST cancel or discard through normal version rules
+- **THEN** every remaining requestable demand MUST retain or regain a valid progress state
+
+### Requirement: Memory controls use consistent display units
+The web client SHALL present byte-backed voxel memory settings in MiB while preserving bytes in persisted settings and runtime scheduler limits. Slider values, bounds, steps, reset values, displayed labels, and committed values MUST use one consistent conversion boundary.
+
+#### Scenario: Operator selects 256 MiB expanded output
+- **WHEN** the operator sets Expanded Output Memory to `256 MiB` through the debug control
+- **THEN** the client MUST persist and apply `268435456` bytes
+- **THEN** the slider MUST display a valid range in MiB rather than labeling raw byte bounds as MiB
+
+#### Scenario: Existing byte value is loaded
+- **WHEN** persisted graphics settings contain `voxelExpandedOutputMaxBytes: 268435456`
+- **THEN** the control MUST display `256 MiB` without rewriting the value as MiB bytes a second time
+
 ### Requirement: Obsolete voxel mesh jobs are cancellable
 The client SHALL assign stable job and phase identities to dispatched voxel mesh work. It SHALL cancel fetch and base work that is no longer under active fetch demand, and SHALL cancel enhancement work when its target loaded base tile is no longer retained or its refresh version or base mesh identity has been superseded. Workers SHALL cooperatively observe cancellation during long-running base construction and emissive enhancement and SHALL avoid transferring expanded output for a cancellation observed before final phase transfer.
 
@@ -93,20 +141,22 @@ The client SHALL prioritize voxel work with explicit safety, continuous-demand u
 - **THEN** each queued stage MUST select according to the latest eligible priority without duplicating the tile's phase work
 
 ### Requirement: Voxel pipeline diagnostics measure complete loading flow
-The debug diagnostics SHALL expose current stage counts and bytes, reserved bytes, bounded per-load-generation timing distributions, current oldest queue ages, worker utilization, scene backlog, cancellation outcomes, focus deadline misses, base-visible timing, enhancement timing, and selection-to-visible timing sufficient to distinguish network, scheduling, worker, and scene bottlenecks. Optional metrics SHALL maintain their own valid sample counts.
+The debug diagnostics SHALL expose current executable stage counts and bytes, retained enhancement input, reserved bytes, bounded per-load-generation timing distributions, current oldest executable queue ages, worker utilization, adaptive profile and limiter state, scene backlog, cancellation outcomes, focus deadline misses, phase-specific output bytes, base-visible timing, enhancement timing, and selection-to-visible timing sufficient to distinguish pre-fetch admission, network, scheduling, worker, and scene bottlenecks. Optional metrics SHALL maintain their own valid sample counts, and non-executable known-missing or retry-exhausted demand SHALL be reported separately from queued work.
 
-#### Scenario: Tile progresses from admission to base visibility
-- **WHEN** an admitted voxel tile is fetched, base-meshed, inserted, and selected visible
-- **THEN** diagnostics MUST report distributions including p50, p95, and maximum for fetch duration, compact-input queue wait, base worker execution, result-transfer wait, scene-ready queue wait, and selection-to-base-visible duration
+#### Scenario: Tile progresses from selection to base visibility
+- **WHEN** a selected voxel tile becomes requestable, is admitted, fetched, base-meshed, inserted, and selected visible
+- **THEN** diagnostics MUST report distributions including p50, p95, and maximum for selection-to-fetch-start, fetch duration, compact-input queue wait, base worker execution, result-transfer wait, scene-ready queue wait, and selection-to-base-visible duration
 
 #### Scenario: Visible base receives enhancement
 - **WHEN** emissive enhancement is dispatched and attached to a current visible base mesh
 - **THEN** diagnostics MUST separately report enhancement queue, execution, transfer, attachment, and selection-to-enhanced timing without adding enhancement time to base-visible latency
+- **THEN** benchmark output MUST distinguish base output bytes, enhancement output bytes, and their per-tile combined total rather than replacing one phase with the other
 
 #### Scenario: Operator inspects current starvation
-- **WHEN** voxel work is queued
-- **THEN** diagnostics MUST expose the current oldest continuously demanded age grouped by LOD, safety or coverage class, view class, and phase
-- **THEN** diagnostics MUST expose focus deadline misses and active/target worker utilization
+- **WHEN** voxel work is queued or selected demand cannot currently progress
+- **THEN** diagnostics MUST expose the current oldest executable age grouped by LOD, safety or coverage class, view class, phase, and pipeline stage
+- **THEN** diagnostics MUST report known-missing, retry-delayed, and retry-exhausted demand separately from executable queue counts
+- **THEN** diagnostics MUST expose focus deadline misses, active and target workers, selected worker profile, and the current reason preventing scale-up or dispatch
 
 #### Scenario: Load generation resets
 - **WHEN** a scene or world load begins or diagnostics are explicitly reset
@@ -122,11 +172,21 @@ The debug diagnostics SHALL expose current stage counts and bytes, reserved byte
 - **THEN** diagnostics MUST expose or retain the metric's independent sample count
 
 ### Requirement: Client voxel worker concurrency adapts within safe bounds
-The client SHALL select worker concurrency within a conservative configured minimum and maximum using sustained queue demand and bounded rolling worker, frame-time, scene-backlog, output-byte, interaction, and available memory signals. It SHALL increase concurrency gradually, reduce its target promptly after unhealthy signals, and retire excess workers only when idle.
+The client SHALL select worker concurrency within a conservative configured minimum and maximum using sustained executable base demand and bounded rolling raw worker-completion, frame-time, scene-backlog, output-byte, interaction, and available memory signals. It SHALL increase concurrency gradually, reduce its target promptly after unhealthy signals, and retire excess workers only when idle. The controller MUST NOT feed an already aggregated historical percentile back as repeated raw samples, and one conservative oversized reservation MUST NOT permanently prevent a healthy fallback or desktop profile from reaching two workers when prospective total capacity safely permits two representative jobs.
 
-#### Scenario: Settled view has old urgent work and healthy downstream capacity
-- **WHEN** urgent queue age remains high through the scale-up interval while frame-time, scene backlog, reserved bytes, and memory signals remain healthy
-- **THEN** the controller MAY increase the worker target by at most one without exceeding the active device profile maximum
+#### Scenario: Settled view has old executable base work and healthy downstream capacity
+- **WHEN** executable base age remains high through the scale-up interval while frame-time, scene backlog, prospective reservations, and memory signals remain healthy
+- **THEN** the controller MUST be able to increase the worker target by at most one without exceeding the active device profile maximum
+- **THEN** a fallback profile caused only by unavailable browser hints MUST remain capable of reaching two workers from runtime evidence
+
+#### Scenario: Historical worker outlier ages out
+- **WHEN** an earlier long worker completion is followed by enough healthy raw completions and downstream signals
+- **THEN** the controller MUST recover scale-up eligibility without repeatedly resampling the stale historical percentile
+
+#### Scenario: Reservation estimate exceeds one-job budget
+- **WHEN** one conservatively estimated job exceeds the normal expanded-output budget but observed output history and configured capacity safely permit bounded progress
+- **THEN** oversized-single-job behavior MUST remain correct
+- **THEN** reservation health and dispatch logic MUST expose the limiting estimate and MUST NOT silently lock the profile at one worker after representative estimates become available
 
 #### Scenario: Interaction or downstream health worsens
 - **WHEN** active interaction, frame-time, scene backlog, output bytes, memory, or worker slowdown crosses an unhealthy threshold
@@ -135,11 +195,65 @@ The client SHALL select worker concurrency within a conservative configured mini
 
 #### Scenario: Device capability hints are unavailable
 - **WHEN** browser hardware or memory hints are absent or unsupported
-- **THEN** the controller MUST use a conservative bounded profile and runtime observations rather than assuming maximum concurrency
+- **THEN** the controller MUST use a conservative bounded profile and runtime observations rather than assuming maximum concurrency or permanently restricting execution to one worker
 
 #### Scenario: Static single-worker fallback is selected
 - **WHEN** configuration or runtime safety selects a maximum of one worker
-- **THEN** the complete loading pipeline MUST remain correct and continue using priority, cancellation, reservation, and diagnostics mechanics
+- **THEN** the complete loading pipeline MUST remain correct and continue using base isolation, priority, cancellation, reservation, and diagnostics mechanics
+
+### Requirement: Adaptive concurrency responds to executable base backlog independently of tile priority
+The client adaptive worker controller SHALL derive scale-up pressure from the count and continuous age of all executable base lifecycle records together with current worker saturation. Tile safety, view class, focus deadline, and refinement benefit SHALL continue to order dispatch but MUST NOT exclude an otherwise executable base record from concurrency-pressure accounting. Fresh, known-missing, retry-exhausted, cancelled, enhancement, and future retry-deadline records MUST NOT contribute to base scale-up pressure.
+
+#### Scenario: Ordinary detail remains after visible holes drain
+- **WHEN** at least two executable base records remain continuously backlogged beyond the configured pressure age, the current worker remains saturated, and downstream health is acceptable
+- **THEN** adaptive mode MUST sustain scale-up eligibility even when those records are optional forward, peripheral, or rear detail rather than visible-hole or deadline-promoted focus work
+- **THEN** existing priority rules MUST still determine which record each available worker dispatches first
+
+#### Scenario: Initial urgent wave completes before startup scale-up
+- **WHEN** visible-hole base work completes before the controller's startup scale-up interval but a multi-record executable base backlog remains
+- **THEN** completion of the urgent subset MUST NOT reset healthy backlog pressure solely because remaining base records have lower scheduling priority
+
+#### Scenario: Only one low-priority base record remains
+- **WHEN** fewer executable base records remain than can benefit from another worker and no stronger pressure signal exists
+- **THEN** the controller MAY retain its current target rather than scaling solely because one old optional record exists
+
+#### Scenario: Selected demand is non-executable
+- **WHEN** selected records are fresh, known missing, retry exhausted, cancelled, or delayed until a future retry deadline
+- **THEN** those records MUST NOT increase executable base count or oldest executable base age
+
+### Requirement: Initial adaptive scale-up is not blocked by post-change cooldown
+The adaptive controller SHALL distinguish initialization from an actual worker-target transition. A newly initialized fallback or mobile-class controller MAY increase from its initial target after the configured healthy-demand sustain interval without also waiting for a cooldown intended to separate successive target changes. After an actual increase or decrease, the normal target-change cooldown SHALL apply.
+
+#### Scenario: Fallback profile starts with sustained healthy base pressure
+- **WHEN** a fallback profile starts at one worker and maintains sufficient executable base count, base age, worker saturation, and healthy downstream signals through the scale-up sustain interval
+- **THEN** it MUST become eligible to target two workers without waiting for an additional startup target-change cooldown
+
+#### Scenario: Target recently changed
+- **WHEN** the controller has actually increased or decreased its target
+- **THEN** it MUST enforce the configured cooldown before another scale-up while retaining prompt unhealthy scale-down behavior
+
+### Requirement: Adaptive decisions remain observable across a load generation
+The client SHALL retain bounded per-load-generation adaptive decision diagnostics that distinguish current idle state from earlier scale-up opportunities and blockers. Diagnostics SHALL expose maximum target reached, target transition counts, and limiter observation counts or durations sufficient to explain why adaptive behavior differed from fixed worker modes.
+
+#### Scenario: Load ends after adaptive scale-up
+- **WHEN** adaptive mode reaches two workers and later returns to insufficient demand after loading settles
+- **THEN** diagnostics MUST still show that target two was reached and record the target transition
+
+#### Scenario: Adaptive target never increases
+- **WHEN** a load generation remains at one worker
+- **THEN** diagnostics MUST identify whether insufficient executable backlog, worker saturation, startup sustain, cooldown, frame, worker, scene, reservation, memory, interaction, or profile limits prevented scale-up during the generation
+
+### Requirement: Healthy adaptive loading approaches fixed-two base performance
+For a deterministic workload whose fallback profile permits two workers and whose frame, worker, scene, reservation, interaction, and memory signals remain within healthy thresholds, adaptive mode SHALL reach target two and SHALL complete base visibility without material avoidable delay relative to fixed target two. The comparison SHALL preserve identical selected work, durations, capacities, and scene budgets across policies.
+
+#### Scenario: Deterministic base wave is healthy
+- **WHEN** the same healthy multi-record base wave is replayed under adaptive, fixed-one, and fixed-two policies
+- **THEN** adaptive mode MUST transition to two workers
+- **THEN** adaptive base-visible p95 MUST be no more than 25 percent slower than fixed-two p95 and MUST be materially faster than fixed-one p95
+
+#### Scenario: Two-worker health becomes unacceptable
+- **WHEN** adaptive execution crosses an existing frame, worker, scene, reservation, memory, or interaction threshold
+- **THEN** the controller MUST retain normal prompt scale-down behavior even if executable base backlog remains high
 
 ### Requirement: Adaptive scheduling mechanics are hermetically verifiable
 The client SHALL expose deterministic urgency, continuous-demand age, reservation, worker-target, cancellation, and phase-transition mechanics that can be verified without browser workers, WebGL, a running server, a real save, or timing-dependent sleeps.

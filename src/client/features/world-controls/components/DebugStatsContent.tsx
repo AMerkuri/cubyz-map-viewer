@@ -36,6 +36,7 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       ? "none"
       : entries.map(([key, count]) => `${key} ${count}`).join(" / ");
   };
+  const adaptive = chunkStats.voxelPipeline.adaptive;
   const formatAgeGroups = (groups: Record<string, number>) => {
     const entries = Object.entries(groups).sort(([left], [right]) =>
       left.localeCompare(right, undefined, { numeric: true }),
@@ -78,11 +79,58 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         {formatMemoryBytes(chunkStats.voxelPipeline.compactInput.bytes)}
       </div>
       <div>
+        Retained enhancement input:{" "}
+        {chunkStats.voxelPipeline.retainedEnhancementInput.jobs} jobs /{" "}
+        {formatMemoryBytes(
+          chunkStats.voxelPipeline.retainedEnhancementInput.bytes,
+        )}
+        {" / "}
+        {chunkStats.voxelPipeline.retainedEnhancementCapacity.jobs} jobs /{" "}
+        {formatMemoryBytes(
+          chunkStats.voxelPipeline.retainedEnhancementCapacity.bytes,
+        )}{" "}
+        capacity
+      </div>
+      <div>
+        Expanded reservation / actual output:{" "}
+        {formatMemoryBytes(
+          chunkStats.voxelPipeline.reservedExpandedOutput.bytes,
+        )}{" "}
+        / {formatMemoryBytes(chunkStats.voxelPipeline.expandedOutput.bytes)}
+        {" / "}
+        {formatMemoryBytes(
+          chunkStats.voxelPipeline.expandedOutputCapacity.bytes,
+        )}{" "}
+        capacity
+      </div>
+      <div>
         Current base scene-ready queue:{" "}
         {chunkStats.voxelPipeline.sceneBacklog.jobs} jobs /{" "}
         {formatMemoryBytes(chunkStats.voxelPipeline.sceneBacklog.bytes)}
       </div>
+      <div>
+        Adaptive profile / limiter: {adaptive.profile} /{" "}
+        {adaptive.limiterReason}
+      </div>
+      <div>
+        Adaptive target: {adaptive.diagnostics.initialTarget} initial /{" "}
+        {adaptive.diagnostics.maximumTarget} maximum /{" "}
+        {adaptive.diagnostics.scaleUpTransitions} up /{" "}
+        {adaptive.diagnostics.scaleDownTransitions} down
+      </div>
+      <div>
+        Adaptive pressure peak: {adaptive.diagnostics.peakExecutableBaseJobs}{" "}
+        jobs / {adaptive.diagnostics.peakOldestExecutableBaseAgeMs.toFixed(0)}{" "}
+        ms oldest
+      </div>
+      <div>
+        Adaptive limiter history:{" "}
+        {formatOutcomes(adaptive.diagnostics.limiterObservations)}
+      </div>
       <div>Base fetch duration: {formatTiming("fetchMs")}</div>
+      <div>
+        Selection to fetch start: {formatTiming("selectionToFetchStartMs")}
+      </div>
       <div>Base compact-queue wait: {formatTiming("compactQueueWaitMs")}</div>
       <div>Base worker duration: {formatTiming("baseWorkerExecutionMs")}</div>
       <div>
@@ -118,6 +166,22 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         null
           ? "n/a"
           : `${chunkStats.voxelPipeline.currentQueue.oldestDemandAgeMs.overall.toFixed(0)} ms`}
+      </div>
+      <div>
+        Executable stages:{" "}
+        {formatOutcomes(
+          Object.fromEntries(
+            Object.entries(
+              chunkStats.voxelPipeline.currentQueue.executableStages,
+            ).map(([stage, usage]) => [stage, usage.jobs]),
+          ),
+        )}
+      </div>
+      <div>
+        Non-executable demand:{" "}
+        {formatOutcomes(
+          chunkStats.voxelPipeline.currentQueue.nonExecutableDemand,
+        )}
       </div>
       <div>
         Oldest by LOD:{" "}
@@ -274,6 +338,9 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       </div>
       <div>Samples: {chunkStats.voxelBenchmark.samples}</div>
       <div>
+        Emissive skipped: {chunkStats.voxelBenchmark.emissiveSkippedSamples}
+      </div>
+      <div>
         Cache mix: hit {chunkStats.voxelBenchmark.cacheHitSamples} / miss{" "}
         {chunkStats.voxelBenchmark.cacheMissSamples} / unknown{" "}
         {chunkStats.voxelBenchmark.cacheUnknownSamples}
@@ -303,6 +370,20 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
       <div>
         Avg worker output:{" "}
         {formatNullableBytes(chunkStats.voxelBenchmark.avgWorkerOutputBytes)}
+      </div>
+      <div>
+        Avg base / enhancement / combined output:{" "}
+        {formatNullableBytes(
+          chunkStats.voxelBenchmark.avgBaseWorkerOutputBytes,
+        )}
+        {" / "}
+        {formatNullableBytes(
+          chunkStats.voxelBenchmark.avgEnhancementWorkerOutputBytes,
+        )}
+        {" / "}
+        {formatNullableBytes(
+          chunkStats.voxelBenchmark.avgCombinedWorkerOutputBytes,
+        )}
       </div>
       <div>
         Avg emissive bytes:{" "}
@@ -343,9 +424,51 @@ export function DebugStatsContent({ chunkStats }: { chunkStats: ChunkStats }) {
         {formatNullableCount(chunkStats.voxelBenchmark.avgEmitterRadiusMax)}
       </div>
       <div>
-        Avg emissive candidates:{" "}
+        Avg receiver evaluations:{" "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveReceiverEvaluations,
+        )}
+        {" / probes "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveNeighborhoodCellProbes,
+        )}
+      </div>
+      <div>
+        Avg neighborhood buckets: non-empty{" "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveNonEmptyBuckets,
+        )}
+        {" / raw "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveRawBucketEntries,
+        )}
+        {" / unique "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveDeduplicatedNeighborhoodEntries,
+        )}
+      </div>
+      <div>
+        Avg final contributions:{" "}
         {formatNullableCount(
           chunkStats.voxelBenchmark.avgEmissiveCandidateVisits,
+        )}
+      </div>
+      <div>
+        Candidate cache: hit{" "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmissiveCacheHits)}
+        {" / miss "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmissiveCacheMisses)}
+        {" / entries "}
+        {formatNullableCount(chunkStats.voxelBenchmark.avgEmissiveCacheEntries)}
+      </div>
+      <div>
+        Candidate cache: fallback{" "}
+        {formatNullableCount(
+          chunkStats.voxelBenchmark.avgEmissiveUncachedFallbacks,
+        )}
+        {" / peak "}
+        {formatNullableBytes(
+          chunkStats.voxelBenchmark.avgEmissivePeakAccountedCacheBytes,
         )}
       </div>
       <div>

@@ -450,9 +450,6 @@ export function handleVoxelWorkerMessage(args: {
   failedVoxels: Map<string, number>;
   pendingVoxelMeshQueueRef: { current: PendingVoxelMeshItem[] };
   isVoxelTileStale: (key: string) => boolean;
-  onBenchmarkSample?: (
-    sample: NonNullable<WorkerMeshResult["benchmark"]>,
-  ) => void;
   acceptMeshResult?: (item: PendingVoxelMeshItem, bytes: number) => boolean;
   getWorkPriority: (jobId: number) => VoxelWorkPriority | null;
 }): void {
@@ -465,7 +462,6 @@ export function handleVoxelWorkerMessage(args: {
     failedVoxels,
     pendingVoxelMeshQueueRef,
     isVoxelTileStale,
-    onBenchmarkSample,
     acceptMeshResult = () => true,
     getWorkPriority,
   } = args;
@@ -478,15 +474,6 @@ export function handleVoxelWorkerMessage(args: {
   if (data.type === "cancelled") {
     loadingVoxels.delete(key);
     return;
-  }
-
-  const { benchmark } = data;
-
-  if (benchmark) {
-    onBenchmarkSample?.({
-      ...benchmark,
-      totalMs: benchmark.fetchMs + benchmark.decodeMs,
-    });
   }
 
   if (data.type === "error") {
@@ -563,6 +550,7 @@ export function handleVoxelWorkerMessage(args: {
     haloEmitterSourceKeys: [],
     enhancementBuffer:
       data.type === "base-result" ? data.enhancementBuffer : null,
+    benchmark: data.benchmark,
     version: resolvedVersion,
     priority,
   };

@@ -116,6 +116,7 @@ export interface PendingVoxelMeshItem {
   emitterRecords: VoxelEmitterRecord[];
   haloEmitterSourceKeys: string[];
   enhancementBuffer: ArrayBuffer | null;
+  benchmark?: WorkerBenchmark;
 }
 
 export interface PendingVoxelFetchRequest {
@@ -168,6 +169,52 @@ export interface WorkerMeshRequest extends WorkerMeshRequestCommon {
   };
 }
 
+export interface WorkerEmissiveMetrics {
+  emissiveBytes: number;
+  emissiveSkipped: boolean;
+  emissiveGridBuildMs: number | null;
+  emissiveBakeMs: number | null;
+  emissiveQuadsEvaluated: number;
+  emissiveQuadsCulled: number;
+  emissiveReceiverEvaluations: number;
+  emissiveNeighborhoodCellProbes: number;
+  emissiveNonEmptyBuckets: number;
+  emissiveRawBucketEntries: number;
+  emissiveDeduplicatedNeighborhoodEntries: number;
+  /** Final exact light contributions, not candidate-neighborhood discovery work. */
+  emissiveCandidateVisits: number;
+  emissiveCacheHits: number;
+  emissiveCacheMisses: number;
+  emissiveCacheEntries: number;
+  emissiveUncachedFallbacks: number;
+  emissivePeakAccountedCacheBytes: number;
+}
+
+export type WorkerBenchmark = {
+  fetchCompletedAt: number;
+  fetchMs: number;
+  decodeMs: number;
+  totalMs: number;
+  transferBytes: number | null;
+  encodedBodyBytes: number | null;
+  decodedBodyBytes: number | null;
+  rawBufferBytes: number;
+  workerOutputBytes: number;
+  /** Phase-specific output accounting for progressive base/enhancement work. */
+  baseWorkerOutputBytes?: number | null;
+  enhancementWorkerOutputBytes?: number | null;
+  combinedWorkerOutputBytes?: number | null;
+  contentEncoding: string | null;
+  serverRunMs: number | null;
+  serverHaloMs: number | null;
+  emitterMetadataBytes: number | null;
+  emitterPowerMin: number | null;
+  emitterPowerMax: number | null;
+  emitterRadiusMin: number | null;
+  emitterRadiusMax: number | null;
+  cacheOutcome?: VoxelBenchmarkCacheOutcome;
+} & WorkerEmissiveMetrics;
+
 export interface WorkerBaseRequest extends WorkerMeshRequestCommon {
   type: "base";
   phase: "base";
@@ -179,6 +226,7 @@ export interface WorkerEnhancementRequest extends WorkerMeshRequestCommon {
   type: "enhancement";
   phase: "enhancement";
   baseMeshId: number;
+  benchmark?: WorkerMeshRequest["benchmark"];
 }
 
 export interface PendingVoxelCompactInput {
@@ -196,6 +244,7 @@ export interface PendingVoxelEnhancementInput {
   regionX: number;
   regionY: number;
   baseMeshId: number;
+  benchmark?: WorkerMeshRequest["benchmark"];
 }
 
 export interface WorkerCancelRequest {
@@ -237,47 +286,7 @@ export interface WorkerMeshResult extends WorkerResponseIdentity {
   maxZ: number;
   emitterRecords: VoxelEmitterRecord[];
   haloEmitterSourceKeys: string[];
-  benchmark?: {
-    fetchMs: number;
-    decodeMs: number;
-    totalMs: number;
-    transferBytes: number | null;
-    encodedBodyBytes: number | null;
-    decodedBodyBytes: number | null;
-    rawBufferBytes: number;
-    workerOutputBytes: number;
-    emissiveBytes: number;
-    /**
-     * Time spent building the emitter-light lookup grid, in milliseconds.
-     * `0` when emissive attributes are disabled or no emitters are present.
-     */
-    emissiveGridBuildMs: number | null;
-    /**
-     * Time spent baking per-vertex emitted light into quadrant writers, in
-     * milliseconds. `0` when emissive attributes are disabled.
-     */
-    emissiveBakeMs: number | null;
-    /**
-     * Number of opaque quads whose emissive accumulation ran because the quad
-     * could intersect at least one emitter radius.
-     */
-    emissiveQuadsEvaluated: number;
-    /**
-     * Number of opaque quads conservatively skipped because their expanded
-     * bounds could not intersect any emitter radius.
-     */
-    emissiveQuadsCulled: number;
-    emissiveCandidateVisits: number;
-    contentEncoding: string | null;
-    serverRunMs: number | null;
-    serverHaloMs: number | null;
-    emitterMetadataBytes: number | null;
-    emitterPowerMin: number | null;
-    emitterPowerMax: number | null;
-    emitterRadiusMin: number | null;
-    emitterRadiusMax: number | null;
-    cacheOutcome?: VoxelBenchmarkCacheOutcome;
-  };
+  benchmark?: WorkerBenchmark;
 }
 
 export interface WorkerBaseResult extends Omit<WorkerMeshResult, "type"> {
@@ -298,6 +307,7 @@ export interface WorkerEnhancementResult extends WorkerResponseIdentity {
   regionY: number;
   baseMeshId: number;
   quadrantEnhancements: WorkerEnhancementQuadrant[];
+  benchmark?: WorkerBenchmark;
 }
 
 export interface WorkerCancelled extends WorkerResponseIdentity {

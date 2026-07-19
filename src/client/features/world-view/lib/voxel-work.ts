@@ -68,22 +68,6 @@ function isDeadlinePromoted(
   );
 }
 
-function isUrgentVoxelBaseWork(
-  priority: VoxelWorkPriority,
-  now: number,
-  config: VoxelUrgencyConfig = DEFAULT_VOXEL_URGENCY_CONFIG,
-): boolean {
-  return (
-    priority.phase === "base" &&
-    (priority.safetyClass === "visible-hole" ||
-      isDeadlinePromoted(
-        priority,
-        cappedDemandAge(priority, now, config),
-        config,
-      ))
-  );
-}
-
 function urgencyBand(
   priority: VoxelWorkPriority,
   age: number,
@@ -145,12 +129,25 @@ interface VoxelWorkIdentity {
 }
 
 type VoxelWorkStage =
+  | "selected"
+  | "fetch-queued"
   | "fetching"
   | "compact-input"
   | "retained-enhancement-input"
   | "meshing"
   | "expanded-output"
-  | "inserted";
+  | "inserted"
+  | "fresh"
+  | "known-missing"
+  | "retry-exhausted"
+  | "retry-delayed";
+
+type VoxelDemandState =
+  | "executable"
+  | "fresh"
+  | "known-missing"
+  | "retry-exhausted"
+  | "retry-delayed";
 
 type VoxelWorkTerminalOutcome = "loaded" | "cancelled" | "discarded" | "error";
 
@@ -178,6 +175,7 @@ interface VoxelWorkTimestamps {
 }
 
 interface VoxelWorkTiming {
+  selectionToFetchStartMs: number | null;
   fetchMs: number | null;
   compactQueueWaitMs: number | null;
   baseWorkerExecutionMs: number | null;
@@ -234,6 +232,11 @@ interface VoxelPipelineDiagnostics {
   timings: Record<keyof VoxelWorkTiming, VoxelTimingDistribution>;
   currentQueue: {
     jobs: number;
+    executableStages: Record<string, VoxelStageUsage>;
+    nonExecutableDemand: Record<
+      Exclude<VoxelDemandState, "executable">,
+      number
+    >;
     oldestDemandAgeMs: {
       overall: number | null;
       byLod: Record<string, number>;
@@ -288,6 +291,10 @@ export function deriveVoxelWorkTiming(
   timestamps: VoxelWorkTimestamps,
 ): VoxelWorkTiming {
   return {
+    selectionToFetchStartMs: duration(
+      timestamps.selectedAt,
+      timestamps.fetchStartedAt,
+    ),
     fetchMs: duration(timestamps.fetchStartedAt, timestamps.fetchCompletedAt),
     compactQueueWaitMs: duration(
       timestamps.fetchCompletedAt,
@@ -335,6 +342,7 @@ export function deriveVoxelWorkTiming(
 function createTimingDistributions(limit: number) {
   const distribution = () => new BoundedTimingDistribution(limit);
   return {
+    selectionToFetchStartMs: distribution(),
     fetchMs: distribution(),
     compactQueueWaitMs: distribution(),
     baseWorkerExecutionMs: distribution(),
@@ -391,12 +399,37 @@ interface VoxelDemandIdentity {
 }
 
 interface VoxelSchedulerSnapshot {
+  selected: VoxelStageUsage;
+  fetchQueued: VoxelStageUsage;
   fetching: VoxelStageUsage;
   compactInput: VoxelStageUsage;
+  retainedEnhancementInput: VoxelStageUsage;
+  totalCompactInput: VoxelStageUsage;
   activeWorker: VoxelStageUsage;
   reservedExpandedOutput: VoxelStageUsage;
   expandedOutput: VoxelStageUsage;
 }
+
+interface VoxelExecutableBasePressure {
+  jobs: number;
+  oldestAgeMs: number;
+}
+
+interface VoxelRetainedEnhancementLimits extends VoxelStageLimits {
+  highWaterJobs: number;
+  highWaterBytes: number;
+  lowWaterJobs: number;
+  lowWaterBytes: number;
+}
+
+const DEFAULT_RETAINED_ENHANCEMENT_LIMITS: VoxelRetainedEnhancementLimits = {
+  maxJobs: 16,
+  maxBytes: 128 * 1024 * 1024,
+  highWaterJobs: 12,
+  highWaterBytes: 96 * 1024 * 1024,
+  lowWaterJobs: 8,
+  lowWaterBytes: 64 * 1024 * 1024,
+};
 
 function emptyUsage(): VoxelStageUsage {
   return { jobs: 0, bytes: 0 };
@@ -421,12 +454,18 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
   private nextJobId = 1;
   private nextSequence = 1;
   private readonly demandIdentities = new Map<string, VoxelDemandIdentity>();
+  private retainedEnhancementLimits: VoxelRetainedEnhancementLimits;
 
   constructor(
     private compactLimits: VoxelStageLimits,
     private expandedLimits: VoxelStageLimits,
     private readonly diagnosticSampleLimit = 256,
+    retainedEnhancementLimits: Partial<VoxelRetainedEnhancementLimits> = {},
   ) {
+    this.retainedEnhancementLimits = {
+      ...DEFAULT_RETAINED_ENHANCEMENT_LIMITS,
+      ...retainedEnhancementLimits,
+    };
     this.timingDistributions = createTimingDistributions(
       Math.max(1, diagnosticSampleLimit),
     );
@@ -508,6 +547,14 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
         byViewClass: {},
         byPhase: {},
       };
+    const executableStages: Record<string, VoxelStageUsage> = {};
+    const nonExecutableDemand: VoxelPipelineDiagnostics["currentQueue"]["nonExecutableDemand"] =
+      {
+        fresh: 0,
+        "known-missing": 0,
+        "retry-exhausted": 0,
+        "retry-delayed": 0,
+      };
     const update = (
       group: Record<string, number>,
       key: string,
@@ -517,7 +564,11 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
     };
     let jobs = 0;
     const groupedIdentities = new Set<string>();
-    const recordPriority = (identity: string, priority: VoxelWorkPriority) => {
+    const recordPriority = (
+      identity: string,
+      priority: VoxelWorkPriority,
+      stage: VoxelWorkStage,
+    ) => {
       if (groupedIdentities.has(identity)) return;
       groupedIdentities.add(identity);
       const age = Math.max(0, now - priority.demandSince);
@@ -527,25 +578,96 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
       update(ages.byCoverageClass, priority.coverageClass, age);
       update(ages.byViewClass, priority.viewClass, age);
       update(ages.byPhase, priority.phase, age);
+      let usage = executableStages[stage];
+      if (!usage) {
+        usage = emptyUsage();
+        executableStages[stage] = usage;
+      }
+      usage.jobs++;
       jobs++;
     };
     for (const [key, demand] of this.demandIdentities) {
-      recordPriority(`${key}:${demand.priority.phase}`, demand.priority);
+      const record = this.getBaseRecord(key, demand.version);
+      if (!record) continue;
+      if (!isExecutableBaseStage(record.stage)) {
+        nonExecutableDemand[record.stage]++;
+        continue;
+      }
+      recordPriority(`${key}:base`, record.priority, record.stage);
     }
     for (const record of this.records.values()) {
       if (record.stage === "inserted" || record.cancellationReason) continue;
-      recordPriority(`${record.key}:${record.phase}`, record.priority);
+      if (record.phase === "base" && !isExecutableBaseStage(record.stage)) {
+        continue;
+      }
+      recordPriority(
+        `${record.key}:${record.phase}`,
+        record.priority,
+        record.stage,
+      );
     }
-    return { jobs, oldestDemandAgeMs: ages };
+    return {
+      jobs,
+      executableStages,
+      nonExecutableDemand,
+      oldestDemandAgeMs: ages,
+    };
   }
 
-  setLimits(compact: VoxelStageLimits, expanded: VoxelStageLimits): void {
+  setLimits(
+    compact: VoxelStageLimits,
+    expanded: VoxelStageLimits,
+    retainedEnhancement: Partial<VoxelRetainedEnhancementLimits> = {},
+  ): void {
     this.compactLimits = compact;
     this.expandedLimits = expanded;
+    this.retainedEnhancementLimits = {
+      ...this.retainedEnhancementLimits,
+      ...retainedEnhancement,
+    };
   }
 
   canStartFetch(): boolean {
     return hasCapacity(this.snapshot().compactInput, this.compactLimits);
+  }
+
+  canRetainEnhancement(bytes: number): boolean {
+    const usage = this.snapshot().retainedEnhancementInput;
+    return (
+      usage.jobs === 0 ||
+      (usage.jobs < this.retainedEnhancementLimits.maxJobs &&
+        usage.bytes + bytes <= this.retainedEnhancementLimits.maxBytes)
+    );
+  }
+
+  hasExecutableBaseWork(): boolean {
+    return [...this.records.values()].some(
+      (record) =>
+        record.phase === "base" &&
+        isExecutableBaseStage(record.stage) &&
+        !record.cancellationReason,
+    );
+  }
+
+  getExecutableBasePressure(now: number): VoxelExecutableBasePressure {
+    let jobs = 0;
+    let oldestAgeMs = 0;
+    for (const record of this.records.values()) {
+      if (
+        record.phase !== "base" ||
+        !isExecutableBaseStage(record.stage) ||
+        record.cancellationReason
+      ) {
+        continue;
+      }
+      jobs++;
+      oldestAgeMs = Math.max(oldestAgeMs, 0, now - record.priority.demandSince);
+    }
+    return { jobs, oldestAgeMs };
+  }
+
+  getRetainedEnhancementLimits(): VoxelRetainedEnhancementLimits {
+    return { ...this.retainedEnhancementLimits };
   }
 
   getByKey(key: string): VoxelWorkRecord<TCompact, TExpanded>[] {
@@ -557,6 +679,7 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
       key: string;
       version: number;
       priority: VoxelWorkPriority;
+      demandState?: VoxelDemandState;
     },
   >(requests: Map<string, T>, now: number): void {
     for (const [key, request] of requests) {
@@ -574,6 +697,25 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
       request.priority.demandSince = identity.demandSince;
       request.priority.sequence = identity.sequence;
       identity.priority = request.priority;
+      if (request.priority.phase !== "base") continue;
+      const record = this.getBaseRecord(key, request.version);
+      const stage = demandStateToStage(request.demandState ?? "executable");
+      if (!record) {
+        this.records.set(
+          this.nextJobId,
+          this.createSelectedRecord(
+            this.nextJobId++,
+            key,
+            request.version,
+            request.priority,
+            identity.demandSince,
+            stage,
+          ),
+        );
+      } else if (stage !== "selected" || !isActiveBaseStage(record.stage)) {
+        record.stage = stage;
+        record.priority = { ...request.priority, phase: "base" };
+      }
     }
     for (const key of this.demandIdentities.keys()) {
       if (!requests.has(key)) this.demandIdentities.delete(key);
@@ -587,6 +729,13 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
     selectedAt: number;
     fetchStartedAt: number;
   }): VoxelWorkRecord<TCompact, TExpanded> {
+    const existing = this.getBaseRecord(input.key, input.version);
+    if (existing) {
+      existing.stage = "fetching";
+      existing.priority = { ...input.priority, phase: "base" };
+      existing.timestamps.fetchStartedAt = input.fetchStartedAt;
+      return existing;
+    }
     const record: VoxelWorkRecord<TCompact, TExpanded> = {
       jobId: this.nextJobId++,
       ...input,
@@ -607,6 +756,24 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
     return record;
   }
 
+  markFetchQueued(key: string, version: number): boolean {
+    const record = this.getBaseRecord(key, version);
+    if (!record || record.stage !== "selected") return false;
+    record.stage = "fetch-queued";
+    return true;
+  }
+
+  markDemandState(
+    key: string,
+    version: number,
+    demandState: VoxelDemandState,
+  ): boolean {
+    const record = this.getBaseRecord(key, version);
+    if (!record || record.stage === "meshing") return false;
+    record.stage = demandStateToStage(demandState);
+    return true;
+  }
+
   createRetainedEnhancement(input: {
     key: string;
     version: number;
@@ -617,6 +784,10 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
     compactBytes: number;
     baseMeshId: number;
   }): VoxelWorkRecord<TCompact, TExpanded> {
+    // Base workers can complete together. Retain every returned buffer so an
+    // over-watermark wave cannot silently leave visible geometry unenhanced.
+    // Dispatch pressure relief drains this observable overflow before normal
+    // enhancement scheduling resumes.
     const record: VoxelWorkRecord<TCompact, TExpanded> = {
       jobId: this.nextJobId++,
       key: input.key,
@@ -668,6 +839,7 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
     getReservedExpandedBytes:
       | number
       | ((record: VoxelWorkRecord<TCompact, TExpanded>) => number) = 0,
+    options: { activeWorkerCount?: number } = {},
   ): VoxelWorkRecord<TCompact, TExpanded> | null {
     if (
       [...this.records.values()].some(
@@ -682,15 +854,18 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
         record.stage === "compact-input" ||
         record.stage === "retained-enhancement-input",
     );
-    const urgentBasePending = candidates.some((record) =>
-      isUrgentVoxelBaseWork(record.priority, dispatchedAt),
-    );
+    const executableBasePending = this.hasExecutableBaseWork();
+    const pressureRelief = this.needsEnhancementPressureRelief();
+    const activeWorkerCount = Math.max(1, options.activeWorkerCount ?? 1);
+    const meshingCount = snapshot.activeWorker.jobs;
     const ordered = candidates
-      .filter(
-        (record) =>
-          !urgentBasePending ||
-          isUrgentVoxelBaseWork(record.priority, dispatchedAt),
-      )
+      .filter((record) => {
+        if (record.phase === "base") return true;
+        if (!executableBasePending) return true;
+        if (!pressureRelief) return false;
+        // With multiple workers, leave one idle lane for an arriving base result.
+        return activeWorkerCount === 1 || meshingCount < activeWorkerCount - 1;
+      })
       .sort((left, right) =>
         compareVoxelWorkPriority(left.priority, right.priority, dispatchedAt),
       );
@@ -730,6 +905,14 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
         snapshot.reservedExpandedOutput.bytes +
         estimate <=
         this.expandedLimits.maxBytes
+    );
+  }
+
+  private needsEnhancementPressureRelief(): boolean {
+    const usage = this.snapshot().retainedEnhancementInput;
+    return (
+      usage.jobs >= this.retainedEnhancementLimits.highWaterJobs ||
+      usage.bytes >= this.retainedEnhancementLimits.highWaterBytes
     );
   }
 
@@ -927,24 +1110,32 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
 
   snapshot(): VoxelSchedulerSnapshot {
     const snapshot: VoxelSchedulerSnapshot = {
+      selected: emptyUsage(),
+      fetchQueued: emptyUsage(),
       fetching: emptyUsage(),
       compactInput: emptyUsage(),
+      retainedEnhancementInput: emptyUsage(),
+      totalCompactInput: emptyUsage(),
       activeWorker: emptyUsage(),
       reservedExpandedOutput: emptyUsage(),
       expandedOutput: emptyUsage(),
     };
     for (const record of this.records.values()) {
       const usage =
-        record.stage === "fetching"
-          ? snapshot.fetching
-          : record.stage === "compact-input" ||
-              record.stage === "retained-enhancement-input"
-            ? snapshot.compactInput
-            : record.stage === "meshing"
-              ? snapshot.activeWorker
-              : record.stage === "expanded-output"
-                ? snapshot.expandedOutput
-                : null;
+        record.stage === "selected"
+          ? snapshot.selected
+          : record.stage === "fetch-queued"
+            ? snapshot.fetchQueued
+            : record.stage === "fetching"
+              ? snapshot.fetching
+              : record.stage === "compact-input" ||
+                  record.stage === "retained-enhancement-input"
+                ? snapshot.compactInput
+                : record.stage === "meshing"
+                  ? snapshot.activeWorker
+                  : record.stage === "expanded-output"
+                    ? snapshot.expandedOutput
+                    : null;
       if (!usage) continue;
       usage.jobs += 1;
       usage.bytes +=
@@ -955,11 +1146,88 @@ export class VoxelWorkScheduler<TCompact = ArrayBuffer, TExpanded = unknown> {
           : record.stage === "expanded-output"
             ? record.expandedBytes
             : 0;
+      if (record.stage === "retained-enhancement-input") {
+        snapshot.compactInput.jobs--;
+        snapshot.compactInput.bytes -= record.compactBytes;
+        snapshot.retainedEnhancementInput.jobs++;
+        snapshot.retainedEnhancementInput.bytes += record.compactBytes;
+      }
       if (record.reservedExpandedBytes > 0) {
         snapshot.reservedExpandedOutput.jobs += 1;
         snapshot.reservedExpandedOutput.bytes += record.reservedExpandedBytes;
       }
     }
+    snapshot.totalCompactInput.jobs =
+      snapshot.compactInput.jobs + snapshot.retainedEnhancementInput.jobs;
+    snapshot.totalCompactInput.bytes =
+      snapshot.compactInput.bytes + snapshot.retainedEnhancementInput.bytes;
     return snapshot;
   }
+
+  assertProgressInvariant(): string[] {
+    const violations: string[] = [];
+    for (const [key, demand] of this.demandIdentities) {
+      const record = this.getBaseRecord(key, demand.version);
+      if (!record) violations.push(`${key}:${demand.version}`);
+    }
+    return violations;
+  }
+
+  private getBaseRecord(
+    key: string,
+    version: number,
+  ): VoxelWorkRecord<TCompact, TExpanded> | undefined {
+    return [...this.records.values()].find(
+      (record) =>
+        record.phase === "base" &&
+        record.key === key &&
+        record.version === version,
+    );
+  }
+
+  private createSelectedRecord(
+    jobId: number,
+    key: string,
+    version: number,
+    priority: VoxelWorkPriority,
+    selectedAt: number,
+    stage: VoxelWorkStage,
+  ): VoxelWorkRecord<TCompact, TExpanded> {
+    return {
+      jobId,
+      key,
+      version,
+      phase: "base",
+      loadGeneration: this.loadGeneration,
+      priority: { ...priority, phase: "base" },
+      stage,
+      compactBytes: 0,
+      expandedBytes: 0,
+      reservedExpandedBytes: 0,
+      workerId: null,
+      baseMeshId: null,
+      timestamps: { selectedAt },
+    };
+  }
+}
+
+function demandStateToStage(state: VoxelDemandState): VoxelWorkStage {
+  return state === "executable" ? "selected" : state;
+}
+
+function isActiveBaseStage(
+  stage: VoxelWorkStage,
+): stage is Exclude<VoxelWorkStage, Exclude<VoxelDemandState, "executable">> {
+  return ![
+    "fresh",
+    "known-missing",
+    "retry-exhausted",
+    "retry-delayed",
+  ].includes(stage);
+}
+
+function isExecutableBaseStage(
+  stage: VoxelWorkStage,
+): stage is Exclude<VoxelWorkStage, Exclude<VoxelDemandState, "executable">> {
+  return isActiveBaseStage(stage);
 }

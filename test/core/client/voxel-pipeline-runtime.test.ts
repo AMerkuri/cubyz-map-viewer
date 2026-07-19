@@ -210,6 +210,134 @@ test("refresh supersession cancels old active work and rejects its result", () =
   assert.deepEqual(scheduler.snapshot().expandedOutput, { jobs: 0, bytes: 0 });
 });
 
+test("one and two worker completion orders converge the same lifecycle identities", () => {
+  const replay = (workerCount: number, completionOrder: string[]) => {
+    const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+      { maxJobs: 8, maxBytes: 64 },
+      { maxJobs: 8, maxBytes: 64 },
+    );
+    const demands = new Map(
+      ["first", "second", "refresh"].map((key, sequence) => [
+        key,
+        { key, version: 1, priority: { ...priority(3 - sequence), sequence } },
+      ]),
+    );
+    scheduler.reconcileDemand(demands, 0);
+    const records = new Map<string, number>();
+    for (const demand of demands.values()) {
+      scheduler.markFetchQueued(demand.key, demand.version);
+      const record = scheduler.createFetching({
+        ...demand,
+        selectedAt: 0,
+        fetchStartedAt: 1,
+      });
+      scheduler.acceptCompact(record.jobId, new ArrayBuffer(1), 1, 2);
+      records.set(demand.key, record.jobId);
+    }
+    const originalRefresh = records.get("refresh");
+    assert.ok(originalRefresh);
+    scheduler.cancel(originalRefresh, "refresh-superseded");
+    scheduler.finish(originalRefresh, "discarded", "refresh-superseded");
+    const refreshed = { key: "refresh", version: 2, priority: priority(3, 2) };
+    scheduler.reconcileDemand(new Map([...demands, ["refresh", refreshed]]), 3);
+    const refreshRecord = scheduler.createFetching({
+      ...refreshed,
+      selectedAt: 3,
+      fetchStartedAt: 4,
+    });
+    scheduler.acceptCompact(refreshRecord.jobId, new ArrayBuffer(1), 1, 5);
+    records.set("refresh", refreshRecord.jobId);
+
+    const loaded = new Set<string>();
+    let now = 6;
+    for (const _key of completionOrder) {
+      const dispatched = scheduler.dispatchNext(now, (now % workerCount) + 1);
+      assert.ok(dispatched);
+      scheduler.completeWorker(dispatched.jobId, new Uint8Array(1), 1, {
+        workerStartedAt: now,
+        workerCompletedAt: now + 1,
+        resultReceivedAt: now + 2,
+      });
+      scheduler.markSceneInserted(dispatched.jobId, now + 3);
+      scheduler.markFirstVisible(dispatched.jobId, now + 4);
+      loaded.add(dispatched.key);
+      now += 5;
+    }
+    scheduler.reconcileDemand(
+      new Map([
+        [
+          "missing",
+          {
+            key: "missing",
+            version: 1,
+            priority: priority(1),
+            demandState: "known-missing" as const,
+          },
+        ],
+        [
+          "delayed",
+          {
+            key: "delayed",
+            version: 1,
+            priority: priority(1),
+            demandState: "retry-delayed" as const,
+          },
+        ],
+      ]),
+      now,
+    );
+    return {
+      loaded: [...loaded].sort(),
+      diagnostics:
+        scheduler.getDiagnostics(now).currentQueue.nonExecutableDemand,
+      invariant: scheduler.assertProgressInvariant(),
+    };
+  };
+
+  const sequential = replay(1, ["first", "second", "refresh"]);
+  const concurrent = replay(2, ["second", "refresh", "first"]);
+  assert.deepEqual(concurrent.loaded, sequential.loaded);
+  assert.deepEqual(concurrent.diagnostics, sequential.diagnostics);
+  assert.deepEqual(sequential.invariant, []);
+  assert.deepEqual(concurrent.invariant, []);
+});
+
+test("LOD reconciliation during cancellation leaves each requestable key owned", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 4, maxBytes: 16 },
+    { maxJobs: 4, maxBytes: 16 },
+  );
+  const first = { key: "lod-1", version: 1, priority: priority(2) };
+  const retained = { key: "lod-4", version: 1, priority: priority(1) };
+  scheduler.reconcileDemand(
+    new Map([
+      [first.key, first],
+      [retained.key, retained],
+    ]),
+    0,
+  );
+  const active = scheduler.createFetching({
+    ...first,
+    selectedAt: 0,
+    fetchStartedAt: 1,
+  });
+  scheduler.acceptCompact(active.jobId, new ArrayBuffer(1), 1, 2);
+  scheduler.dispatchNext(3, 1);
+  scheduler.cancel(active.jobId, "demand-removed");
+
+  const replacement = { key: "lod-2", version: 1, priority: priority(3) };
+  scheduler.reconcileDemand(
+    new Map([
+      [retained.key, retained],
+      [replacement.key, replacement],
+    ]),
+    4,
+  );
+  assert.deepEqual(scheduler.assertProgressInvariant(), []);
+  assert.equal(scheduler.getByKey(replacement.key)[0]?.stage, "selected");
+  assert.equal(scheduler.getByKey(retained.key)[0]?.stage, "selected");
+});
+
 test("compact work dispatch uses its latest priority", () => {
   const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
     { maxJobs: 3, maxBytes: 24 },

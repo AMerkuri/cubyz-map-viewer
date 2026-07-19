@@ -10,6 +10,7 @@ function sample(
   optional: Partial<NonNullable<WorkerMeshResult["benchmark"]>>,
 ): NonNullable<WorkerMeshResult["benchmark"]> {
   return {
+    fetchCompletedAt: 0,
     fetchMs: 10,
     decodeMs: 20,
     totalMs: 30,
@@ -19,11 +20,22 @@ function sample(
     rawBufferBytes: 4,
     workerOutputBytes: 5,
     emissiveBytes: 6,
+    emissiveSkipped: false,
     emissiveGridBuildMs: null,
     emissiveBakeMs: null,
     emissiveQuadsEvaluated: 7,
     emissiveQuadsCulled: 8,
+    emissiveReceiverEvaluations: 9,
+    emissiveNeighborhoodCellProbes: 10,
+    emissiveNonEmptyBuckets: 11,
+    emissiveRawBucketEntries: 12,
+    emissiveDeduplicatedNeighborhoodEntries: 13,
     emissiveCandidateVisits: 9,
+    emissiveCacheHits: 0,
+    emissiveCacheMisses: 0,
+    emissiveCacheEntries: 0,
+    emissiveUncachedFallbacks: 0,
+    emissivePeakAccountedCacheBytes: 0,
     contentEncoding: "br",
     serverRunMs: null,
     serverHaloMs: null,
@@ -61,4 +73,20 @@ test("sparse optional benchmark averages use independent valid samples", () => {
     serverRun: 1,
     serverHalo: 1,
   });
+});
+
+test("progressive benchmark output preserves base, enhancement, and combined bytes", () => {
+  const stats = addVoxelBenchmarkSample(
+    createEmptyVoxelBenchmarkStats(true, true),
+    sample({
+      workerOutputBytes: 250_000,
+      baseWorkerOutputBytes: 10 * 1024 * 1024,
+      enhancementWorkerOutputBytes: 250_000,
+      combinedWorkerOutputBytes: 10 * 1024 * 1024 + 250_000,
+    }),
+  );
+
+  assert.equal(stats.avgBaseWorkerOutputBytes, 10 * 1024 * 1024);
+  assert.equal(stats.avgEnhancementWorkerOutputBytes, 250_000);
+  assert.equal(stats.avgCombinedWorkerOutputBytes, 10 * 1024 * 1024 + 250_000);
 });

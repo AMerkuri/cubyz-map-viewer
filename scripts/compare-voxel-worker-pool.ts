@@ -5,6 +5,7 @@ import {
 } from "../src/client/features/world-view/lib/voxel-adaptive-workers.js";
 
 interface SyntheticJob {
+  id: string;
   camera: string;
   releaseAt: number;
   durationMs: number;
@@ -20,43 +21,51 @@ interface ActiveJob extends SyntheticJob {
 
 const FRAME_MS = 16;
 const OUTPUT_LIMIT = 96 * 1024 * 1024;
-const MODES = ["fixed-1", "fixed-2", "fixed-4", "adaptive"] as const;
-const CAMERA_WORKLOADS = [
-  { name: "spawn-overview", jobs: 32, duration: 120, bytes: 2.5 * 1024 ** 2 },
-  { name: "settled-focus", jobs: 24, duration: 210, bytes: 4.5 * 1024 ** 2 },
-  { name: "ridge-pan", jobs: 40, duration: 150, bytes: 3.25 * 1024 ** 2 },
+const MODES = [
+  "fixed-1",
+  "fixed-2",
+  "adaptive-healthy",
+  "adaptive-unhealthy",
 ] as const;
 
-const jobs = CAMERA_WORKLOADS.flatMap((camera, cameraIndex) =>
-  Array.from({ length: camera.jobs }, (_, index) => ({
-    camera: camera.name,
-    releaseAt: cameraIndex * 2_000 + index * 40,
-    durationMs: camera.duration + ((index * 29) % 90),
-    bytes: Math.round(camera.bytes + ((index * 104_729) % (1.5 * 1024 ** 2))),
-    focus: index % 3 === 0,
-  })),
-);
+// The opening focus subset drains long before the old three-second startup
+// cooldown, while ordinary executable detail keeps the base wave saturated.
+const jobs = Array.from({ length: 32 }, (_, index) => ({
+  id: `fallback-wave-${index + 1}`,
+  camera: "fallback-base-wave",
+  releaseAt: 0,
+  durationMs: 400 + ((index * 29) % 90),
+  bytes: Math.round(2.5 * 1024 ** 2 + ((index * 104_729) % (1.5 * 1024 ** 2))),
+  focus: index < 4,
+}));
 
+const results = MODES.map((mode) => [mode, simulate(mode)] as const);
 console.log(
-  "| Class | Mode | Frame p95 (ms) | Oldest focus (ms) | Base-visible p95 (ms) | Scene backlog max | Expanded peak (MiB) | Memory estimate peak (MiB) |",
+  "| Policy | Target transitions | Base-visible p50/p95/max (ms) | Frame p95 (ms) | Completion identity |",
 );
-console.log("|---|---:|---:|---:|---:|---:|---:|---:|");
-for (const deviceClass of ["desktop", "mobile"] as const) {
-  for (const mode of MODES) {
-    const result = simulate(deviceClass, mode);
-    console.log(
-      `| ${deviceClass} | ${mode} | ${result.frameP95.toFixed(1)} | ${result.oldestFocus.toFixed(0)} | ${result.baseVisibleP95.toFixed(0)} | ${result.sceneBacklog} | ${toMiB(result.expandedPeak)} | ${toMiB(result.memoryPeak)} |`,
-    );
-  }
+console.log("|---|---:|---:|---:|---|");
+for (const [mode, result] of results) {
+  console.log(
+    `| ${mode} | ${result.targetTransitions} | ${result.baseVisibleP50.toFixed(0)} / ${result.baseVisibleP95.toFixed(0)} / ${result.baseVisibleMax.toFixed(0)} | ${result.frameP95.toFixed(1)} | ${result.completionIdentity} |`,
+  );
 }
 
-function simulate(
-  deviceClass: "desktop" | "mobile",
-  mode: (typeof MODES)[number],
-) {
+const fixedTwo = results.find(([mode]) => mode === "fixed-2")?.[1];
+const adaptiveHealthy = results.find(
+  ([mode]) => mode === "adaptive-healthy",
+)?.[1];
+if (!fixedTwo || !adaptiveHealthy) throw new Error("Missing comparison result");
+if (adaptiveHealthy.maximumTarget !== 2) {
+  throw new Error("Healthy adaptive fallback policy did not reach target two");
+}
+if (adaptiveHealthy.baseVisibleP95 > fixedTwo.baseVisibleP95 * 1.25) {
+  throw new Error("Adaptive base-visible p95 exceeded the fixed-two allowance");
+}
+
+function simulate(mode: (typeof MODES)[number]) {
   const profile = selectVoxelWorkerProfile({
-    coarsePointer: deviceClass === "mobile",
-    deviceMemoryGb: deviceClass === "mobile" ? 4 : 8,
+    coarsePointer: null,
+    deviceMemoryGb: null,
   });
   let adaptive = createVoxelAdaptiveState(profile);
   const queue: SyntheticJob[] = [];
@@ -64,13 +73,14 @@ function simulate(
   const scene: Array<SyntheticJob & { completedAt: number }> = [];
   const frameTimes: number[] = [];
   const baseVisible: number[] = [];
+  const completionIds: string[] = [];
   let nextJob = 0;
   let loadedBytes = 0;
   let oldestFocus = 0;
   let sceneBacklog = 0;
   let expandedPeak = 0;
   let memoryPeak = 0;
-  const endAt = Math.max(...jobs.map((job) => job.releaseAt)) + 12_000;
+  const endAt = 16_000;
 
   for (let now = 0; now <= endAt; now += FRAME_MS) {
     while ((jobs[nextJob]?.releaseAt ?? Number.POSITIVE_INFINITY) <= now) {
@@ -83,7 +93,7 @@ function simulate(
         left.releaseAt - right.releaseAt,
     );
 
-    const fixedTarget = mode === "adaptive" ? null : Number(mode.at(-1));
+    const fixedTarget = mode.startsWith("fixed-") ? Number(mode.at(-1)) : null;
     const target = fixedTarget ?? adaptive.targetWorkers;
     let reservedBytes = active.reduce((sum, job) => sum + job.reservation, 0);
     const sceneBytes = scene.reduce((sum, job) => sum + job.bytes, 0);
@@ -117,6 +127,7 @@ function simulate(
     const inserted = scene.shift();
     if (inserted) {
       baseVisible.push(now - inserted.releaseAt);
+      completionIds.push(inserted.id);
       loadedBytes += inserted.bytes;
     }
 
@@ -131,19 +142,26 @@ function simulate(
     expandedPeak = Math.max(expandedPeak, currentExpanded);
     memoryPeak = Math.max(memoryPeak, loadedBytes + currentExpanded);
     const frameTime =
-      (deviceClass === "mobile" ? 13 : 9) +
-      completions * (deviceClass === "mobile" ? 2.2 : 1.2) +
-      (inserted ? inserted.bytes / (4 * 1024 ** 2) : 0);
+      9 + completions * 1.2 + (inserted ? inserted.bytes / (4 * 1024 ** 2) : 0);
     frameTimes.push(frameTime);
 
-    if (mode === "adaptive") {
+    if (mode.startsWith("adaptive-")) {
       adaptive = updateVoxelAdaptiveTarget(
         adaptive,
         {
           now,
-          oldestUrgentQueueMs: Math.max(...currentFocusAges, 0),
+          executableBaseJobs: queue.length + active.length + scene.length,
+          oldestExecutableBaseAgeMs: Math.max(
+            ...[...queue, ...active, ...scene].map(
+              (job) => now - job.releaseAt,
+            ),
+            0,
+          ),
           frameTimeMs: frameTime,
-          workerBusyRatio: active.length / Math.max(1, adaptive.targetWorkers),
+          // A completed worker immediately receives another queued base job in
+          // production; model that handoff rather than treating the frame's
+          // completion bookkeeping gap as idle time.
+          workerBusyRatio: active.length > 0 || queue.length > 0 ? 1 : 0,
           workerDurationMs: active.reduce(
             (max, job) => Math.max(max, job.durationMs),
             0,
@@ -152,10 +170,8 @@ function simulate(
           sceneBacklogBytes: scene.reduce((sum, job) => sum + job.bytes, 0),
           reservedBytes: active.reduce((sum, job) => sum + job.reservation, 0),
           expandedBytes: currentExpanded,
-          memoryPressure:
-            memoryPeak / (deviceClass === "mobile" ? 384 : 1024) / 1024 ** 2,
-          interacting:
-            (now >= 4_000 && now < 4_500) || (now >= 5_000 && now < 5_300),
+          memoryPressure: memoryPeak / 1024 / 1024 ** 2,
+          interacting: mode === "adaptive-unhealthy",
         },
         profile,
       );
@@ -165,18 +181,25 @@ function simulate(
   return {
     frameP95: percentile(frameTimes, 0.95),
     oldestFocus,
+    baseVisibleP50: percentile(baseVisible, 0.5),
     baseVisibleP95: percentile(baseVisible, 0.95),
+    baseVisibleMax: Math.max(...baseVisible, 0),
     sceneBacklog,
     expandedPeak,
     memoryPeak,
+    maximumTarget: adaptive.diagnostics.maximumTarget,
+    targetTransitions: mode.startsWith("adaptive-")
+      ? `${adaptive.diagnostics.scaleUpTransitions} up / ${adaptive.diagnostics.scaleDownTransitions} down`
+      : "fixed",
+    completionIdentity:
+      completionIds.length === jobs.length &&
+      new Set(completionIds).size === jobs.length
+        ? "all base records once"
+        : "incomplete or duplicate",
   };
 }
 
 function percentile(values: number[], fraction: number): number {
   const sorted = [...values].sort((left, right) => left - right);
   return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
-}
-
-function toMiB(bytes: number): string {
-  return (bytes / 1024 ** 2).toFixed(1);
 }

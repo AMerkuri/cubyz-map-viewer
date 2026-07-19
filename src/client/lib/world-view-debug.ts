@@ -47,9 +47,29 @@ export type ChunkStats = {
   voxelPipeline: {
     loadGeneration: number;
     compactInput: { jobs: number; bytes: number };
+    retainedEnhancementInput: { jobs: number; bytes: number };
+    retainedEnhancementCapacity: { jobs: number; bytes: number };
+    reservedExpandedOutput: { jobs: number; bytes: number };
     expandedOutput: { jobs: number; bytes: number };
+    expandedOutputCapacity: { jobs: number; bytes: number };
+    adaptive: {
+      profile: string;
+      limiterReason: string;
+      diagnostics: {
+        initialTarget: number;
+        maximumTarget: number;
+        scaleUpTransitions: number;
+        scaleDownTransitions: number;
+        limiterObservations: Record<string, number>;
+        peakExecutableBaseJobs: number;
+        peakOldestExecutableBaseAgeMs: number;
+        firstTransitionAt: number | null;
+        latestTransitionAt: number | null;
+      };
+    };
     timings: Record<
       | "fetchMs"
+      | "selectionToFetchStartMs"
       | "compactQueueWaitMs"
       | "baseWorkerExecutionMs"
       | "resultTransferWaitMs"
@@ -69,6 +89,8 @@ export type ChunkStats = {
     >;
     currentQueue: {
       jobs: number;
+      executableStages: Record<string, { jobs: number; bytes: number }>;
+      nonExecutableDemand: Record<string, number>;
       oldestDemandAgeMs: {
         overall: number | null;
         byLod: Record<string, number>;
@@ -108,12 +130,25 @@ export type ChunkStats = {
     avgDecodedBodyBytes: number | null;
     avgRawBufferBytes: number | null;
     avgWorkerOutputBytes: number | null;
+    avgBaseWorkerOutputBytes: number | null;
+    avgEnhancementWorkerOutputBytes: number | null;
+    avgCombinedWorkerOutputBytes: number | null;
     avgEmissiveBytes: number | null;
     avgEmissiveGridBuildMs: number | null;
     avgEmissiveBakeMs: number | null;
     avgEmissiveQuadsEvaluated: number | null;
     avgEmissiveQuadsCulled: number | null;
+    avgEmissiveReceiverEvaluations: number | null;
+    avgEmissiveNeighborhoodCellProbes: number | null;
+    avgEmissiveNonEmptyBuckets: number | null;
+    avgEmissiveRawBucketEntries: number | null;
+    avgEmissiveDeduplicatedNeighborhoodEntries: number | null;
     avgEmissiveCandidateVisits: number | null;
+    avgEmissiveCacheHits: number | null;
+    avgEmissiveCacheMisses: number | null;
+    avgEmissiveCacheEntries: number | null;
+    avgEmissiveUncachedFallbacks: number | null;
+    avgEmissivePeakAccountedCacheBytes: number | null;
     avgEmitterMetadataBytes: number | null;
     avgEmitterPowerMin: number | null;
     avgEmitterPowerMax: number | null;
@@ -130,6 +165,7 @@ export type ChunkStats = {
     cacheHitSamples: number;
     cacheMissSamples: number;
     cacheUnknownSamples: number;
+    emissiveSkippedSamples: number;
     haloEmittersEnabled: boolean;
     emissiveAttributesEnabled: boolean;
   };
@@ -158,6 +194,8 @@ export interface MapDebugSettings {
   maxConcurrentVoxelFetches: number;
   voxelCompactInputMaxJobs: number;
   voxelCompactInputMaxBytes: number;
+  voxelRetainedEnhancementMaxJobs: number;
+  voxelRetainedEnhancementMaxBytes: number;
   voxelExpandedOutputMaxJobs: number;
   voxelExpandedOutputMaxBytes: number;
   voxelWorkerTarget: number;
@@ -223,8 +261,10 @@ export const DEFAULT_MAP_DEBUG_SETTINGS: MapDebugSettings = {
   maxConcurrentVoxelFetches: 8,
   voxelCompactInputMaxJobs: 8,
   voxelCompactInputMaxBytes: 32 * MB,
+  voxelRetainedEnhancementMaxJobs: 16,
+  voxelRetainedEnhancementMaxBytes: 128 * MB,
   voxelExpandedOutputMaxJobs: 4,
-  voxelExpandedOutputMaxBytes: 96 * MB,
+  voxelExpandedOutputMaxBytes: 256 * MB,
   voxelWorkerTarget: 0,
   voxelCancellationCheckpointMs: 4,
   voxelTopAoIntensity: 1,
@@ -285,8 +325,33 @@ export function createEmptyChunkStats(): ChunkStats {
     voxelPipeline: {
       loadGeneration: 1,
       compactInput: { jobs: 0, bytes: 0 },
+      retainedEnhancementInput: { jobs: 0, bytes: 0 },
+      retainedEnhancementCapacity: { jobs: 0, bytes: 0 },
+      reservedExpandedOutput: { jobs: 0, bytes: 0 },
       expandedOutput: { jobs: 0, bytes: 0 },
+      expandedOutputCapacity: { jobs: 0, bytes: 0 },
+      adaptive: {
+        profile: "fallback",
+        limiterReason: "insufficient-demand",
+        diagnostics: {
+          initialTarget: 1,
+          maximumTarget: 1,
+          scaleUpTransitions: 0,
+          scaleDownTransitions: 0,
+          limiterObservations: {},
+          peakExecutableBaseJobs: 0,
+          peakOldestExecutableBaseAgeMs: 0,
+          firstTransitionAt: null,
+          latestTransitionAt: null,
+        },
+      },
       timings: {
+        selectionToFetchStartMs: {
+          count: 0,
+          p50Ms: null,
+          p95Ms: null,
+          maxMs: null,
+        },
         fetchMs: { count: 0, p50Ms: null, p95Ms: null, maxMs: null },
         compactQueueWaitMs: {
           count: 0,
@@ -351,6 +416,8 @@ export function createEmptyChunkStats(): ChunkStats {
       },
       currentQueue: {
         jobs: 0,
+        executableStages: {},
+        nonExecutableDemand: {},
         oldestDemandAgeMs: {
           overall: null,
           byLod: {},
@@ -386,12 +453,25 @@ export function createEmptyChunkStats(): ChunkStats {
       avgDecodedBodyBytes: null,
       avgRawBufferBytes: null,
       avgWorkerOutputBytes: null,
+      avgBaseWorkerOutputBytes: null,
+      avgEnhancementWorkerOutputBytes: null,
+      avgCombinedWorkerOutputBytes: null,
       avgEmissiveBytes: null,
       avgEmissiveGridBuildMs: null,
       avgEmissiveBakeMs: null,
       avgEmissiveQuadsEvaluated: null,
       avgEmissiveQuadsCulled: null,
+      avgEmissiveReceiverEvaluations: null,
+      avgEmissiveNeighborhoodCellProbes: null,
+      avgEmissiveNonEmptyBuckets: null,
+      avgEmissiveRawBucketEntries: null,
+      avgEmissiveDeduplicatedNeighborhoodEntries: null,
       avgEmissiveCandidateVisits: null,
+      avgEmissiveCacheHits: null,
+      avgEmissiveCacheMisses: null,
+      avgEmissiveCacheEntries: null,
+      avgEmissiveUncachedFallbacks: null,
+      avgEmissivePeakAccountedCacheBytes: null,
       avgEmitterMetadataBytes: null,
       avgEmitterPowerMin: null,
       avgEmitterPowerMax: null,
@@ -408,6 +488,7 @@ export function createEmptyChunkStats(): ChunkStats {
       cacheHitSamples: 0,
       cacheMissSamples: 0,
       cacheUnknownSamples: 0,
+      emissiveSkippedSamples: 0,
       haloEmittersEnabled: true,
       emissiveAttributesEnabled: true,
     },
@@ -533,6 +614,31 @@ export const MAP_DEBUG_PARAMETER_DEFINITIONS: MapDebugParameterDefinition[] = [
     max: 512 * MB,
     step: MB,
     defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelCompactInputMaxBytes,
+    toDisplay: (value) => value / MB,
+    fromDisplay: (value) => value * MB,
+    formatDisplay: (value) => `${Math.round(value)} MiB`,
+  },
+  {
+    key: "voxelRetainedEnhancementMaxJobs",
+    section: "Loading",
+    label: "Retained Enhancement Jobs",
+    description:
+      "Bounds progressive emissive inputs retained after base geometry is visible.",
+    min: 1,
+    max: 64,
+    step: 1,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelRetainedEnhancementMaxJobs,
+  },
+  {
+    key: "voxelRetainedEnhancementMaxBytes",
+    section: "Loading",
+    label: "Retained Enhancement Memory",
+    description:
+      "Separate byte budget for progressive emissive inputs; it does not block base fetch admission.",
+    min: MB,
+    max: 512 * MB,
+    step: MB,
+    defaultValue: DEFAULT_MAP_DEBUG_SETTINGS.voxelRetainedEnhancementMaxBytes,
     toDisplay: (value) => value / MB,
     fromDisplay: (value) => value * MB,
     formatDisplay: (value) => `${Math.round(value)} MiB`,

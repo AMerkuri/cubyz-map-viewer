@@ -15,6 +15,7 @@ import type {
   WarmCachedVoxelTile,
   WorkerMeshResult,
 } from "./types.js";
+import type { VoxelAdaptiveDiagnostics } from "./voxel-adaptive-workers.js";
 import type { VoxelWorkScheduler } from "./voxel-work.js";
 
 const OPTIONAL_BENCHMARK_METRICS = [
@@ -23,12 +24,28 @@ const OPTIONAL_BENCHMARK_METRICS = [
   ["avgDecodedBodyBytes", "decodedBodyBytes"],
   ["avgRawBufferBytes", "rawBufferBytes"],
   ["avgWorkerOutputBytes", "workerOutputBytes"],
+  ["avgBaseWorkerOutputBytes", "baseWorkerOutputBytes"],
+  ["avgEnhancementWorkerOutputBytes", "enhancementWorkerOutputBytes"],
+  ["avgCombinedWorkerOutputBytes", "combinedWorkerOutputBytes"],
   ["avgEmissiveBytes", "emissiveBytes"],
   ["avgEmissiveGridBuildMs", "emissiveGridBuildMs"],
   ["avgEmissiveBakeMs", "emissiveBakeMs"],
   ["avgEmissiveQuadsEvaluated", "emissiveQuadsEvaluated"],
   ["avgEmissiveQuadsCulled", "emissiveQuadsCulled"],
+  ["avgEmissiveReceiverEvaluations", "emissiveReceiverEvaluations"],
+  ["avgEmissiveNeighborhoodCellProbes", "emissiveNeighborhoodCellProbes"],
+  ["avgEmissiveNonEmptyBuckets", "emissiveNonEmptyBuckets"],
+  ["avgEmissiveRawBucketEntries", "emissiveRawBucketEntries"],
+  [
+    "avgEmissiveDeduplicatedNeighborhoodEntries",
+    "emissiveDeduplicatedNeighborhoodEntries",
+  ],
   ["avgEmissiveCandidateVisits", "emissiveCandidateVisits"],
+  ["avgEmissiveCacheHits", "emissiveCacheHits"],
+  ["avgEmissiveCacheMisses", "emissiveCacheMisses"],
+  ["avgEmissiveCacheEntries", "emissiveCacheEntries"],
+  ["avgEmissiveUncachedFallbacks", "emissiveUncachedFallbacks"],
+  ["avgEmissivePeakAccountedCacheBytes", "emissivePeakAccountedCacheBytes"],
   ["avgEmitterMetadataBytes", "emitterMetadataBytes"],
   ["avgEmitterPowerMin", "emitterPowerMin"],
   ["avgEmitterPowerMax", "emitterPowerMax"],
@@ -52,12 +69,25 @@ export interface RollingVoxelBenchmarkStats {
   avgDecodedBodyBytes: number | null;
   avgRawBufferBytes: number | null;
   avgWorkerOutputBytes: number | null;
+  avgBaseWorkerOutputBytes: number | null;
+  avgEnhancementWorkerOutputBytes: number | null;
+  avgCombinedWorkerOutputBytes: number | null;
   avgEmissiveBytes: number | null;
   avgEmissiveGridBuildMs: number | null;
   avgEmissiveBakeMs: number | null;
   avgEmissiveQuadsEvaluated: number | null;
   avgEmissiveQuadsCulled: number | null;
+  avgEmissiveReceiverEvaluations: number | null;
+  avgEmissiveNeighborhoodCellProbes: number | null;
+  avgEmissiveNonEmptyBuckets: number | null;
+  avgEmissiveRawBucketEntries: number | null;
+  avgEmissiveDeduplicatedNeighborhoodEntries: number | null;
   avgEmissiveCandidateVisits: number | null;
+  avgEmissiveCacheHits: number | null;
+  avgEmissiveCacheMisses: number | null;
+  avgEmissiveCacheEntries: number | null;
+  avgEmissiveUncachedFallbacks: number | null;
+  avgEmissivePeakAccountedCacheBytes: number | null;
   avgEmitterMetadataBytes: number | null;
   avgEmitterPowerMin: number | null;
   avgEmitterPowerMax: number | null;
@@ -78,6 +108,7 @@ export interface RollingVoxelBenchmarkStats {
   cacheHitSamples: number;
   cacheMissSamples: number;
   cacheUnknownSamples: number;
+  emissiveSkippedSamples: number;
   haloEmittersEnabled: boolean;
   emissiveAttributesEnabled: boolean;
 }
@@ -103,12 +134,25 @@ export function createEmptyVoxelBenchmarkStats(
     avgDecodedBodyBytes: null,
     avgRawBufferBytes: null,
     avgWorkerOutputBytes: null,
+    avgBaseWorkerOutputBytes: null,
+    avgEnhancementWorkerOutputBytes: null,
+    avgCombinedWorkerOutputBytes: null,
     avgEmissiveBytes: null,
     avgEmissiveGridBuildMs: null,
     avgEmissiveBakeMs: null,
     avgEmissiveQuadsEvaluated: null,
     avgEmissiveQuadsCulled: null,
+    avgEmissiveReceiverEvaluations: null,
+    avgEmissiveNeighborhoodCellProbes: null,
+    avgEmissiveNonEmptyBuckets: null,
+    avgEmissiveRawBucketEntries: null,
+    avgEmissiveDeduplicatedNeighborhoodEntries: null,
     avgEmissiveCandidateVisits: null,
+    avgEmissiveCacheHits: null,
+    avgEmissiveCacheMisses: null,
+    avgEmissiveCacheEntries: null,
+    avgEmissiveUncachedFallbacks: null,
+    avgEmissivePeakAccountedCacheBytes: null,
     avgEmitterMetadataBytes: null,
     avgEmitterPowerMin: null,
     avgEmitterPowerMax: null,
@@ -126,6 +170,7 @@ export function createEmptyVoxelBenchmarkStats(
     cacheHitSamples: 0,
     cacheMissSamples: 0,
     cacheUnknownSamples: 0,
+    emissiveSkippedSamples: 0,
     haloEmittersEnabled,
     emissiveAttributesEnabled,
   };
@@ -142,7 +187,7 @@ export function addVoxelBenchmarkSample(
     const previous = current.optionalMetricAggregates[averageKey];
     const value = sample[sampleKey];
     const next =
-      value === null
+      value == null
         ? previous
         : { sum: previous.sum + value, count: previous.count + 1 };
     aggregates[averageKey] = next;
@@ -172,6 +217,8 @@ export function addVoxelBenchmarkSample(
       current.cacheMissSamples + (cacheOutcome === "miss" ? 1 : 0),
     cacheUnknownSamples:
       current.cacheUnknownSamples + (cacheOutcome === "unknown" ? 1 : 0),
+    emissiveSkippedSamples:
+      current.emissiveSkippedSamples + (sample.emissiveSkipped ? 1 : 0),
   };
 }
 
@@ -193,6 +240,13 @@ export function publishChunkStats(args: {
   voxelPipeline: {
     snapshot: ReturnType<VoxelWorkScheduler["snapshot"]>;
     diagnostics: VoxelWorkScheduler["diagnostics"];
+    retainedEnhancementCapacity: { jobs: number; bytes: number };
+    expandedOutputCapacity: { jobs: number; bytes: number };
+    adaptive: {
+      profile: string;
+      limiterReason: string;
+      diagnostics: VoxelAdaptiveDiagnostics;
+    };
   };
   lastChunkStatsRef: { current: string };
   onChunkStatsChange: (stats: ChunkStats) => void;
@@ -288,7 +342,7 @@ export function publishChunkStats(args: {
     cachedTerrainMemoryBytes +
     cachedVoxelMemoryBytes +
     queuedMemoryBytes +
-    voxelPipeline.snapshot.compactInput.bytes +
+    voxelPipeline.snapshot.totalCompactInput.bytes +
     blockLightStats.poolMemoryBytes;
   const perfWithMemory = performance as Performance & {
     memory?: PerformanceMemoryInfo;
@@ -322,7 +376,8 @@ export function publishChunkStats(args: {
       cachedTerrain: cachedTerrainMemoryBytes,
       cachedVoxels: cachedVoxelMemoryBytes,
       warmVoxels: cachedVoxelByLodBytes,
-      queued: queuedMemoryBytes + voxelPipeline.snapshot.compactInput.bytes,
+      queued:
+        queuedMemoryBytes + voxelPipeline.snapshot.totalCompactInput.bytes,
       queuedVoxelOutput: queuedMemoryBytes,
       blockLightPool: blockLightStats.poolMemoryBytes,
     },
@@ -335,7 +390,12 @@ export function publishChunkStats(args: {
     voxelPipeline: {
       loadGeneration: voxelPipeline.diagnostics.loadGeneration,
       compactInput: voxelPipeline.snapshot.compactInput,
+      retainedEnhancementInput: voxelPipeline.snapshot.retainedEnhancementInput,
+      retainedEnhancementCapacity: voxelPipeline.retainedEnhancementCapacity,
+      reservedExpandedOutput: voxelPipeline.snapshot.reservedExpandedOutput,
       expandedOutput: voxelPipeline.snapshot.expandedOutput,
+      expandedOutputCapacity: voxelPipeline.expandedOutputCapacity,
+      adaptive: voxelPipeline.adaptive,
       timings: voxelPipeline.diagnostics.timings,
       currentQueue: voxelPipeline.diagnostics.currentQueue,
       focusDeadlineMisses: voxelPipeline.diagnostics.focusDeadlineMisses,

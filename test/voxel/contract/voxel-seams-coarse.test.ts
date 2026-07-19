@@ -29,10 +29,24 @@ test("contract coarse seam colors use production summary payload records", async
     ];
     const west = await generate(save, 0, clusters);
     const east = await generate(save, span, clusters);
-    const [westMesh, eastMesh] = await Promise.all([
+    const [westMesh, eastMesh, cachedWest, cachedEast] = await Promise.all([
       buildWithProductionWorker(west.slice(0)),
       buildWithProductionWorker(east.slice(0)),
+      buildWithProductionWorker(west.slice(0), {
+        candidateNeighborhoodMode: "cached",
+      }),
+      buildWithProductionWorker(east.slice(0), {
+        candidateNeighborhoodMode: "cached",
+      }),
     ]);
+    assert.deepEqual(
+      cachedWest.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+      westMesh.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+    );
+    assert.deepEqual(
+      cachedEast.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+      eastMesh.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+    );
     const seam = maxSeamDelta(
       collectSeamEmissive(westMesh, span, 0, span, lod),
       collectSeamEmissive(eastMesh, span, 0, span, lod),

@@ -54,6 +54,10 @@ test("progressive worker returns base first and preserves one-phase emissive ord
     assert.ok(generated.buffer);
     const compact = generated.buffer.slice(0);
     const progressive = await buildProgressiveWithProductionWorker(compact);
+    const cachedProgressive = await buildProgressiveWithProductionWorker(
+      generated.buffer.slice(0),
+      { candidateNeighborhoodMode: "cached" },
+    );
     const onePhase = await buildWithProductionWorker(generated.buffer.slice(0));
 
     assert.equal(
@@ -88,6 +92,22 @@ test("progressive worker returns base first and preserves one-phase emissive ord
           quadrant.emissiveColors instanceof Uint8Array ||
           quadrant.emissiveColors instanceof Uint16Array,
       ),
+    );
+    assert.equal(progressive.base.emissivePhase.skipped, true);
+    assert.equal(progressive.base.emissivePhase.receiverEvaluations, 0);
+    assert.ok(
+      (cachedProgressive.enhancement?.emissivePhase.cacheMisses ?? 0) > 0,
+      "enhancement owns its cache metrics instead of the retained compact input",
+    );
+    assert.deepEqual(
+      cachedProgressive.enhancement?.quadrantEnhancements.map((quadrant) => [
+        quadrant.quadrantIndex,
+        [...quadrant.emissiveColors],
+      ]),
+      progressive.enhancement?.quadrantEnhancements.map((quadrant) => [
+        quadrant.quadrantIndex,
+        [...quadrant.emissiveColors],
+      ]),
     );
   });
 });

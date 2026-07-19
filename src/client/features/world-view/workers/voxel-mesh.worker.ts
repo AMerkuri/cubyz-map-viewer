@@ -7,6 +7,7 @@ import {
 import type {
   EmissiveColorArray,
   WorkerBaseRequest,
+  WorkerBenchmark,
   WorkerEnhancementRequest,
   WorkerIn,
   WorkerMeshRequest,
@@ -66,6 +67,16 @@ const EMITTER_QUAD_CULL_MAX_CELLS = 4096;
 const EMITTER_MAX_INDEX_CELLS = 512;
 const EMITTER_MAX_POWER_GAIN = 8;
 const EMITTER_GRID_INSERTION_MARGIN_CELLS = 1;
+const RECEIVER_CANDIDATE_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const RECEIVER_CANDIDATE_CACHE_ENTRY_BYTES = 32;
+const SPARSE_CELL_COORDINATE_LIMIT = (1 << 20) - 1;
+const EMPTY_CANDIDATE_NEIGHBORHOOD: readonly number[] = Object.freeze([]);
+
+export type CandidateNeighborhoodMode = "cached" | "uncached";
+
+// The recorded comparison meets every decision gate; tests and benchmarks can
+// still select uncached mode for rollback and parity checks.
+const DEFAULT_CANDIDATE_NEIGHBORHOOD_MODE: CandidateNeighborhoodMode = "cached";
 
 type GreedyFaceCode = 0 | 1 | 2 | 3 | 4 | 5;
 
@@ -92,21 +103,50 @@ interface QuadrantCounts {
  * CPU, culling wins, and transfer-size wins from general decode cost.
  */
 interface EmissivePhaseMetrics {
+  skipped: boolean;
   gridBuildMs: number;
   bakeMs: number;
   quadsEvaluated: number;
   quadsCulled: number;
+  receiverEvaluations: number;
+  neighborhoodCellProbes: number;
+  nonEmptyBuckets: number;
+  rawBucketEntries: number;
+  deduplicatedNeighborhoodEntries: number;
   candidateVisits: number;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheEntries: number;
+  uncachedFallbacks: number;
+  peakAccountedCacheBytes: number;
 }
 
 function createEmptyEmissivePhaseMetrics(): EmissivePhaseMetrics {
   return {
+    skipped: false,
     gridBuildMs: 0,
     bakeMs: 0,
     quadsEvaluated: 0,
     quadsCulled: 0,
+    receiverEvaluations: 0,
+    neighborhoodCellProbes: 0,
+    nonEmptyBuckets: 0,
+    rawBucketEntries: 0,
+    deduplicatedNeighborhoodEntries: 0,
     candidateVisits: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheEntries: 0,
+    uncachedFallbacks: 0,
+    peakAccountedCacheBytes: 0,
   };
+}
+
+interface ReceiverCandidateCache {
+  entries: Map<number, readonly number[]>;
+  maxBytes: number;
+  accountedBytes: number;
+  full: boolean;
 }
 
 /**
@@ -150,6 +190,9 @@ interface EmitterLightGrid {
   selectedCandidateIndices: number[];
   selectedCandidateDistances: Float64Array;
   candidateVisits: number;
+  candidateNeighborhoodMode: CandidateNeighborhoodMode;
+  candidateCache: ReceiverCandidateCache | null;
+  emissivePhase: EmissivePhaseMetrics;
 }
 
 /**
@@ -295,31 +338,13 @@ async function processMeshRequest(request: WorkerBuildRequest): Promise<void> {
           ...(progressive ? { enhancementBuffer } : {}),
           haloEmitterSourceKeys: [],
           benchmark: benchmark
-            ? {
-                fetchMs: benchmark.fetchMs,
-                decodeMs: completedAt - startedAt,
-                totalMs: 0,
-                transferBytes: benchmark.transferBytes,
-                encodedBodyBytes: benchmark.encodedBodyBytes,
-                decodedBodyBytes: benchmark.decodedBodyBytes,
-                rawBufferBytes: benchmark.rawBufferBytes,
-                workerOutputBytes: getWorkerOutputBytes(result),
-                emissiveBytes: getEmissiveOutputBytes(result),
-                emissiveGridBuildMs: result.emissivePhase.gridBuildMs,
-                emissiveBakeMs: result.emissivePhase.bakeMs,
-                emissiveQuadsEvaluated: result.emissivePhase.quadsEvaluated,
-                emissiveQuadsCulled: result.emissivePhase.quadsCulled,
-                emissiveCandidateVisits: result.emissivePhase.candidateVisits,
-                contentEncoding: benchmark.contentEncoding,
-                serverRunMs: benchmark.serverRunMs,
-                serverHaloMs: benchmark.serverHaloMs,
-                emitterMetadataBytes: benchmark.emitterMetadataBytes,
-                emitterPowerMin: benchmark.emitterPowerMin,
-                emitterPowerMax: benchmark.emitterPowerMax,
-                emitterRadiusMin: benchmark.emitterRadiusMin,
-                emitterRadiusMax: benchmark.emitterRadiusMax,
-                cacheOutcome: benchmark.cacheOutcome,
-              }
+            ? createWorkerBenchmark(
+                benchmark,
+                completedAt - startedAt,
+                getWorkerOutputBytes(result),
+                getEmissiveOutputBytes(result),
+                result.emissivePhase,
+              )
             : undefined,
         } as WorkerOut;
         workerGlobal.postMessage(
@@ -341,31 +366,13 @@ async function processMeshRequest(request: WorkerBuildRequest): Promise<void> {
       version,
       timing: { startedAt, completedAt },
       benchmark: benchmark
-        ? {
-            fetchMs: benchmark.fetchMs,
-            decodeMs: completedAt - startedAt,
-            totalMs: 0,
-            transferBytes: benchmark.transferBytes,
-            encodedBodyBytes: benchmark.encodedBodyBytes,
-            decodedBodyBytes: benchmark.decodedBodyBytes,
-            rawBufferBytes: benchmark.rawBufferBytes,
-            workerOutputBytes: 0,
-            emissiveBytes: 0,
-            emissiveGridBuildMs: 0,
-            emissiveBakeMs: 0,
-            emissiveQuadsEvaluated: 0,
-            emissiveQuadsCulled: 0,
-            emissiveCandidateVisits: 0,
-            contentEncoding: benchmark.contentEncoding,
-            serverRunMs: benchmark.serverRunMs,
-            serverHaloMs: benchmark.serverHaloMs,
-            emitterMetadataBytes: benchmark.emitterMetadataBytes,
-            emitterPowerMin: benchmark.emitterPowerMin,
-            emitterPowerMax: benchmark.emitterPowerMax,
-            emitterRadiusMin: benchmark.emitterRadiusMin,
-            emitterRadiusMax: benchmark.emitterRadiusMax,
-            cacheOutcome: benchmark.cacheOutcome,
-          }
+        ? createWorkerBenchmark(
+            benchmark,
+            completedAt - startedAt,
+            0,
+            0,
+            createEmptyEmissivePhaseMetrics(),
+          )
         : undefined,
       error: err instanceof Error ? err.message : String(err),
     };
@@ -400,6 +407,15 @@ async function processEnhancementRequest(
             baseMeshId: request.baseMeshId,
             timing: { startedAt, completedAt },
             quadrantEnhancements: result.quadrantEnhancements,
+            benchmark: request.benchmark
+              ? createWorkerBenchmark(
+                  request.benchmark,
+                  completedAt - startedAt,
+                  getEnhancementOutputBytes(result),
+                  getEnhancementOutputBytes(result),
+                  result.emissivePhase,
+                )
+              : undefined,
           },
           result.quadrantEnhancements.map(
             (quadrant) => quadrant.emissiveColors.buffer,
@@ -499,9 +515,68 @@ function getEmissiveOutputBytes(
   return bytes;
 }
 
+function getEnhancementOutputBytes(
+  result: ReturnType<typeof buildEmissiveEnhancementArrays>,
+): number {
+  let bytes = 0;
+  for (const quadrant of result.quadrantEnhancements) {
+    bytes += quadrant.emissiveColors.byteLength;
+  }
+  return bytes;
+}
+
+function createWorkerBenchmark(
+  source: NonNullable<WorkerMeshRequest["benchmark"]>,
+  decodeMs: number,
+  workerOutputBytes: number,
+  emissiveBytes: number,
+  phase: EmissivePhaseMetrics,
+): WorkerBenchmark {
+  return {
+    fetchCompletedAt: source.fetchCompletedAt,
+    fetchMs: source.fetchMs,
+    decodeMs,
+    totalMs: 0,
+    transferBytes: source.transferBytes,
+    encodedBodyBytes: source.encodedBodyBytes,
+    decodedBodyBytes: source.decodedBodyBytes,
+    rawBufferBytes: source.rawBufferBytes,
+    workerOutputBytes,
+    emissiveBytes,
+    emissiveSkipped: phase.skipped,
+    emissiveGridBuildMs: phase.gridBuildMs,
+    emissiveBakeMs: phase.bakeMs,
+    emissiveQuadsEvaluated: phase.quadsEvaluated,
+    emissiveQuadsCulled: phase.quadsCulled,
+    emissiveReceiverEvaluations: phase.receiverEvaluations,
+    emissiveNeighborhoodCellProbes: phase.neighborhoodCellProbes,
+    emissiveNonEmptyBuckets: phase.nonEmptyBuckets,
+    emissiveRawBucketEntries: phase.rawBucketEntries,
+    emissiveDeduplicatedNeighborhoodEntries:
+      phase.deduplicatedNeighborhoodEntries,
+    emissiveCandidateVisits: phase.candidateVisits,
+    emissiveCacheHits: phase.cacheHits,
+    emissiveCacheMisses: phase.cacheMisses,
+    emissiveCacheEntries: phase.cacheEntries,
+    emissiveUncachedFallbacks: phase.uncachedFallbacks,
+    emissivePeakAccountedCacheBytes: phase.peakAccountedCacheBytes,
+    contentEncoding: source.contentEncoding,
+    serverRunMs: source.serverRunMs,
+    serverHaloMs: source.serverHaloMs,
+    emitterMetadataBytes: source.emitterMetadataBytes,
+    emitterPowerMin: source.emitterPowerMin,
+    emitterPowerMax: source.emitterPowerMax,
+    emitterRadiusMin: source.emitterRadiusMin,
+    emitterRadiusMax: source.emitterRadiusMax,
+    cacheOutcome: source.cacheOutcome,
+  };
+}
+
 export function buildMeshArrays(
   buf: ArrayBuffer,
   bakeEmissiveAttributes: boolean,
+  candidateNeighborhoodMode: CandidateNeighborhoodMode = DEFAULT_CANDIDATE_NEIGHBORHOOD_MODE,
+  candidateCacheMaxBytes = RECEIVER_CANDIDATE_CACHE_MAX_BYTES,
 ): {
   quadrantMeshes: {
     quadrantIndex: number;
@@ -559,6 +634,8 @@ export function buildMeshArrays(
         view,
         buf.byteLength,
         bakeEmissiveAttributes,
+        candidateNeighborhoodMode,
+        candidateCacheMaxBytes,
       ),
     );
   }
@@ -990,6 +1067,8 @@ async function buildMeshArraysAsync(
   buf: ArrayBuffer,
   bakeEmissiveAttributes: boolean,
   checkpoint: WorkerCheckpoint,
+  candidateNeighborhoodMode: CandidateNeighborhoodMode = DEFAULT_CANDIDATE_NEIGHBORHOOD_MODE,
+  candidateCacheMaxBytes = RECEIVER_CANDIDATE_CACHE_MAX_BYTES,
 ): Promise<ReturnType<typeof buildMeshArrays>> {
   if (buf.byteLength < 20) throw new Error("buffer too small for header");
   const view = new DataView(buf);
@@ -1005,6 +1084,8 @@ async function buildMeshArraysAsync(
       view,
       buf.byteLength,
       bakeEmissiveAttributes,
+      candidateNeighborhoodMode,
+      candidateCacheMaxBytes,
     );
     let step = steps.next();
     while (!step.done) {
@@ -1013,7 +1094,12 @@ async function buildMeshArraysAsync(
     }
     return step.value;
   }
-  return buildMeshArrays(buf, bakeEmissiveAttributes);
+  return buildMeshArrays(
+    buf,
+    bakeEmissiveAttributes,
+    candidateNeighborhoodMode,
+    candidateCacheMaxBytes,
+  );
 }
 
 function drainMeshBuildSteps(
@@ -1032,6 +1118,8 @@ function* buildOptimizedMeshArraySteps(
   view: DataView,
   byteLength: number,
   bakeEmissiveAttributes: boolean,
+  candidateNeighborhoodMode: CandidateNeighborhoodMode,
+  candidateCacheMaxBytes: number,
 ): Generator<WorkerCheckpointPhase, ReturnType<typeof buildMeshArrays>, void> {
   const worldX = view.getInt32(4, true);
   const worldY = view.getInt32(8, true);
@@ -1188,11 +1276,18 @@ function* buildOptimizedMeshArraySteps(
   // allocated, baked, transferred, or uploaded. Emitter records are still
   // decoded above for lifecycle/runtime stats.
   const emissivePhase = createEmptyEmissivePhaseMetrics();
+  emissivePhase.skipped = !bakeEmissiveAttributes;
   const meshEmitterRecords = emitterRecords;
   const gridBuildStart = performance.now();
   const emitterGrid =
     bakeEmissiveAttributes && meshEmitterRecords.length > 0
-      ? yield* buildEmitterLightGridSteps(meshEmitterRecords, voxelSize)
+      ? yield* buildEmitterLightGridSteps(
+          meshEmitterRecords,
+          voxelSize,
+          candidateNeighborhoodMode,
+          candidateCacheMaxBytes,
+          emissivePhase,
+        )
       : null;
   if (emitterGrid) {
     emissivePhase.gridBuildMs = performance.now() - gridBuildStart;
@@ -1273,14 +1368,23 @@ function* buildOptimizedMeshArraySteps(
   };
 }
 
-export function buildEmissiveEnhancementArrays(buf: ArrayBuffer): {
+export function buildEmissiveEnhancementArrays(
+  buf: ArrayBuffer,
+  candidateNeighborhoodMode: CandidateNeighborhoodMode = DEFAULT_CANDIDATE_NEIGHBORHOOD_MODE,
+  candidateCacheMaxBytes = RECEIVER_CANDIDATE_CACHE_MAX_BYTES,
+): {
   quadrantEnhancements: {
     quadrantIndex: number;
     emissiveColors: EmissiveColorArray;
   }[];
   emissivePhase: EmissivePhaseMetrics;
 } {
-  const result = buildMeshArrays(buf, true);
+  const result = buildMeshArrays(
+    buf,
+    true,
+    candidateNeighborhoodMode,
+    candidateCacheMaxBytes,
+  );
   return {
     quadrantEnhancements: result.quadrantMeshes.flatMap((quadrant) =>
       quadrant.emissiveColors
@@ -1311,8 +1415,16 @@ export function getRetainedEnhancementBuffer(
 async function buildEmissiveEnhancementArraysAsync(
   buf: ArrayBuffer,
   checkpoint: WorkerCheckpoint,
+  candidateNeighborhoodMode: CandidateNeighborhoodMode = DEFAULT_CANDIDATE_NEIGHBORHOOD_MODE,
+  candidateCacheMaxBytes = RECEIVER_CANDIDATE_CACHE_MAX_BYTES,
 ): Promise<ReturnType<typeof buildEmissiveEnhancementArrays>> {
-  const result = await buildMeshArraysAsync(buf, true, checkpoint);
+  const result = await buildMeshArraysAsync(
+    buf,
+    true,
+    checkpoint,
+    candidateNeighborhoodMode,
+    candidateCacheMaxBytes,
+  );
   return {
     quadrantEnhancements: result.quadrantMeshes.flatMap((quadrant) =>
       quadrant.emissiveColors
@@ -1405,6 +1517,9 @@ const EMITTER_LIGHT_SCRATCH = new Float32Array(3);
 function* buildEmitterLightGridSteps(
   emitterRecords: ReturnType<typeof buildMeshArrays>["emitterRecords"],
   voxelSize: number,
+  candidateNeighborhoodMode: CandidateNeighborhoodMode,
+  candidateCacheMaxBytes: number,
+  emissivePhase: EmissivePhaseMetrics,
 ): Generator<WorkerCheckpointPhase, EmitterLightGrid, void> {
   const count = emitterRecords.length;
   const cellSize = VOXEL_EMITTED_LIGHT.radius;
@@ -1529,6 +1644,17 @@ function* buildEmitterLightGridSteps(
       VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex,
     ),
     candidateVisits: 0,
+    candidateNeighborhoodMode,
+    candidateCache:
+      candidateNeighborhoodMode === "cached"
+        ? {
+            entries: new Map<number, readonly number[]>(),
+            maxBytes: Math.max(0, candidateCacheMaxBytes),
+            accountedBytes: 0,
+            full: false,
+          }
+        : null,
+    emissivePhase,
   };
   for (let i = 0; i < count; i++) {
     const record = emitterRecords[i];
@@ -1609,15 +1735,26 @@ function denseCellIndex(
 }
 
 function sparseCellKey(ix: number, iy: number, iz: number): number {
-  // Pack signed cell coordinates into a single numeric key using a bounded
-  // offset so the sparse fallback avoids string allocation. The offset covers a
-  // very large emitter range; collisions across it are not a correctness risk.
+  // Pack signed cell coordinates into a single numeric key without allocating
+  // strings. Cache callers reject values outside this supported range rather
+  // than risking an alias; grid callers only receive bounded payload extents.
   const OFFSET = 1 << 20;
   return (
     (ix + OFFSET) * 4_398_046_511_104 +
     (iy + OFFSET) * 2_097_152 +
     (iz + OFFSET)
   );
+}
+
+function receiverCellKey(ix: number, iy: number, iz: number): number | null {
+  if (
+    Math.abs(ix) > SPARSE_CELL_COORDINATE_LIMIT ||
+    Math.abs(iy) > SPARSE_CELL_COORDINATE_LIMIT ||
+    Math.abs(iz) > SPARSE_CELL_COORDINATE_LIMIT
+  ) {
+    return null;
+  }
+  return sparseCellKey(ix, iy, iz);
 }
 
 function addEmitterToGridCell(
@@ -1740,21 +1877,83 @@ function accumulateEmitterLight(
   out[0] = 0;
   out[1] = 0;
   out[2] = 0;
-  const wrap = VOXEL_EMITTED_LIGHT.directionalWrap;
   const cx = Math.floor(x / grid.cellSize);
   const cy = Math.floor(y / grid.cellSize);
   const cz = Math.floor(z / grid.cellSize);
+  const emitterIndices = acquireCandidateNeighborhood(grid, cx, cy, cz);
+  accumulateCandidateContributions(grid, emitterIndices, x, y, z, normal, out);
+}
+
+function acquireCandidateNeighborhood(
+  grid: EmitterLightGrid,
+  cx: number,
+  cy: number,
+  cz: number,
+): readonly number[] {
+  const phase = grid.emissivePhase;
+  phase.receiverEvaluations++;
+  const cache = grid.candidateCache;
+  if (!cache) {
+    return discoverCandidateNeighborhood(grid, cx, cy, cz);
+  }
+
+  const key = receiverCellKey(cx, cy, cz);
+  if (key === null || cache.full) {
+    phase.uncachedFallbacks++;
+    return discoverCandidateNeighborhood(grid, cx, cy, cz);
+  }
+  const cached = cache.entries.get(key);
+  if (cached) {
+    phase.cacheHits++;
+    return cached;
+  }
+
+  phase.cacheMisses++;
+  const discovered = discoverCandidateNeighborhood(grid, cx, cy, cz);
+  const entryBytes =
+    RECEIVER_CANDIDATE_CACHE_ENTRY_BYTES +
+    discovered.length * Uint32Array.BYTES_PER_ELEMENT;
+  if (cache.accountedBytes + entryBytes > cache.maxBytes) {
+    cache.full = true;
+    phase.uncachedFallbacks++;
+    return discovered;
+  }
+
+  const retained =
+    discovered.length === 0
+      ? EMPTY_CANDIDATE_NEIGHBORHOOD
+      : Object.freeze([...discovered]);
+  cache.entries.set(key, retained);
+  cache.accountedBytes += entryBytes;
+  phase.cacheEntries = cache.entries.size;
+  phase.peakAccountedCacheBytes = Math.max(
+    phase.peakAccountedCacheBytes,
+    cache.accountedBytes,
+  );
+  return retained;
+}
+
+function discoverCandidateNeighborhood(
+  grid: EmitterLightGrid,
+  cx: number,
+  cy: number,
+  cz: number,
+): number[] {
   const candidateStamp = nextEmitterCandidateStamp(grid);
   const emitterIndices = grid.candidateScratch;
   emitterIndices.length = 0;
+  const phase = grid.emissivePhase;
   // Probe the full fixed neighborhood even when the primary cell has a
   // candidate. Payload ownership and unrelated records must not affect which
   // in-radius seam emitters are considered.
   for (let ix = cx - 1; ix <= cx + 1; ix++) {
     for (let iy = cy - 1; iy <= cy + 1; iy++) {
       for (let iz = cz - 1; iz <= cz + 1; iz++) {
+        phase.neighborhoodCellProbes++;
         const cell = getEmitterGridCell(grid, ix, iy, iz);
         if (!cell) continue;
+        phase.nonEmptyBuckets++;
+        phase.rawBucketEntries += cell.length;
         for (const emitterIndex of cell) {
           if (grid.candidateStamps[emitterIndex] === candidateStamp) continue;
           grid.candidateStamps[emitterIndex] = candidateStamp;
@@ -1764,18 +1963,26 @@ function accumulateEmitterLight(
     }
   }
   for (const emitterIndex of grid.broadEmitterIndices) {
-    const radius = grid.radius[emitterIndex];
-    if (
-      Math.abs(grid.x[emitterIndex] - x) > radius ||
-      Math.abs(grid.y[emitterIndex] - y) > radius ||
-      Math.abs(grid.z[emitterIndex] - z) > radius
-    ) {
-      continue;
-    }
+    // Broad emitters are always included in the receiver-cell union. Exact
+    // per-vertex radius and open-face checks remain below, preserving output.
     if (grid.candidateStamps[emitterIndex] === candidateStamp) continue;
     grid.candidateStamps[emitterIndex] = candidateStamp;
     emitterIndices.push(emitterIndex);
   }
+  phase.deduplicatedNeighborhoodEntries += emitterIndices.length;
+  return emitterIndices;
+}
+
+function accumulateCandidateContributions(
+  grid: EmitterLightGrid,
+  emitterIndices: readonly number[],
+  x: number,
+  y: number,
+  z: number,
+  normal: [number, number, number],
+  out: Float32Array,
+): void {
+  const wrap = VOXEL_EMITTED_LIGHT.directionalWrap;
   const maxCandidates = VOXEL_EMITTED_LIGHT.maxCandidatesPerVertex;
   const selectedIndices = grid.selectedCandidateIndices;
   const selectedDistances = grid.selectedCandidateDistances;

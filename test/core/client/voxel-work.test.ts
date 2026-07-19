@@ -127,6 +127,415 @@ test("demand identity survives generations and resets after absence or refresh",
   assert.equal(refreshed.priority.demandSince, 400);
 });
 
+test("selected demand owns pre-fetch lifecycle timing and progress", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 1, maxBytes: 10 },
+    { maxJobs: 1, maxBytes: 10 },
+  );
+  const request = {
+    key: "tile",
+    version: 1,
+    priority: { ...basePriority },
+  };
+  scheduler.reconcileDemand(new Map([[request.key, request]]), 10);
+  const selected = scheduler.getByKey("tile")[0];
+  assert.equal(selected?.stage, "selected");
+  assert.equal(scheduler.hasExecutableBaseWork(), true);
+  assert.deepEqual(scheduler.assertProgressInvariant(), []);
+  assert.equal(scheduler.markFetchQueued("tile", 1), true);
+  const fetching = scheduler.createFetching({
+    ...request,
+    selectedAt: 999,
+    fetchStartedAt: 18,
+  });
+  assert.equal(fetching.jobId, selected?.jobId);
+  assert.equal(fetching.timestamps.selectedAt, 10);
+  assert.equal(
+    deriveVoxelWorkTiming(fetching.timestamps).selectionToFetchStartMs,
+    8,
+  );
+});
+
+test("non-executable demand remains observable without blocking base isolation", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 1, maxBytes: 10 },
+    { maxJobs: 1, maxBytes: 10 },
+  );
+  const request = {
+    key: "missing",
+    version: 1,
+    priority: { ...basePriority },
+    demandState: "known-missing" as const,
+  };
+  scheduler.reconcileDemand(new Map([[request.key, request]]), 10);
+  assert.equal(scheduler.hasExecutableBaseWork(), false);
+  assert.equal(scheduler.getDiagnostics(20).currentQueue.jobs, 0);
+  assert.equal(
+    scheduler.getDiagnostics(20).currentQueue.nonExecutableDemand[
+      "known-missing"
+    ],
+    1,
+  );
+  assert.deepEqual(scheduler.assertProgressInvariant(), []);
+});
+
+test("executable base pressure spans lifecycle stages without priority filtering", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 16, maxBytes: 1_000 },
+    { maxJobs: 16, maxBytes: 1_000 },
+  );
+  const priorities = [
+    { safetyClass: "visible-hole" as const, viewClass: "focus" as const },
+    { safetyClass: "coverage" as const, viewClass: "rear" as const },
+    { safetyClass: "optional" as const, viewClass: "forward" as const },
+    { safetyClass: "optional" as const, viewClass: "peripheral" as const },
+    { safetyClass: "optional" as const, viewClass: "rear" as const },
+    { safetyClass: "visible-hole" as const, viewClass: "focus" as const },
+    { safetyClass: "optional" as const, viewClass: "forward" as const },
+  ];
+  const requests = priorities.map((priority, index) => ({
+    key: `pressure-${index}`,
+    version: 1,
+    priority: {
+      ...basePriority,
+      ...priority,
+      demandSince: 0,
+      sequence: index + 1,
+    },
+  }));
+  scheduler.reconcileDemand(
+    new Map(requests.map((request) => [request.key, request])),
+    0,
+  );
+  scheduler.markFetchQueued("pressure-1", 1);
+  const fetching = scheduler.createFetching({
+    ...requests[2],
+    selectedAt: 0,
+    fetchStartedAt: 1,
+  });
+  const compact = scheduler.createFetching({
+    ...requests[3],
+    selectedAt: 0,
+    fetchStartedAt: 1,
+  });
+  scheduler.acceptCompact(compact.jobId, new ArrayBuffer(1), 1, 2);
+  const meshingInput = scheduler.createFetching({
+    ...requests[4],
+    selectedAt: 0,
+    fetchStartedAt: 1,
+  });
+  scheduler.acceptCompact(meshingInput.jobId, new ArrayBuffer(1), 1, 2);
+  const meshing = scheduler.dispatchNext(3, 1);
+  assert.ok(meshing);
+  const expandedInput = scheduler.createFetching({
+    ...requests[5],
+    selectedAt: 0,
+    fetchStartedAt: 1,
+  });
+  scheduler.acceptCompact(expandedInput.jobId, new ArrayBuffer(1), 1, 2);
+  const expanded = scheduler.dispatchNext(3, 2);
+  assert.ok(expanded);
+  scheduler.completeWorker(expanded.jobId, new Uint8Array(1), 1, {
+    workerStartedAt: 3,
+    workerCompletedAt: 4,
+    resultReceivedAt: 5,
+  });
+  const insertedInput = scheduler.createFetching({
+    ...requests[6],
+    selectedAt: 0,
+    fetchStartedAt: 1,
+  });
+  scheduler.acceptCompact(insertedInput.jobId, new ArrayBuffer(1), 1, 2);
+  const inserted = scheduler.dispatchNext(3, 3);
+  assert.ok(inserted);
+  scheduler.completeWorker(inserted.jobId, new Uint8Array(1), 1, {
+    workerStartedAt: 3,
+    workerCompletedAt: 4,
+    resultReceivedAt: 5,
+  });
+  scheduler.markSceneInserted(inserted.jobId, 6);
+
+  assert.deepEqual(scheduler.getExecutableBasePressure(1_000), {
+    jobs: 7,
+    oldestAgeMs: 1_000,
+  });
+  scheduler.cancel(meshing.jobId, "demand-removed");
+  assert.equal(scheduler.getExecutableBasePressure(1_000).jobs, 6);
+  scheduler.reprioritize(fetching.jobId, {
+    ...basePriority,
+    safetyClass: "optional",
+    viewClass: "rear",
+    demandSince: 0,
+    sequence: 99,
+  });
+  assert.equal(scheduler.getExecutableBasePressure(1_000).oldestAgeMs, 1_000);
+});
+
+test("base pressure excludes non-executable demand, enhancement, and a cancelled tail", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 4, maxBytes: 100 },
+    { maxJobs: 4, maxBytes: 100 },
+  );
+  const executable = {
+    key: "executable",
+    version: 1,
+    priority: { ...basePriority },
+  };
+  const missing = {
+    key: "missing",
+    version: 1,
+    priority: { ...basePriority },
+    demandState: "known-missing" as const,
+  };
+  const delayed = {
+    key: "delayed",
+    version: 1,
+    priority: { ...basePriority },
+    demandState: "retry-delayed" as const,
+  };
+  scheduler.reconcileDemand(
+    new Map([
+      [executable.key, executable],
+      [missing.key, missing],
+      [delayed.key, delayed],
+    ]),
+    10,
+  );
+  scheduler.createRetainedEnhancement({
+    key: "enhancement",
+    version: 1,
+    priority: { ...basePriority },
+    selectedAt: 10,
+    retainedAt: 10,
+    compact: new ArrayBuffer(1),
+    compactBytes: 1,
+    baseMeshId: 1,
+  });
+  assert.deepEqual(scheduler.getExecutableBasePressure(20), {
+    jobs: 1,
+    oldestAgeMs: 10,
+  });
+  const record = scheduler.getByKey(executable.key)[0];
+  assert.ok(record);
+  scheduler.cancel(record.jobId, "demand-removed");
+  assert.deepEqual(scheduler.getExecutableBasePressure(20), {
+    jobs: 0,
+    oldestAgeMs: 0,
+  });
+});
+
+test("retained enhancement capacity cannot close base fetch admission", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 1, maxBytes: 1 },
+    { maxJobs: 2, maxBytes: 10 },
+    256,
+    {
+      maxJobs: 1,
+      maxBytes: 1,
+      highWaterJobs: 1,
+      highWaterBytes: 1,
+      lowWaterJobs: 0,
+      lowWaterBytes: 0,
+    },
+  );
+  scheduler.createRetainedEnhancement({
+    key: "enhancement",
+    version: 1,
+    priority: { ...basePriority },
+    selectedAt: 0,
+    retainedAt: 1,
+    compact: new ArrayBuffer(1),
+    compactBytes: 1,
+    baseMeshId: 1,
+  });
+  assert.equal(scheduler.canStartFetch(), true);
+  const base = scheduler.createFetching({
+    key: "base",
+    version: 1,
+    priority: { ...basePriority },
+    selectedAt: 0,
+    fetchStartedAt: 1,
+  });
+  scheduler.acceptCompact(base.jobId, new ArrayBuffer(1), 1, 2);
+  assert.deepEqual(scheduler.snapshot().compactInput, { jobs: 1, bytes: 1 });
+  assert.deepEqual(scheduler.snapshot().retainedEnhancementInput, {
+    jobs: 1,
+    bytes: 1,
+  });
+  assert.deepEqual(scheduler.snapshot().totalCompactInput, {
+    jobs: 2,
+    bytes: 2,
+  });
+  assert.equal(scheduler.canStartFetch(), false);
+});
+
+test("retained enhancement overflow preserves every completed base buffer", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 2, maxBytes: 10 },
+    { maxJobs: 2, maxBytes: 10 },
+    256,
+    {
+      maxJobs: 1,
+      maxBytes: 1,
+      highWaterJobs: 1,
+      highWaterBytes: 1,
+      lowWaterJobs: 0,
+      lowWaterBytes: 0,
+    },
+  );
+  for (const key of ["first", "second"]) {
+    scheduler.createRetainedEnhancement({
+      key,
+      version: 1,
+      priority: { ...basePriority },
+      selectedAt: 0,
+      retainedAt: 1,
+      compact: new ArrayBuffer(1),
+      compactBytes: 1,
+      baseMeshId: 1,
+    });
+  }
+  assert.deepEqual(scheduler.snapshot().retainedEnhancementInput, {
+    jobs: 2,
+    bytes: 2,
+  });
+  assert.equal(scheduler.dispatchNext(2)?.phase, "enhancement");
+});
+
+test("enhancement waits for selected base work outside the compact queue", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 2, maxBytes: 10 },
+    { maxJobs: 2, maxBytes: 10 },
+  );
+  scheduler.createRetainedEnhancement({
+    key: "enhancement",
+    version: 1,
+    priority: { ...basePriority },
+    selectedAt: 0,
+    retainedAt: 1,
+    compact: new ArrayBuffer(1),
+    compactBytes: 1,
+    baseMeshId: 1,
+  });
+  const base = {
+    key: "base",
+    version: 1,
+    priority: { ...basePriority },
+  };
+  scheduler.reconcileDemand(new Map([[base.key, base]]), 2);
+  assert.equal(scheduler.dispatchNext(3), null);
+  scheduler.reconcileDemand(
+    new Map([[base.key, { ...base, demandState: "fresh" as const }]]),
+    4,
+  );
+  assert.equal(scheduler.dispatchNext(5)?.phase, "enhancement");
+});
+
+test("base waves cover fetch gaps and drain retained enhancement after settlement", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 4, maxBytes: 10 },
+    { maxJobs: 4, maxBytes: 10 },
+    256,
+    {
+      maxJobs: 2,
+      maxBytes: 10,
+      highWaterJobs: 2,
+      highWaterBytes: 10,
+      lowWaterJobs: 1,
+      lowWaterBytes: 5,
+    },
+  );
+  scheduler.createRetainedEnhancement({
+    key: "enhancement",
+    version: 1,
+    priority: { ...basePriority },
+    selectedAt: 0,
+    retainedAt: 1,
+    compact: new ArrayBuffer(1),
+    compactBytes: 1,
+    baseMeshId: 1,
+  });
+  const requests = ["first", "second"].map((key, sequence) => ({
+    key,
+    version: 1,
+    priority: { ...basePriority, sequence: sequence + 1 },
+  }));
+  scheduler.reconcileDemand(
+    new Map(requests.map((request) => [request.key, request])),
+    2,
+  );
+  for (const request of requests) {
+    scheduler.markFetchQueued(request.key, request.version);
+    scheduler.createFetching({
+      ...request,
+      selectedAt: 2,
+      fetchStartedAt: 3,
+    });
+  }
+
+  // An active base fetch keeps normal enhancement work from filling idle lanes.
+  assert.equal(scheduler.dispatchNext(4, 1, 1, { activeWorkerCount: 2 }), null);
+
+  for (const request of requests) {
+    const record = scheduler.getByKey(request.key)[0];
+    assert.ok(record);
+    scheduler.acceptCompact(record.jobId, new ArrayBuffer(1), 1, 5);
+  }
+  const first = scheduler.dispatchNext(6, 1, 1, { activeWorkerCount: 2 });
+  const second = scheduler.dispatchNext(6, 2, 1, { activeWorkerCount: 2 });
+  assert.equal(first?.phase, "base");
+  assert.equal(second?.phase, "base");
+
+  for (const [index, record] of [first, second].entries()) {
+    assert.ok(record);
+    scheduler.completeWorker(record.jobId, new Uint8Array(1), 1, {
+      workerStartedAt: 6,
+      workerCompletedAt: 7,
+      resultReceivedAt: 8,
+    });
+    scheduler.markSceneInserted(record.jobId, 9);
+    scheduler.markFirstVisible(record.jobId, 10 + index);
+  }
+  assert.equal(scheduler.hasExecutableBaseWork(), false);
+  assert.equal(
+    scheduler.dispatchNext(12, 1, 1, { activeWorkerCount: 2 })?.phase,
+    "enhancement",
+  );
+});
+
+test("one worker uses bounded enhancement pressure relief without closing base fetch admission", () => {
+  const scheduler = new VoxelWorkScheduler<ArrayBuffer, Uint8Array>(
+    { maxJobs: 1, maxBytes: 1 },
+    { maxJobs: 2, maxBytes: 10 },
+    256,
+    {
+      maxJobs: 1,
+      maxBytes: 1,
+      highWaterJobs: 1,
+      highWaterBytes: 1,
+      lowWaterJobs: 0,
+      lowWaterBytes: 0,
+    },
+  );
+  scheduler.createRetainedEnhancement({
+    key: "enhancement",
+    version: 1,
+    priority: { ...basePriority },
+    selectedAt: 0,
+    retainedAt: 1,
+    compact: new ArrayBuffer(1),
+    compactBytes: 1,
+    baseMeshId: 1,
+  });
+  const base = { key: "base", version: 1, priority: { ...basePriority } };
+  scheduler.reconcileDemand(new Map([[base.key, base]]), 2);
+  assert.equal(scheduler.canStartFetch(), true);
+  assert.equal(
+    scheduler.dispatchNext(3, 1, 1, { activeWorkerCount: 1 })?.phase,
+    "enhancement",
+  );
+});
+
 test("queued scene selection uses latest urgency rather than insertion order", () => {
   const items = [
     { jobId: 1, priority: { ...basePriority, sequence: 1 } },
@@ -299,6 +708,7 @@ test("stage timing derivation keeps independently measurable waits", () => {
       firstVisibleAt: 58,
     }),
     {
+      selectionToFetchStartMs: 2,
       fetchMs: 8,
       compactQueueWaitMs: 5,
       baseWorkerExecutionMs: 13,

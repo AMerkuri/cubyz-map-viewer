@@ -182,6 +182,10 @@ export async function fetchVoxelRegion(args: {
     request: PendingVoxelFetchRequest,
     retryAfterMs: number,
   ) => void;
+  onDemandState?: (
+    request: PendingVoxelFetchRequest,
+    state: "known-missing" | "retry-exhausted" | "retry-delayed",
+  ) => void;
   includeHaloEmitters?: boolean;
   bakeEmissiveAttributes?: boolean;
 }): Promise<void> {
@@ -197,6 +201,7 @@ export async function fetchVoxelRegion(args: {
     onFinally,
     onCompactInput,
     onCapacityRetry,
+    onDemandState,
     includeHaloEmitters = true,
     bakeEmissiveAttributes = true,
   } = args;
@@ -223,11 +228,13 @@ export async function fetchVoxelRegion(args: {
     if (res.status === 204) {
       missingVoxelsRef.current.add(key);
       loadingVoxelsRef.current.delete(key);
+      onDemandState?.(request, "known-missing");
       return;
     }
     const capacityRetryAfterMs = readCapacityRetryAfterMs(res);
     if (capacityRetryAfterMs !== null) {
       loadingVoxelsRef.current.delete(key);
+      onDemandState?.(request, "retry-delayed");
       onCapacityRetry?.(request, capacityRetryAfterMs);
       return;
     }
@@ -237,6 +244,7 @@ export async function fetchVoxelRegion(args: {
         (failedVoxelsRef.current.get(key) ?? 0) + 1,
       );
       loadingVoxelsRef.current.delete(key);
+      onDemandState?.(request, "retry-exhausted");
       return;
     }
 
@@ -303,6 +311,7 @@ export async function fetchVoxelRegion(args: {
         key,
         (failedVoxelsRef.current.get(key) ?? 0) + 1,
       );
+      onDemandState?.(request, "retry-exhausted");
     }
     loadingVoxelsRef.current.delete(key);
   } finally {

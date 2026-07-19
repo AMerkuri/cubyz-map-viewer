@@ -211,6 +211,26 @@ function parseBytes(text) {
   return Number.parseFloat(match[1]) * units[match[2]];
 }
 
+function parseMemoryBytes(text, label) {
+  const match = new RegExp(
+    `${escapeRegExp(label)}:\\s+([0-9.]+)\\s*(B|KB|MB|GB)`,
+  ).exec(text);
+  if (!match) return null;
+  const units = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
+  return Number.parseFloat(match[1]) * units[match[2]];
+}
+
+function parseP50Ms(text, label) {
+  const match = new RegExp(`${escapeRegExp(label)}:\\s+p50\\s+([0-9.]+)`).exec(
+    text,
+  );
+  return match ? Number.parseFloat(match[1]) : null;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function readDiagnostics(text) {
   return {
     activeAccentEmitters: parseStatNumber(text, "Active accent emitters"),
@@ -219,6 +239,22 @@ function readDiagnostics(text) {
     emissiveBytes: parseBytes(text),
     emissiveGridBuildMs: parseStatNumber(text, "Avg emissive grid", "\\s+ms"),
     emissiveSamples: parseStatNumber(text, "Samples"),
+    baseWorkerDurationMs: parseP50Ms(text, "Base worker duration"),
+    baseVisibleMs: parseP50Ms(
+      text,
+      "Selection to base-visible state (end-to-end, not additive)",
+    ),
+    enhancementWorkerDurationMs: parseP50Ms(
+      text,
+      "Enhancement worker duration",
+    ),
+    enhancementVisibleMs: parseP50Ms(
+      text,
+      "Selection to enhanced state (optional, not additive)",
+    ),
+    frameP50Ms: parseP50Ms(text, "Frame work time"),
+    workerDurationP50Ms: parseP50Ms(text, "Worker duration observations"),
+    estimatedMemoryBytes: parseMemoryBytes(text, "Total"),
   };
 }
 

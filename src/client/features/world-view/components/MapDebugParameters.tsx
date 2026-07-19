@@ -511,9 +511,12 @@ function ParameterRow({
   onChange: (value: number) => void;
   onReset: () => void;
 }) {
-  const displayValue = definition.toDisplay
-    ? definition.toDisplay(value)
-    : value;
+  const {
+    value: displayValue,
+    min: displayMin,
+    max: displayMax,
+    step: displayStep,
+  } = getMapDebugParameterDisplayRange(definition, value);
   const isChanged = value !== definition.defaultValue;
   const valueText = definition.formatDisplay
     ? definition.formatDisplay(displayValue)
@@ -523,20 +526,7 @@ function ParameterRow({
       );
 
   const commitValue = (nextDisplayValue: number) => {
-    const raw = definition.fromDisplay
-      ? definition.fromDisplay(nextDisplayValue)
-      : nextDisplayValue;
-    const min = definition.fromDisplay
-      ? definition.fromDisplay(definition.min)
-      : definition.min;
-    const max = definition.fromDisplay
-      ? definition.fromDisplay(definition.max)
-      : definition.max;
-    const clamped = Math.min(Math.max(raw, min), max);
-    const decimals = definition.decimals ?? (definition.step < 1 ? 2 : 0);
-    const next =
-      decimals > 0 ? Number(clamped.toFixed(decimals)) : Math.round(clamped);
-    onChange(next);
+    onChange(commitMapDebugParameterDisplayValue(definition, nextDisplayValue));
   };
 
   return (
@@ -548,14 +538,46 @@ function ParameterRow({
       onReset={onReset}
     >
       <RangeSlider
-        min={definition.min}
-        max={definition.max}
-        step={definition.step}
+        min={displayMin}
+        max={displayMax}
+        step={displayStep}
         value={displayValue}
         onChange={commitValue}
       />
     </ParameterChrome>
   );
+}
+
+export function getMapDebugParameterDisplayRange(
+  definition: MapDebugParameterDefinition,
+  value: number,
+): { value: number; min: number; max: number; step: number } {
+  const toDisplay = definition.toDisplay ?? ((raw: number) => raw);
+  return {
+    value: toDisplay(value),
+    min: toDisplay(definition.min),
+    max: toDisplay(definition.max),
+    step: toDisplay(definition.step),
+  };
+}
+
+export function commitMapDebugParameterDisplayValue(
+  definition: MapDebugParameterDefinition,
+  nextDisplayValue: number,
+): number {
+  const toDisplay = definition.toDisplay ?? ((raw: number) => raw);
+  const fromDisplay = definition.fromDisplay ?? ((display: number) => display);
+  const clampedDisplay = Math.min(
+    Math.max(nextDisplayValue, toDisplay(definition.min)),
+    toDisplay(definition.max),
+  );
+  const decimals = definition.decimals ?? (definition.step < 1 ? 2 : 0);
+  const normalizedDisplay =
+    decimals > 0
+      ? Number(clampedDisplay.toFixed(decimals))
+      : Math.round(clampedDisplay);
+  const raw = fromDisplay(normalizedDisplay);
+  return Math.min(Math.max(raw, definition.min), definition.max);
 }
 
 function ToggleRow({

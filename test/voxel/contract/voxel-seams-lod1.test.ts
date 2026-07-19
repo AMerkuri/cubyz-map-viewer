@@ -45,10 +45,24 @@ for (const pressure of [false, true]) {
             `east retains required source ${source.y}/${source.z}`,
           );
         }
-        const [westMesh, eastMesh] = await Promise.all([
+        const [westMesh, eastMesh, cachedWest, cachedEast] = await Promise.all([
           buildWithProductionWorker(west.buffer.slice(0)),
           buildWithProductionWorker(east.buffer.slice(0)),
+          buildWithProductionWorker(west.buffer.slice(0), {
+            candidateNeighborhoodMode: "cached",
+          }),
+          buildWithProductionWorker(east.buffer.slice(0), {
+            candidateNeighborhoodMode: "cached",
+          }),
         ]);
+        assert.deepEqual(
+          cachedWest.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+          westMesh.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+        );
+        assert.deepEqual(
+          cachedEast.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+          eastMesh.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+        );
         const seam = maxSeamDelta(
           collectSeamEmissive(westMesh, REGION_SIZE),
           collectSeamEmissive(eastMesh, REGION_SIZE),
@@ -109,10 +123,24 @@ test("contract LOD1 Y seam ignores asymmetric unrelated emitter populations", as
       "north payload retains a different unrelated own-emitter population",
     );
 
-    const [southMesh, northMesh] = await Promise.all([
+    const [southMesh, northMesh, cachedSouth, cachedNorth] = await Promise.all([
       buildWithProductionWorker(south.buffer.slice(0)),
       buildWithProductionWorker(north.buffer.slice(0)),
+      buildWithProductionWorker(south.buffer.slice(0), {
+        candidateNeighborhoodMode: "cached",
+      }),
+      buildWithProductionWorker(north.buffer.slice(0), {
+        candidateNeighborhoodMode: "cached",
+      }),
     ]);
+    assert.deepEqual(
+      cachedSouth.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+      southMesh.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+    );
+    assert.deepEqual(
+      cachedNorth.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+      northMesh.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+    );
     const seam = maxSeamDelta(
       collectYSeamEmissive(southMesh, REGION_SIZE),
       collectYSeamEmissive(northMesh, REGION_SIZE),

@@ -153,8 +153,19 @@ function worldControlsReducer(
       };
     case "set-chunk-stats":
       return { ...state, chunkStats: action.stats };
-    case "set-loading-breakdown":
+    case "set-loading-breakdown": {
+      const previous = state.loadingBreakdown;
+      const next = action.loadingBreakdown;
+      if (
+        previous.terrain === next.terrain &&
+        previous.voxels === next.voxels &&
+        previous.fetchQueue === next.fetchQueue &&
+        previous.meshQueue === next.meshQueue
+      ) {
+        return state;
+      }
       return { ...state, loadingBreakdown: action.loadingBreakdown };
+    }
     default:
       return state;
   }

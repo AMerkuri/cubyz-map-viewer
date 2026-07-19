@@ -50,10 +50,11 @@ export function selectVoxelWorkerProfile(input: {
 
 export interface VoxelAdaptiveSample {
   now: number;
-  oldestUrgentQueueMs: number;
+  executableBaseJobs: number;
+  oldestExecutableBaseAgeMs: number;
   frameTimeMs: number;
   workerBusyRatio: number;
-  workerDurationMs: number;
+  workerDurationMs?: number;
   sceneBacklogJobs: number;
   sceneBacklogBytes: number;
   reservedBytes: number;
@@ -62,18 +63,47 @@ export interface VoxelAdaptiveSample {
   interacting: boolean;
 }
 
+export type VoxelAdaptiveLimiterReason =
+  | "interaction"
+  | "frame"
+  | "worker"
+  | "scene-jobs"
+  | "scene-bytes"
+  | "reservation"
+  | "memory"
+  | "sustain"
+  | "cooldown"
+  | "insufficient-demand"
+  | "profile-maximum"
+  | "healthy-demand";
+
+export interface VoxelAdaptiveDiagnostics {
+  initialTarget: number;
+  maximumTarget: number;
+  scaleUpTransitions: number;
+  scaleDownTransitions: number;
+  limiterObservations: Partial<Record<VoxelAdaptiveLimiterReason, number>>;
+  peakExecutableBaseJobs: number;
+  peakOldestExecutableBaseAgeMs: number;
+  firstTransitionAt: number | null;
+  latestTransitionAt: number | null;
+}
+
 interface VoxelAdaptiveState {
   targetWorkers: number;
-  lastTargetChangeAt: number;
+  lastTargetChangeAt: number | null;
   healthyDemandSince: number | null;
   samples: VoxelAdaptiveSample[];
+  workerDurations: number[];
+  limiterReason: VoxelAdaptiveLimiterReason;
+  diagnostics: VoxelAdaptiveDiagnostics;
 }
 
 interface VoxelAdaptiveConfig {
   sampleLimit: number;
   scaleUpSustainMs: number;
   scaleUpCooldownMs: number;
-  urgentQueueMs: number;
+  basePressureAgeMs: number;
   maxFrameP95Ms: number;
   maxWorkerP95Ms: number;
   maxSceneBacklogJobs: number;
@@ -87,25 +117,38 @@ const DEFAULT_VOXEL_ADAPTIVE_CONFIG: VoxelAdaptiveConfig = {
   sampleLimit: 60,
   scaleUpSustainMs: 1_500,
   scaleUpCooldownMs: 3_000,
-  urgentQueueMs: 500,
+  basePressureAgeMs: 500,
   maxFrameP95Ms: 24,
   maxWorkerP95Ms: 2_000,
   maxSceneBacklogJobs: 3,
   maxSceneBytes: 72 * 1024 * 1024,
-  maxReservedAndOutputBytes: 96 * 1024 * 1024,
+  maxReservedAndOutputBytes: 256 * 1024 * 1024,
   maxMemoryPressure: 0.82,
   minBusyRatio: 0.65,
 };
 
 export function createVoxelAdaptiveState(
   profile: VoxelWorkerProfile,
-  now = 0,
+  _now = 0,
 ): VoxelAdaptiveState {
   return {
     targetWorkers: profile.initialWorkers,
-    lastTargetChangeAt: now,
+    lastTargetChangeAt: null,
     healthyDemandSince: null,
     samples: [],
+    workerDurations: [],
+    limiterReason: "insufficient-demand",
+    diagnostics: {
+      initialTarget: profile.initialWorkers,
+      maximumTarget: profile.initialWorkers,
+      scaleUpTransitions: 0,
+      scaleDownTransitions: 0,
+      limiterObservations: {},
+      peakExecutableBaseJobs: 0,
+      peakOldestExecutableBaseAgeMs: 0,
+      firstTransitionAt: null,
+      latestTransitionAt: null,
+    },
   };
 }
 
@@ -116,42 +159,49 @@ export function updateVoxelAdaptiveTarget(
   config: VoxelAdaptiveConfig = DEFAULT_VOXEL_ADAPTIVE_CONFIG,
 ): VoxelAdaptiveState {
   const samples = [...previous.samples, sample].slice(-config.sampleLimit);
+  const workerDurations = Number.isFinite(sample.workerDurationMs)
+    ? [...previous.workerDurations, sample.workerDurationMs ?? 0].slice(
+        -config.sampleLimit,
+      )
+    : previous.workerDurations;
   const frameP95 = percentile(
     samples.map((item) => item.frameTimeMs),
     0.95,
   );
-  const workerP95 = percentile(
-    samples.map((item) => item.workerDurationMs),
-    0.95,
+  const workerP95 = percentile(workerDurations, 0.95);
+  const limiterReason = unhealthyLimiterReason(
+    sample,
+    frameP95,
+    workerP95,
+    config,
   );
-  const unhealthy =
-    sample.interacting ||
-    frameP95 > config.maxFrameP95Ms ||
-    workerP95 > config.maxWorkerP95Ms ||
-    sample.sceneBacklogJobs > config.maxSceneBacklogJobs ||
-    sample.sceneBacklogBytes > config.maxSceneBytes ||
-    sample.reservedBytes + sample.expandedBytes >
-      config.maxReservedAndOutputBytes ||
-    (sample.memoryPressure !== null &&
-      sample.memoryPressure > config.maxMemoryPressure);
-  if (unhealthy) {
+  if (limiterReason !== null) {
     const targetWorkers = Math.max(
       profile.minWorkers,
-      sample.interacting ? profile.minWorkers : previous.targetWorkers - 1,
+      limiterReason === "interaction"
+        ? profile.minWorkers
+        : previous.targetWorkers - 1,
     );
-    return {
-      targetWorkers,
-      lastTargetChangeAt:
-        targetWorkers === previous.targetWorkers
-          ? previous.lastTargetChangeAt
-          : sample.now,
-      healthyDemandSince: null,
-      samples,
-    };
+    return withDecision(
+      previous,
+      {
+        targetWorkers,
+        lastTargetChangeAt:
+          targetWorkers === previous.targetWorkers
+            ? previous.lastTargetChangeAt
+            : sample.now,
+        healthyDemandSince: null,
+        samples,
+        workerDurations,
+        limiterReason,
+      },
+      sample,
+    );
   }
 
   const demandHealthy =
-    sample.oldestUrgentQueueMs >= config.urgentQueueMs &&
+    sample.executableBaseJobs > previous.targetWorkers &&
+    sample.oldestExecutableBaseAgeMs >= config.basePressureAgeMs &&
     sample.workerBusyRatio >= config.minBusyRatio;
   const healthyDemandSince = demandHealthy
     ? (previous.healthyDemandSince ?? sample.now)
@@ -159,16 +209,105 @@ export function updateVoxelAdaptiveTarget(
   const canScaleUp =
     healthyDemandSince !== null &&
     sample.now - healthyDemandSince >= config.scaleUpSustainMs &&
-    sample.now - previous.lastTargetChangeAt >= config.scaleUpCooldownMs &&
+    (previous.lastTargetChangeAt === null ||
+      sample.now - previous.lastTargetChangeAt >= config.scaleUpCooldownMs) &&
     previous.targetWorkers < profile.maxWorkers;
+  const targetWorkers = canScaleUp
+    ? Math.min(profile.maxWorkers, previous.targetWorkers + 1)
+    : previous.targetWorkers;
+  const reason: VoxelAdaptiveLimiterReason = canScaleUp
+    ? "healthy-demand"
+    : !demandHealthy
+      ? "insufficient-demand"
+      : previous.targetWorkers >= profile.maxWorkers
+        ? "profile-maximum"
+        : healthyDemandSince !== null &&
+            sample.now - healthyDemandSince < config.scaleUpSustainMs
+          ? "sustain"
+          : "cooldown";
+  return withDecision(
+    previous,
+    {
+      targetWorkers,
+      lastTargetChangeAt: canScaleUp ? sample.now : previous.lastTargetChangeAt,
+      healthyDemandSince,
+      samples,
+      workerDurations,
+      limiterReason: reason,
+    },
+    sample,
+  );
+}
+
+function withDecision(
+  previous: VoxelAdaptiveState,
+  next: Omit<VoxelAdaptiveState, "diagnostics">,
+  sample: VoxelAdaptiveSample,
+): VoxelAdaptiveState {
+  const transitioned = next.targetWorkers !== previous.targetWorkers;
+  const limiterObservations = { ...previous.diagnostics.limiterObservations };
+  limiterObservations[next.limiterReason] =
+    (limiterObservations[next.limiterReason] ?? 0) + 1;
   return {
-    targetWorkers: canScaleUp
-      ? Math.min(profile.maxWorkers, previous.targetWorkers + 1)
-      : previous.targetWorkers,
-    lastTargetChangeAt: canScaleUp ? sample.now : previous.lastTargetChangeAt,
-    healthyDemandSince: canScaleUp ? sample.now : healthyDemandSince,
-    samples,
+    ...next,
+    diagnostics: {
+      ...previous.diagnostics,
+      maximumTarget: Math.max(
+        previous.diagnostics.maximumTarget,
+        next.targetWorkers,
+      ),
+      scaleUpTransitions:
+        previous.diagnostics.scaleUpTransitions +
+        Number(transitioned && next.targetWorkers > previous.targetWorkers),
+      scaleDownTransitions:
+        previous.diagnostics.scaleDownTransitions +
+        Number(transitioned && next.targetWorkers < previous.targetWorkers),
+      limiterObservations,
+      peakExecutableBaseJobs: Math.max(
+        previous.diagnostics.peakExecutableBaseJobs,
+        sample.executableBaseJobs,
+      ),
+      peakOldestExecutableBaseAgeMs: Math.max(
+        previous.diagnostics.peakOldestExecutableBaseAgeMs,
+        sample.oldestExecutableBaseAgeMs,
+      ),
+      firstTransitionAt: transitioned
+        ? (previous.diagnostics.firstTransitionAt ?? sample.now)
+        : previous.diagnostics.firstTransitionAt,
+      latestTransitionAt: transitioned
+        ? sample.now
+        : previous.diagnostics.latestTransitionAt,
+    },
   };
+}
+
+function unhealthyLimiterReason(
+  sample: VoxelAdaptiveSample,
+  frameP95: number,
+  workerP95: number,
+  config: VoxelAdaptiveConfig,
+): Exclude<
+  VoxelAdaptiveLimiterReason,
+  "cooldown" | "insufficient-demand" | "profile-maximum" | "healthy-demand"
+> | null {
+  if (sample.interacting) return "interaction";
+  if (frameP95 > config.maxFrameP95Ms) return "frame";
+  if (workerP95 > config.maxWorkerP95Ms) return "worker";
+  if (sample.sceneBacklogJobs > config.maxSceneBacklogJobs) return "scene-jobs";
+  if (sample.sceneBacklogBytes > config.maxSceneBytes) return "scene-bytes";
+  if (
+    sample.reservedBytes + sample.expandedBytes >
+    config.maxReservedAndOutputBytes
+  ) {
+    return "reservation";
+  }
+  if (
+    sample.memoryPressure !== null &&
+    sample.memoryPressure > config.maxMemoryPressure
+  ) {
+    return "memory";
+  }
+  return null;
 }
 
 function percentile(values: number[], fraction: number): number {

@@ -6,7 +6,8 @@ import {
 export const DEFAULT_VOXEL_RENDER_DISTANCE = 19200;
 export const DEFAULT_MIN_RENDERED_VOXEL_LOD = 1;
 const GRAPHICS_SETTINGS_STORAGE_KEY = "cubyz-map-viewer.graphics-settings";
-const GRAPHICS_SETTINGS_STORAGE_VERSION = 3;
+const GRAPHICS_SETTINGS_STORAGE_VERSION = 4;
+const V3_EXPANDED_OUTPUT_DEFAULT_BYTES = 96 * 1024 * 1024;
 
 export type StoredLayerVisibility = {
   players: boolean;
@@ -57,7 +58,10 @@ function sanitizeLayerVisibility(value: unknown): StoredLayerVisibility {
   };
 }
 
-function sanitizeMapDebugSettings(value: unknown): MapDebugSettings {
+function sanitizeMapDebugSettings(
+  value: unknown,
+  version: number,
+): MapDebugSettings {
   const source = value && typeof value === "object" ? value : {};
   const settings = { ...DEFAULT_MAP_DEBUG_SETTINGS };
 
@@ -68,6 +72,14 @@ function sanitizeMapDebugSettings(value: unknown): MapDebugSettings {
       (source as Record<string, unknown>)[key],
       defaultValue,
     );
+  }
+
+  if (
+    version === 3 &&
+    settings.voxelExpandedOutputMaxBytes === V3_EXPANDED_OUTPUT_DEFAULT_BYTES
+  ) {
+    settings.voxelExpandedOutputMaxBytes =
+      DEFAULT_MAP_DEBUG_SETTINGS.voxelExpandedOutputMaxBytes;
   }
 
   return settings;
@@ -83,12 +95,12 @@ export function readStoredGraphicsSettings(): StoredGraphicsSettings | null {
       return null;
     }
 
-    if (parsed.version < GRAPHICS_SETTINGS_STORAGE_VERSION) {
+    if (parsed.version < 3) {
       window.localStorage.removeItem(GRAPHICS_SETTINGS_STORAGE_KEY);
       return null;
     }
 
-    if (parsed.version !== GRAPHICS_SETTINGS_STORAGE_VERSION) {
+    if (parsed.version > GRAPHICS_SETTINGS_STORAGE_VERSION) {
       return null;
     }
 
@@ -108,7 +120,10 @@ export function readStoredGraphicsSettings(): StoredGraphicsSettings | null {
         parsed.minRenderedVoxelLod,
         DEFAULT_MIN_RENDERED_VOXEL_LOD,
       ),
-      mapDebugSettings: sanitizeMapDebugSettings(parsed.mapDebugSettings),
+      mapDebugSettings: sanitizeMapDebugSettings(
+        parsed.mapDebugSettings,
+        parsed.version,
+      ),
       parameterVisibility: {
         chunkBorders: readBoolean(parameterVisibility.chunkBorders, false),
         voxelHeightLabels: readBoolean(

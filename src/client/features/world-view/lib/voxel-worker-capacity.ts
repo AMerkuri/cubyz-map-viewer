@@ -24,7 +24,7 @@ export class VoxelOutputEstimator {
     const historicalEstimate =
       history.length === 0
         ? 0
-        : compactBytes * Math.max(...history.slice(-this.sampleLimit));
+        : compactBytes * conservativeLearnedRatio(history) * 1.25;
     return Math.max(compactBytes, metadataEstimate, historicalEstimate);
   }
 
@@ -54,6 +54,13 @@ export class VoxelOutputEstimator {
   private key(phase: VoxelWorkPhase, lod: number): string {
     return `${phase}:${lod}`;
   }
+}
+
+function conservativeLearnedRatio(history: readonly number[]): number {
+  const values = history
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  return values[Math.max(0, Math.ceil(values.length * 0.8) - 1)] ?? 0;
 }
 
 function estimateFromCompactMetadata(input: VoxelOutputEstimateInput): number {

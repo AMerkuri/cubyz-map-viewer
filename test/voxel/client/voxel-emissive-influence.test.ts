@@ -70,6 +70,85 @@ test("client worker keeps outside-primary-cell emitters with unrelated primary r
   );
 });
 
+test("receiver-cell caching preserves output and separates discovery metrics from contributions", async () => {
+  const payload = createCandidateDiscoveryPayload(true);
+  const [uncached, cached] = await Promise.all([
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "uncached",
+    }),
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "cached",
+    }),
+  ]);
+
+  assert.deepEqual(cached.emitterRecords, uncached.emitterRecords);
+  assert.deepEqual(
+    cached.quadrantMeshes.map((quadrant) => quadrant.positions),
+    uncached.quadrantMeshes.map((quadrant) => quadrant.positions),
+  );
+  assert.deepEqual(
+    cached.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+    uncached.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+  );
+  assert.ok(cached.emissivePhase.receiverEvaluations > 0);
+  assert.equal(
+    uncached.emissivePhase.neighborhoodCellProbes,
+    uncached.emissivePhase.receiverEvaluations * 27,
+  );
+  assert.ok(
+    cached.emissivePhase.neighborhoodCellProbes <
+      uncached.emissivePhase.neighborhoodCellProbes,
+  );
+  assert.ok(cached.emissivePhase.cacheHits > 0);
+  assert.ok(cached.emissivePhase.cacheMisses > 0);
+  assert.notEqual(
+    cached.emissivePhase.candidateVisits,
+    cached.emissivePhase.neighborhoodCellProbes,
+    "final contributions must not be reported as neighborhood discovery work",
+  );
+});
+
+test("disabled emissive baking reports skipped discovery and output work", async () => {
+  const result = await buildWithProductionWorker(
+    createCandidateDiscoveryPayload(true),
+    {
+      bakeEmissiveAttributes: false,
+      candidateNeighborhoodMode: "cached",
+    },
+  );
+
+  assert.equal(result.emissivePhase.skipped, true);
+  assert.equal(result.emissivePhase.receiverEvaluations, 0);
+  assert.equal(result.emissivePhase.neighborhoodCellProbes, 0);
+  assert.equal(result.emissivePhase.candidateVisits, 0);
+  assert.equal(result.emissivePhase.cacheHits, 0);
+  assert.equal(result.emissivePhase.cacheMisses, 0);
+  assert.equal(result.emissivePhase.peakAccountedCacheBytes, 0);
+  assert.ok(
+    result.quadrantMeshes.every((quadrant) => quadrant.emissiveColors === null),
+  );
+});
+
+test("cache pressure falls back to uncached discovery without changing output", async () => {
+  const payload = createCandidateDiscoveryPayload(true);
+  const [uncached, bounded] = await Promise.all([
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "uncached",
+    }),
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "cached",
+      candidateCacheMaxBytes: 0,
+    }),
+  ]);
+
+  assert.deepEqual(
+    bounded.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+    uncached.quadrantMeshes.map((quadrant) => quadrant.emissiveColors),
+  );
+  assert.ok(bounded.emissivePhase.uncachedFallbacks > 0);
+  assert.equal(bounded.emissivePhase.peakAccountedCacheBytes, 0);
+});
+
 function emissiveEnergy(
   mesh: Awaited<ReturnType<typeof buildWithProductionWorker>>,
 ): number {
