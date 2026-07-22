@@ -149,6 +149,87 @@ test("cache pressure falls back to uncached discovery without changing output", 
   assert.equal(bounded.emissivePhase.peakAccountedCacheBytes, 0);
 });
 
+test("receiver cache keeps vertically distinct positive-offset cells byte-identical", async () => {
+  const worldX = 962;
+  const worldY = 5491;
+  const worldZ = 51;
+  const payload = createVerticalReceiverPayload(worldX, worldY, worldZ, false);
+  const [uncached, cached] = await Promise.all([
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "uncached",
+    }),
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "cached",
+    }),
+  ]);
+
+  // The former numeric 21-bit packing aliases these separate vertical cells.
+  assert.equal(
+    legacyNumericCellKey(80, 457, 4),
+    legacyNumericCellKey(80, 457, 10),
+  );
+  assert.deepEqual(
+    quadrantEmissiveArrays(cached),
+    quadrantEmissiveArrays(uncached),
+  );
+  assert.ok(
+    emissiveAt(cached, worldX, worldY, worldZ).some((channel) => channel > 0),
+  );
+  assert.ok(
+    emissiveAt(cached, worldX, worldY, worldZ + 80).some(
+      (channel) => channel > 0,
+    ),
+  );
+});
+
+test("receiver cache keeps vertically distinct negative-offset cells byte-identical", async () => {
+  const worldX = -962;
+  const worldY = -5491;
+  const worldZ = -51;
+  const payload = createVerticalReceiverPayload(worldX, worldY, worldZ, false);
+  const [uncached, cached] = await Promise.all([
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "uncached",
+    }),
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "cached",
+    }),
+  ]);
+
+  assert.deepEqual(
+    quadrantEmissiveArrays(cached),
+    quadrantEmissiveArrays(uncached),
+  );
+  assert.ok(
+    emissiveAt(cached, worldX, worldY, worldZ).some((channel) => channel > 0),
+  );
+  assert.ok(
+    emissiveAt(cached, worldX, worldY, worldZ + 80).some(
+      (channel) => channel > 0,
+    ),
+  );
+});
+
+test("sparse emitter buckets retain vertical identity and emitted light", async () => {
+  const payload = createVerticalReceiverPayload(962, 5491, 51, true);
+  const [uncached, cached] = await Promise.all([
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "uncached",
+    }),
+    buildWithProductionWorker(payload.slice(0), {
+      candidateNeighborhoodMode: "cached",
+    }),
+  ]);
+
+  assert.deepEqual(
+    quadrantEmissiveArrays(cached),
+    quadrantEmissiveArrays(uncached),
+  );
+  assert.ok(cached.emissivePhase.uncachedFallbacks > 0);
+  assert.ok(emissiveAt(cached, 962, 5491, 51).some((channel) => channel > 0));
+  assert.ok(emissiveAt(cached, 962, 5491, 131).some((channel) => channel > 0));
+});
+
 function emissiveEnergy(
   mesh: Awaited<ReturnType<typeof buildWithProductionWorker>>,
 ): number {
@@ -157,6 +238,23 @@ function emissiveEnergy(
     for (const value of quadrant.emissiveColors ?? []) total += value;
   }
   return total;
+}
+
+function quadrantEmissiveArrays(
+  mesh: Awaited<ReturnType<typeof buildWithProductionWorker>>,
+): (number[] | null)[] {
+  return mesh.quadrantMeshes.map((quadrant) =>
+    quadrant.emissiveColors ? [...quadrant.emissiveColors] : null,
+  );
+}
+
+function legacyNumericCellKey(ix: number, iy: number, iz: number): number {
+  const offset = 1 << 20;
+  return (
+    (ix + offset) * 4_398_046_511_104 +
+    (iy + offset) * 2_097_152 +
+    (iz + offset)
+  );
 }
 
 function createCandidateDiscoveryPayload(
@@ -207,6 +305,72 @@ function createCandidateDiscoveryPayload(
         ? [{ x: 72, y: 71, z: 1, r: 255, g: 80, b: 20, openFaces: 0x3f }]
         : []),
     ],
+  ).buffer;
+}
+
+function createVerticalReceiverPayload(
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  forceSparse: boolean,
+): ArrayBuffer {
+  const receiverPlanes = [0, 80];
+  const emitters = receiverPlanes.map((z) => ({
+    x: 5,
+    y: 5,
+    z: z + 1,
+    r: 255,
+    g: 80,
+    b: 20,
+    openFaces: 0x3f,
+  }));
+  if (forceSparse) {
+    // This unrelated emitter makes the dense extent exceed its allocation cap
+    // while the two near emitters still share X/Y and differ only in Z.
+    emitters.push({
+      x: 30_000_000,
+      y: 5,
+      z: 1,
+      r: 20,
+      g: 100,
+      b: 255,
+      openFaces: 0x3f,
+    });
+  }
+  return encodeBinaryQuads(
+    receiverPlanes.map((plane) => ({
+      v0x: 0,
+      v0y: 0,
+      v0z: plane,
+      v1x: 10,
+      v1y: 0,
+      v1z: plane,
+      v2x: 10,
+      v2y: 10,
+      v2z: plane,
+      v3x: 0,
+      v3y: 10,
+      v3z: plane,
+      typ: 1,
+      dir: 1,
+      packedAo: 0,
+      renderKind: 1,
+      sourceKind: "greedy" as const,
+      face: 5,
+      plane,
+      u: 0,
+      v: 0,
+      du: 10,
+      dv: 10,
+    })),
+    [],
+    worldX,
+    worldY,
+    worldZ,
+    1,
+    colors,
+    1,
+    emitters,
   ).buffer;
 }
 

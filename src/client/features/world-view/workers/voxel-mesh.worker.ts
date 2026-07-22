@@ -58,7 +58,7 @@ const EMISSIVE_ATTRIBUTE_USE_UINT16 = false;
 const EMISSIVE_ATTRIBUTE_MAX = EMISSIVE_ATTRIBUTE_USE_UINT16 ? 65535 : 255;
 
 // Cap dense emitter-grid allocation so pathological emitter extents fall back to
-// a sparse numeric map instead of allocating an unbounded cell array.
+// a sparse exact-key map instead of allocating an unbounded cell array.
 const EMITTER_DENSE_GRID_MAX_CELLS = 1 << 20;
 
 // Above this many overlapped cells, quad culling assumes the quad may receive
@@ -70,6 +70,8 @@ const EMITTER_GRID_INSERTION_MARGIN_CELLS = 1;
 const RECEIVER_CANDIDATE_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const RECEIVER_CANDIDATE_CACHE_ENTRY_BYTES = 32;
 const SPARSE_CELL_COORDINATE_LIMIT = (1 << 20) - 1;
+const SPARSE_CELL_COORDINATE_OFFSET = 1n << 20n;
+const SPARSE_CELL_COORDINATE_MASK = (1n << 21n) - 1n;
 const EMPTY_CANDIDATE_NEIGHBORHOOD: readonly number[] = Object.freeze([]);
 
 export type CandidateNeighborhoodMode = "cached" | "uncached";
@@ -149,16 +151,18 @@ interface ReceiverCandidateCache {
   full: boolean;
 }
 
+type SparseCellKey = bigint | string;
+
 /**
  * Spatial index of payload-owned own-region plus halo emitter records used to
  * bake bounded mesh-local emitted-light contribution into per-vertex emissive
  * colors. Emitters are inserted into every reachable cell plus one cell of
  * edge slack, so vertex baking can inspect a fixed local cell footprint.
  *
- * The per-vertex hot path avoids string allocation by mapping numeric cell
- * coordinates `(ix, iy, iz)` to emitter buckets. A dense local cell array is
- * used when the emitter extent is bounded; a sparse numeric `Map<number,...>`
- * fallback keeps allocation bounded when extents are pathological.
+ * The per-vertex hot path maps numeric cell coordinates `(ix, iy, iz)` to
+ * emitter buckets. A dense local cell array is used when the emitter extent is
+ * bounded; a sparse exact-key map fallback keeps allocation bounded when
+ * extents are pathological.
  */
 interface EmitterLightGrid {
   cellSize: number;
@@ -170,10 +174,17 @@ interface EmitterLightGrid {
   cellsX: number;
   cellsY: number;
   cellsZ: number;
+  /** Expanded dense receiver-cache domain, or zeroes when caching is unavailable. */
+  receiverCacheMinCellX: number;
+  receiverCacheMinCellY: number;
+  receiverCacheMinCellZ: number;
+  receiverCacheCellsX: number;
+  receiverCacheCellsY: number;
+  receiverCacheCellsZ: number;
   /** Dense bucket per cell index, or null when the sparse fallback is active. */
   denseCells: (number[] | undefined)[] | null;
-  /** Sparse bucket map keyed by packed numeric cell index, or null in dense mode. */
-  sparseCells: Map<number, number[]> | null;
+  /** Sparse bucket map keyed by an exact three-dimensional cell identity. */
+  sparseCells: Map<SparseCellKey, number[]> | null;
   x: Float64Array;
   y: Float64Array;
   z: Float64Array;
@@ -1611,6 +1622,15 @@ function* buildEmitterLightGridSteps(
     count > 0 &&
     denseCellCount > 0 &&
     denseCellCount <= EMITTER_DENSE_GRID_MAX_CELLS;
+  const receiverCacheCellsX = useDense ? cellsX + 2 : 0;
+  const receiverCacheCellsY = useDense ? cellsY + 2 : 0;
+  const receiverCacheCellsZ = useDense ? cellsZ + 2 : 0;
+  const receiverCacheCellCount =
+    receiverCacheCellsX * receiverCacheCellsY * receiverCacheCellsZ;
+  const hasDenseReceiverCacheDomain =
+    useDense &&
+    Number.isSafeInteger(receiverCacheCellCount) &&
+    receiverCacheCellCount > 0;
 
   const grid: EmitterLightGrid = {
     cellSize,
@@ -1620,10 +1640,16 @@ function* buildEmitterLightGridSteps(
     cellsX: useDense ? cellsX : 0,
     cellsY: useDense ? cellsY : 0,
     cellsZ: useDense ? cellsZ : 0,
+    receiverCacheMinCellX: useDense ? minCellX - 1 : 0,
+    receiverCacheMinCellY: useDense ? minCellY - 1 : 0,
+    receiverCacheMinCellZ: useDense ? minCellZ - 1 : 0,
+    receiverCacheCellsX: hasDenseReceiverCacheDomain ? receiverCacheCellsX : 0,
+    receiverCacheCellsY: hasDenseReceiverCacheDomain ? receiverCacheCellsY : 0,
+    receiverCacheCellsZ: hasDenseReceiverCacheDomain ? receiverCacheCellsZ : 0,
     denseCells: useDense
       ? new Array<number[] | undefined>(denseCellCount)
       : null,
-    sparseCells: useDense ? null : new Map<number, number[]>(),
+    sparseCells: useDense ? null : new Map<SparseCellKey, number[]>(),
     x: new Float64Array(count),
     y: new Float64Array(count),
     z: new Float64Array(count),
@@ -1646,7 +1672,7 @@ function* buildEmitterLightGridSteps(
     candidateVisits: 0,
     candidateNeighborhoodMode,
     candidateCache:
-      candidateNeighborhoodMode === "cached"
+      candidateNeighborhoodMode === "cached" && hasDenseReceiverCacheDomain
         ? {
             entries: new Map<number, readonly number[]>(),
             maxBytes: Math.max(0, candidateCacheMaxBytes),
@@ -1731,30 +1757,57 @@ function denseCellIndex(
   ) {
     return -1;
   }
-  return (lx * grid.cellsY + ly) * grid.cellsZ + lz;
+  const index = (lx * grid.cellsY + ly) * grid.cellsZ + lz;
+  return Number.isSafeInteger(index) ? index : -1;
 }
 
-function sparseCellKey(ix: number, iy: number, iz: number): number {
-  // Pack signed cell coordinates into a single numeric key without allocating
-  // strings. Cache callers reject values outside this supported range rather
-  // than risking an alias; grid callers only receive bounded payload extents.
-  const OFFSET = 1 << 20;
-  return (
-    (ix + OFFSET) * 4_398_046_511_104 +
-    (iy + OFFSET) * 2_097_152 +
-    (iz + OFFSET)
-  );
-}
-
-function receiverCellKey(ix: number, iy: number, iz: number): number | null {
+function sparseCellKey(ix: number, iy: number, iz: number): SparseCellKey {
+  if (
+    !Number.isSafeInteger(ix) ||
+    !Number.isSafeInteger(iy) ||
+    !Number.isSafeInteger(iz)
+  ) {
+    throw new Error("unsafe sparse emitter-grid coordinate");
+  }
   if (
     Math.abs(ix) > SPARSE_CELL_COORDINATE_LIMIT ||
     Math.abs(iy) > SPARSE_CELL_COORDINATE_LIMIT ||
     Math.abs(iz) > SPARSE_CELL_COORDINATE_LIMIT
   ) {
+    // Payload cell coordinates can exceed the compact 21-bit range. Preserve
+    // their identity with a deterministic fallback instead of dropping a bucket.
+    return `${ix},${iy},${iz}`;
+  }
+  return (
+    ((BigInt(ix) + SPARSE_CELL_COORDINATE_OFFSET) << 42n) |
+    ((BigInt(iy) + SPARSE_CELL_COORDINATE_OFFSET) << 21n) |
+    ((BigInt(iz) + SPARSE_CELL_COORDINATE_OFFSET) & SPARSE_CELL_COORDINATE_MASK)
+  );
+}
+
+function denseReceiverCacheIndex(
+  grid: EmitterLightGrid,
+  ix: number,
+  iy: number,
+  iz: number,
+): number | null {
+  if (grid.denseCells === null || grid.receiverCacheCellsX === 0) return null;
+  const lx = ix - grid.receiverCacheMinCellX;
+  const ly = iy - grid.receiverCacheMinCellY;
+  const lz = iz - grid.receiverCacheMinCellZ;
+  if (
+    lx < 0 ||
+    ly < 0 ||
+    lz < 0 ||
+    lx >= grid.receiverCacheCellsX ||
+    ly >= grid.receiverCacheCellsY ||
+    lz >= grid.receiverCacheCellsZ
+  ) {
     return null;
   }
-  return sparseCellKey(ix, iy, iz);
+  const index =
+    (lx * grid.receiverCacheCellsY + ly) * grid.receiverCacheCellsZ + lz;
+  return Number.isSafeInteger(index) ? index : null;
 }
 
 function addEmitterToGridCell(
@@ -1894,10 +1947,13 @@ function acquireCandidateNeighborhood(
   phase.receiverEvaluations++;
   const cache = grid.candidateCache;
   if (!cache) {
+    if (grid.candidateNeighborhoodMode === "cached") {
+      phase.uncachedFallbacks++;
+    }
     return discoverCandidateNeighborhood(grid, cx, cy, cz);
   }
 
-  const key = receiverCellKey(cx, cy, cz);
+  const key = denseReceiverCacheIndex(grid, cx, cy, cz);
   if (key === null || cache.full) {
     phase.uncachedFallbacks++;
     return discoverCandidateNeighborhood(grid, cx, cy, cz);

@@ -1,4 +1,5 @@
 import { after, test } from "node:test";
+import { encodeBinaryQuads } from "../../../src/server/services/greedy-mesh.js";
 import type { EmitterSummaryCluster } from "../../../src/server/services/voxel-emitter-aggregation.js";
 import { EMITTER_SUMMARY_FORMAT_VERSION } from "../../../src/server/services/voxel-emitter-aggregation.js";
 import { sampleBalancedPair, sampleSerial } from "../support/benchmark.js";
@@ -206,6 +207,19 @@ test("benchmark candidate-neighborhood decision matrix", async () => {
     fixtures.push({ name: "empty-lod1", buffer: empty.buffer });
   });
 
+  fixtures.push({
+    name: "vertical-positive-offset-lod1",
+    buffer: createVerticalCandidateFixture(962, 5491, 51),
+  });
+  fixtures.push({
+    name: "vertical-negative-offset-lod1",
+    buffer: createVerticalCandidateFixture(-962, -5491, -51),
+  });
+  fixtures.push({
+    name: "vertical-sparse-fallback-lod1",
+    buffer: createVerticalCandidateFixture(962, 5491, 51, true),
+  });
+
   await withTemporarySave("bench-candidate-x-seam", async (save) => {
     await writeAdjacentFixture(save, true);
     const west = await generateLod1(save, colors, shapes);
@@ -396,4 +410,68 @@ function candidateCluster(
     maxZ: centroidZ + 0.5,
     representedLods: 1,
   };
+}
+
+function createVerticalCandidateFixture(
+  worldX: number,
+  worldY: number,
+  worldZ: number,
+  forceSparse = false,
+): ArrayBuffer {
+  const receiverPlanes = [0, 80];
+  const emitters = receiverPlanes.map((z) => ({
+    x: 5,
+    y: 5,
+    z: z + 1,
+    r: 255,
+    g: 80,
+    b: 20,
+    openFaces: 0x3f,
+  }));
+  if (forceSparse) {
+    emitters.push({
+      x: 30_000_000,
+      y: 5,
+      z: 1,
+      r: 20,
+      g: 100,
+      b: 255,
+      openFaces: 0x3f,
+    });
+  }
+  return encodeBinaryQuads(
+    receiverPlanes.map((plane) => ({
+      v0x: 0,
+      v0y: 0,
+      v0z: plane,
+      v1x: 10,
+      v1y: 0,
+      v1z: plane,
+      v2x: 10,
+      v2y: 10,
+      v2z: plane,
+      v3x: 0,
+      v3y: 10,
+      v3z: plane,
+      typ: 1,
+      dir: 1,
+      packedAo: 0,
+      renderKind: 1,
+      sourceKind: "greedy" as const,
+      face: 5,
+      plane,
+      u: 0,
+      v: 0,
+      du: 10,
+      dv: 10,
+    })),
+    [],
+    worldX,
+    worldY,
+    worldZ,
+    1,
+    colors,
+    1,
+    emitters,
+  ).buffer;
 }
