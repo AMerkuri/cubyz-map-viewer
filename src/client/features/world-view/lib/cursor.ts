@@ -20,6 +20,60 @@ interface CursorInteractionHandlers {
   onPointerLeave: (e: PointerEvent) => void;
 }
 
+interface AnimationFrameScheduler {
+  request: (callback: FrameRequestCallback) => number;
+  cancel: (handle: number) => void;
+}
+
+export function collectVisibleMeshCandidates(
+  root: THREE.Object3D,
+): THREE.Object3D[] {
+  const candidates: THREE.Object3D[] = [];
+
+  function visit(object: THREE.Object3D) {
+    if (!object.visible) return;
+    if (object instanceof THREE.Mesh) candidates.push(object);
+    for (const child of object.children) {
+      visit(child);
+    }
+  }
+
+  if (!isObjectEffectivelyVisible(root)) return candidates;
+  visit(root);
+  return candidates;
+}
+
+export function createAnimationFrameCoalescer(
+  scheduler: AnimationFrameScheduler,
+  callback: () => void,
+) {
+  let frameHandle: number | null = null;
+
+  return {
+    request() {
+      if (frameHandle !== null) return;
+      frameHandle = scheduler.request(() => {
+        frameHandle = null;
+        callback();
+      });
+    },
+    cancel() {
+      if (frameHandle === null) return;
+      scheduler.cancel(frameHandle);
+      frameHandle = null;
+    },
+  };
+}
+
+function isObjectEffectivelyVisible(object: THREE.Object3D): boolean {
+  let node: THREE.Object3D | null = object;
+  while (node) {
+    if (!node.visible) return false;
+    node = node.parent;
+  }
+  return true;
+}
+
 export function createCursorInteractionHandlers(args: {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
@@ -59,6 +113,21 @@ export function createCursorInteractionHandlers(args: {
   let touchHoldActive = false;
   let touchStartClientX = 0;
   let touchStartClientY = 0;
+  const cursorRefreshCoalescer = createAnimationFrameCoalescer(
+    {
+      request: window.requestAnimationFrame.bind(window),
+      cancel: window.cancelAnimationFrame.bind(window),
+    },
+    () => {
+      if (
+        !hoverState.active ||
+        keysHeldRef.current.size > 0 ||
+        (isPointerInteracting && !touchHoldActive)
+      )
+        return;
+      updateCursorTooltip(touchHoldActive);
+    },
+  );
 
   function reportIntersection(
     intersection: THREE.Intersection,
@@ -111,15 +180,6 @@ export function createCursorInteractionHandlers(args: {
     return getBlockIdForPaletteIndex(paletteIndex);
   }
 
-  function isObjectEffectivelyVisible(object: THREE.Object3D): boolean {
-    let node: THREE.Object3D | null = object;
-    while (node) {
-      if (!node.visible) return false;
-      node = node.parent;
-    }
-    return true;
-  }
-
   function selectBestVoxelIntersection(
     intersections: THREE.Intersection[],
   ): { intersection: THREE.Intersection; tile?: LoadedVoxelTile } | null {
@@ -157,6 +217,14 @@ export function createCursorInteractionHandlers(args: {
   }
 
   function clearCursorRefreshTimer() {
+    if (cursorRefreshTimer !== null) {
+      window.clearTimeout(cursorRefreshTimer);
+      cursorRefreshTimer = null;
+    }
+    cursorRefreshCoalescer.cancel();
+  }
+
+  function clearDelayedCursorRefresh() {
     if (cursorRefreshTimer === null) return;
     window.clearTimeout(cursorRefreshTimer);
     cursorRefreshTimer = null;
@@ -225,7 +293,7 @@ export function createCursorInteractionHandlers(args: {
       )
         return;
       touchHoldActive = true;
-      updateCursorTooltip(true);
+      cursorRefreshCoalescer.request();
     }, TOUCH_HOLD_DELAY_MS);
   }
 
@@ -253,14 +321,13 @@ export function createCursorInteractionHandlers(args: {
     const terrainGroup = terrainGroupRef.current;
     const terrainVisible = showTerrainUnderlayRef.current;
 
-    const voxelTargets: THREE.Object3D[] = [];
-    if (voxelGroupRef.current) {
-      voxelTargets.push(voxelGroupRef.current);
-    }
+    const voxelTargets = voxelGroupRef.current
+      ? collectVisibleMeshCandidates(voxelGroupRef.current)
+      : [];
 
     const terrainTargets: THREE.Object3D[] = [];
     if (terrainVisible && terrainGroup) {
-      terrainTargets.push(terrainGroup);
+      terrainTargets.push(...collectVisibleMeshCandidates(terrainGroup));
     }
 
     if (voxelTargets.length === 0 && terrainTargets.length === 0) {
@@ -279,7 +346,10 @@ export function createCursorInteractionHandlers(args: {
     raycaster.setFromCamera(pointerNdc, camera);
 
     if (voxelTargets.length > 0) {
-      const voxelIntersections = raycaster.intersectObjects(voxelTargets, true);
+      const voxelIntersections = raycaster.intersectObjects(
+        voxelTargets,
+        false,
+      );
       const voxelHit = selectBestVoxelIntersection(voxelIntersections);
       if (voxelHit) {
         const debugTile =
@@ -304,7 +374,7 @@ export function createCursorInteractionHandlers(args: {
 
     const terrainIntersections = raycaster.intersectObjects(
       terrainTargets,
-      true,
+      false,
     );
     if (terrainIntersections.length === 0) {
       onCursorMoveRef.current(null);
@@ -324,13 +394,7 @@ export function createCursorInteractionHandlers(args: {
     clearCursorRefreshTimer();
     cursorRefreshTimer = window.setTimeout(() => {
       cursorRefreshTimer = null;
-      if (
-        !hoverState.active ||
-        isPointerInteracting ||
-        keysHeldRef.current.size > 0
-      )
-        return;
-      updateCursorTooltip();
+      cursorRefreshCoalescer.request();
     }, 50);
   }
 
@@ -345,7 +409,7 @@ export function createCursorInteractionHandlers(args: {
         return;
       }
       if (touchHoldActive) {
-        updateCursorTooltip(true);
+        cursorRefreshCoalescer.request();
       }
       return;
     }
@@ -354,9 +418,9 @@ export function createCursorInteractionHandlers(args: {
     hoverState.clientX = e.clientX;
     hoverState.clientY = e.clientY;
     clearTouchLingerTimer();
-    clearCursorRefreshTimer();
+    clearDelayedCursorRefresh();
     if (isPointerInteracting || keysHeldRef.current.size > 0) return;
-    updateCursorTooltip();
+    cursorRefreshCoalescer.request();
   }
 
   function onPointerDown(e: PointerEvent) {
