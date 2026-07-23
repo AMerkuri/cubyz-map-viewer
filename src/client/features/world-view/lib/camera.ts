@@ -252,7 +252,10 @@ export function updateKeyboardCameraMotion(
 
   const dist = camera.position.distanceTo(controls.target);
   const frameScale = deltaSeconds * 60;
-  const speed = Math.max(1, dist * 0.015) * frameScale;
+  const translationSpeed =
+    Math.max(1, dist * 0.015) *
+    frameScale *
+    (keys.has("ShiftLeft") || keys.has("ShiftRight") ? 0.5 : 1);
 
   const fwdX = controls.target.x - camera.position.x;
   const fwdY = controls.target.y - camera.position.y;
@@ -292,8 +295,8 @@ export function updateKeyboardCameraMotion(
 
   if (moveX !== 0 || moveY !== 0) {
     const len = Math.sqrt(moveX * moveX + moveY * moveY);
-    const dx = (moveX / len) * speed;
-    const dy = (moveY / len) * speed;
+    const dx = (moveX / len) * translationSpeed;
+    const dy = (moveY / len) * translationSpeed;
     camera.position.x += dx;
     camera.position.y += dy;
     controls.target.x += dx;

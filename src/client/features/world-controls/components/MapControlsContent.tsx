@@ -245,6 +245,7 @@ export function MapControlsContent({
             <div>
               <InstructionTitle>Keyboard</InstructionTitle>
               <div>W/A/S/D or arrows: move camera target</div>
+              <div>Shift + movement: move slower</div>
               <div>Q / E: rotate around center</div>
               <div>Space: focus spawn</div>
             </div>
